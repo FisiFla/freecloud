@@ -34,5 +34,5 @@ verify:
 	@echo "==> Go vet + test..."
 	cd backend && go vet ./... && go test ./...
 	@echo "==> Frontend build..."
-	cd frontend && npm run build
+	cd frontend && npm install --no-audit --no-fund && npm run build
 	@echo "==> All checks passed."
