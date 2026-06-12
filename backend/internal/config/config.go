@@ -24,7 +24,7 @@ func Load() *Config {
 		KeycloakRealm:        getEnv("KEYCLOAK_REALM", "freecloud"),
 		KeycloakClientID:     getEnv("KEYCLOAK_CLIENT_ID", "admin-cli"),
 		KeycloakClientSecret: getEnv("KEYCLOAK_CLIENT_SECRET", ""),
-		KeycloakAudience:     getEnv("KEYCLOAK_AUDIENCE", "account"),
+		KeycloakAudience:     getEnv("KEYCLOAK_AUDIENCE", "freecloud-dashboard"),
 		FleetURL:             getEnv("FLEET_URL", "http://localhost:8082"),
 		FleetAPIToken:        getEnv("FLEET_API_TOKEN", ""),
 	}

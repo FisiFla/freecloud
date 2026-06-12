@@ -6,6 +6,7 @@ import { Search, UserPlus, Trash2, AlertCircle } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
 import OnboardForm from "./onboard/OnboardForm";
 import { offboardUser, listUsers } from "@/lib/api";
+import type { User } from "@/lib/api";
 
 interface Employee {
   id: string;

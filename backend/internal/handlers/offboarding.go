@@ -14,10 +14,11 @@ import (
 
 // OffboardResponse is the JSON response for the offboard endpoint.
 type OffboardResponse struct {
-	UserID             string `json:"userId"`
-	SessionsTerminated bool   `json:"sessionsTerminated"`
-	DevicesWiped       int    `json:"devicesWiped"`
-	DevicesFailed      int    `json:"devicesFailed"`
+	UserID                  string `json:"userId"`
+	SessionsTerminated       bool   `json:"sessionsTerminated"`
+	SessionTerminationError  string `json:"sessionTerminationError,omitempty"`
+	DevicesWiped             int    `json:"devicesWiped"`
+	DevicesFailed            int    `json:"devicesFailed"`
 }
 
 // Offboard handles user offboarding (panic button).
@@ -39,6 +40,8 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 
 	var devicesWiped int64
 	var devicesFailed int64
+	var sessionsTerminated bool
+	var sessionError string
 
 	// Use errgroup for concurrent operations
 	g, ctx := errgroup.WithContext(ctx)
@@ -67,11 +70,14 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	// Task 2: Logout all sessions
 	g.Go(func() error {
 		if err := h.keycloak.LogoutAllSessions(ctx, userID); err != nil {
-			logger.Warn("failed to logout sessions, continuing",
+			logger.Warn("failed to logout sessions",
 				zap.String("user_id", userID),
 				zap.Error(err),
 			)
+			sessionError = err.Error()
+			return nil // don't fail the whole offboard
 		}
+		sessionsTerminated = true
 		return nil
 	})
 
@@ -145,9 +151,10 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, OffboardResponse{
-		UserID:             userID,
-		SessionsTerminated: true,
-		DevicesWiped:       int(devicesWiped),
-		DevicesFailed:      int(devicesFailed),
+		UserID:                  userID,
+		SessionsTerminated:       sessionsTerminated,
+		SessionTerminationError:  sessionError,
+		DevicesWiped:             int(devicesWiped),
+		DevicesFailed:            int(devicesFailed),
 	})
 }

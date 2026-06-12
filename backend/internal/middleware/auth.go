@@ -232,8 +232,8 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 							audOK = true
 						}
 						if auds, ok := claims["aud"].([]interface{}); ok {
-							for _, a := range auds {
-								if s, ok := a.(string); ok && s == a.audience {
+							for _, v := range auds {
+								if s, ok := v.(string); ok && s == a.audience {
 									audOK = true
 									break
 								}

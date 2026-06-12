@@ -73,7 +73,7 @@ func TestListUsersNilDB(t *testing.T) {
 	}
 }
 
-func TestDeviceCheckEndpoint(t *testing.T) {
+func TestDeviceCheckNoDB(t *testing.T) {
 	h := setupTestHandler(t)
 
 	body := map[string]string{"keycloakUserId": "test-user-123"}
@@ -84,8 +84,25 @@ func TestDeviceCheckEndpoint(t *testing.T) {
 
 	h.DeviceCheck(rec, req)
 
-	if rec.Code != http.StatusOK && rec.Code != http.StatusForbidden && rec.Code != http.StatusInternalServerError {
-		t.Errorf("expected 200, 403, or 500, got %d: %s", rec.Code, rec.Body.String())
+	// Nil DB guard returns 500
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 (nil DB), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeviceCheckMissingUserID(t *testing.T) {
+	h := setupTestHandler(t)
+
+	body := map[string]string{}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/device-check", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.DeviceCheck(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

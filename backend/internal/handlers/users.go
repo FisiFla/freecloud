@@ -11,6 +11,7 @@ import (
 
 // User represents a row in the users table along with associated devices.
 type User struct {
+	ID             string   `json:"id"`
 	KeycloakUserID string   `json:"keycloakUserId"`
 	Email          string   `json:"email"`
 	FirstName      string   `json:"firstName"`
@@ -109,6 +110,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 
 		result = append(result, User{
+			ID:             u.KeycloakUserID,
 			KeycloakUserID: u.KeycloakUserID,
 			Email:          u.Email,
 			FirstName:      u.FirstName,
@@ -161,6 +163,7 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 
 	u.CreatedAt = createdAt.Format(time.RFC3339)
 	u.UpdatedAt = updatedAt.Format(time.RFC3339)
+	u.ID = u.KeycloakUserID
 
 	// Fetch devices
 	deviceRows, err := h.db.Query(ctx,

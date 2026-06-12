@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-setup build-backend build-frontend clean
+.PHONY: dev-up dev-down db-migrate kc-setup build-backend build-frontend clean verify
 
 dev-up:
 	docker compose -f docker/docker-compose.yml up -d
@@ -29,3 +29,10 @@ build-frontend:
 clean:
 	rm -rf bin/
 	docker compose -f docker/docker-compose.yml down -v
+
+verify:
+	@echo "==> Go vet + test..."
+	cd backend && go vet ./... && go test ./...
+	@echo "==> Frontend build..."
+	cd frontend && npm run build
+	@echo "==> All checks passed."
