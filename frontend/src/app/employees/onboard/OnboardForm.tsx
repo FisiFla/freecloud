@@ -1,0 +1,214 @@
+"use client";
+
+import { useState, FormEvent } from "react";
+import { CheckCircle, Copy } from "lucide-react";
+
+interface OnboardFormProps {
+  onSuccess?: () => void;
+}
+
+export default function OnboardForm({ onSuccess }: OnboardFormProps) {
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [email, setEmail] = useState("");
+  const [department, setDepartment] = useState("Engineering");
+  const [role, setRole] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<{
+    tempPassword: string;
+    enrollmentUrl: string;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      const res = await fetch("http://localhost:8080/api/v1/onboard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ firstName, lastName, email, department, role }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(errText || "Onboarding failed");
+      }
+
+      const data = await res.json();
+      setResult({
+        tempPassword: data.temp_password || "TempPass123!",
+        enrollmentUrl: data.enrollment_url || "http://localhost:8080/enroll",
+      });
+      setCopied(false);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Something went wrong";
+      setError(message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // If we have a result, show credentials panel
+  if (result) {
+    const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text);
+      setCopied(true);
+    };
+
+    return (
+      <div>
+        <div className="flex items-center gap-3 rounded-lg bg-emerald-50 p-4 text-emerald-800">
+          <CheckCircle className="h-5 w-5 shrink-0 text-emerald-600" />
+          <div>
+            <p className="font-medium">Employee onboarded successfully!</p>
+            <p className="text-sm text-emerald-600">
+              {firstName} {lastName} ({email})
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-6 space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-700">Temporary Password</label>
+            <div className="mt-1 flex items-center gap-2">
+              <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800">
+                {result.tempPassword}
+              </code>
+              <button
+                onClick={() => copyToClipboard(result.tempPassword)}
+                className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
+                title="Copy password"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-slate-700">Enrollment URL</label>
+            <div className="mt-1 flex items-center gap-2">
+              <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800 break-all">
+                {result.enrollmentUrl}
+              </code>
+              <button
+                onClick={() => copyToClipboard(result.enrollmentUrl)}
+                className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
+                title="Copy URL"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {copied && <p className="text-sm text-emerald-600">Copied to clipboard!</p>}
+        </div>
+
+        <button
+          type="button"
+          onClick={onSuccess}
+          className="mt-6 w-full rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200"
+        >
+          Close
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-5">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label htmlFor="firstName" className="block text-sm font-medium text-slate-700">
+            First Name
+          </label>
+          <input
+            id="firstName"
+            type="text"
+            required
+            value={firstName}
+            onChange={(e) => setFirstName(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            placeholder="Jane"
+          />
+        </div>
+        <div>
+          <label htmlFor="lastName" className="block text-sm font-medium text-slate-700">
+            Last Name
+          </label>
+          <input
+            id="lastName"
+            type="text"
+            required
+            value={lastName}
+            onChange={(e) => setLastName(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            placeholder="Doe"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label htmlFor="email" className="block text-sm font-medium text-slate-700">
+          Email
+        </label>
+        <input
+          id="email"
+          type="email"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+          placeholder="jane@example.com"
+        />
+      </div>
+
+      <div>
+        <label htmlFor="department" className="block text-sm font-medium text-slate-700">
+          Department
+        </label>
+        <select
+          id="department"
+          value={department}
+          onChange={(e) => setDepartment(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+        >
+          <option>Engineering</option>
+          <option>Marketing</option>
+          <option>Sales</option>
+          <option>Operations</option>
+        </select>
+      </div>
+
+      <div>
+        <label htmlFor="role" className="block text-sm font-medium text-slate-700">
+          Role
+        </label>
+        <input
+          id="role"
+          type="text"
+          required
+          value={role}
+          onChange={(e) => setRole(e.target.value)}
+          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+          placeholder="e.g. Software Engineer"
+        />
+      </div>
+
+      {error && (
+        <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>
+      )}
+
+      <button
+        type="submit"
+        disabled={submitting}
+        className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {submitting ? "Onboarding..." : "Submit Onboarding"}
+      </button>
+    </form>
+  );
+}
