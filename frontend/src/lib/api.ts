@@ -76,6 +76,7 @@ export interface User {
   lastName: string;
   department: string;
   role: string;
+  status?: string;
   devices?: Device[];
 }
 

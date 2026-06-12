@@ -101,18 +101,14 @@ func (f *FleetClient) doRequest(ctx context.Context, method, path string, body i
 func (f *FleetClient) CreateEnrollmentToken(ctx context.Context) (string, error) {
 	body, err := f.doRequest(ctx, http.MethodPost, "/api/v1/fleet/setup_experience/enrollment_tokens", nil)
 	if err != nil {
-		mockToken := fmt.Sprintf("mock-token-freecloud-%d", time.Now().UnixNano())
-		zap.L().Warn("fleet CreateEnrollmentToken failed, returning mock token", zap.Error(err))
-		return mockToken, nil
+		return "", fmt.Errorf("fleetdm enrollment token creation failed: %w", err)
 	}
 
 	var result struct {
 		Token string `json:"token"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		mockToken := fmt.Sprintf("mock-token-freecloud-%d", time.Now().UnixNano())
-		zap.L().Warn("fleet CreateEnrollmentToken parse failed, returning mock token", zap.Error(err))
-		return mockToken, nil
+		return "", fmt.Errorf("fleetdm enrollment token parse failed: %w", err)
 	}
 
 	zap.L().Info("created fleet enrollment token")

@@ -4,6 +4,8 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 // SetupRoutes registers all API routes on the provided chi router.
@@ -13,6 +15,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)
+		r.Use(middleware.ActorIDMiddleware)
 		r.Post("/api/v1/onboard", h.Onboard)
 		r.Post("/api/v1/offboard/{userId}", h.Offboard)
 		r.Post("/api/v1/auth/device-check", h.DeviceCheck)

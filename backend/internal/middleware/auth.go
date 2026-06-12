@@ -22,6 +22,7 @@ type JWTClaims struct {
 	Sub               string `json:"sub"`
 	PreferredUsername string `json:"preferred_username"`
 	Email             string `json:"email"`
+	IsAdmin           bool   `json:"-"`
 }
 
 type claimsKeyType struct{}
@@ -34,6 +35,22 @@ func GetClaims(ctx context.Context) *JWTClaims {
 		return c
 	}
 	return nil
+}
+
+// isManagementEndpoint returns true if the path is a management API that requires admin access.
+func isManagementEndpoint(path string) bool {
+	mgmtPaths := []string{
+		"/api/v1/onboard",
+		"/api/v1/offboard",
+		"/api/v1/apps/create",
+		"/api/v1/apps/",
+	}
+	for _, p := range mgmtPaths {
+		if strings.HasPrefix(path, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // AuthMiddleware validates JWTs against a Keycloak realm.
@@ -167,7 +184,7 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 
 		// Parse without verification first to extract claims
 		parser := jwt.NewParser()
-		token, _, err := parser.ParseUnverified(tokenString, jwt.MapClaims{})
+		_, _, err := parser.ParseUnverified(tokenString, jwt.MapClaims{})
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -206,6 +223,17 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 					if email, ok := claims["email"].(string); ok {
 						jc.Email = email
 					}
+					// Check for admin role
+					if realmAccess, ok := claims["realm_access"].(map[string]interface{}); ok {
+						if roles, ok := realmAccess["roles"].([]interface{}); ok {
+							for _, r := range roles {
+								if role, ok := r.(string); ok && (role == "admin" || role == "freecloud-admin") {
+									jc.IsAdmin = true
+									break
+								}
+							}
+						}
+					}
 					ctx := context.WithValue(r.Context(), claimsKey, jc)
 					r = r.WithContext(ctx)
 				}
@@ -225,6 +253,17 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			}
 			w.Write([]byte(fmt.Sprintf(`{"success":false,"error":"%s"}`, errMsg)))
 			return
+		}
+
+		// Admin authorization for management endpoints
+		if isManagementEndpoint(r.URL.Path) {
+			claims := GetClaims(r.Context())
+			if claims == nil || !claims.IsAdmin {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"success":false,"error":"forbidden: admin access required"}`))
+				return
+			}
 		}
 
 		next.ServeHTTP(w, r)

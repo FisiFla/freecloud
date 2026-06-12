@@ -76,9 +76,6 @@ func main() {
 	// Create handler
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
 
-	// Setup router
-	r := chi.NewRouter()
-
 	// Initialize JWT auth middleware
 	authMW := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm)
 
@@ -88,7 +85,10 @@ func main() {
 		corsOrigin = "http://localhost:3000"
 	}
 
-	// Middleware
+	// Setup router
+	r := chi.NewRouter()
+
+	// Global middleware
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RequestID)
@@ -101,9 +101,8 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
-	r.Use(middleware.ActorIDMiddleware)
 
-	// Register routes
+	// Register routes (auth + actor middleware applied inside)
 	handlers.SetupRoutes(r, handler, authMW.Middleware)
 
 	// Create HTTP server
