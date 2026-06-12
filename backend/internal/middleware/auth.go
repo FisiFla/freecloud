@@ -57,16 +57,18 @@ func isManagementEndpoint(path string) bool {
 type AuthMiddleware struct {
 	keycloakURL string
 	realm       string
+	audience    string
 	mu          sync.RWMutex
 	keys        []*rsa.PublicKey
 	lastFetch   time.Time
 }
 
 // NewAuthMiddleware creates a new AuthMiddleware.
-func NewAuthMiddleware(keycloakURL, realm string) *AuthMiddleware {
+func NewAuthMiddleware(keycloakURL, realm, audience string) *AuthMiddleware {
 	return &AuthMiddleware{
 		keycloakURL: keycloakURL,
 		realm:       realm,
+		audience:    audience,
 	}
 }
 
@@ -222,6 +224,31 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 					}
 					if email, ok := claims["email"].(string); ok {
 						jc.Email = email
+					}
+					// Validate audience
+					if a.audience != "" {
+						audOK := false
+						if aud, ok := claims["aud"].(string); ok && aud == a.audience {
+							audOK = true
+						}
+						if auds, ok := claims["aud"].([]interface{}); ok {
+							for _, a := range auds {
+								if s, ok := a.(string); ok && s == a.audience {
+									audOK = true
+									break
+								}
+							}
+						}
+						// Also check azp (authorized party)
+						if azp, ok := claims["azp"].(string); ok && azp == a.audience {
+							audOK = true
+						}
+						if !audOK {
+							w.Header().Set("Content-Type", "application/json")
+							w.WriteHeader(http.StatusUnauthorized)
+							w.Write([]byte(`{"success":false,"error":"unauthorized: invalid audience"}`))
+							return
+						}
 					}
 					// Check for admin role
 					if realmAccess, ok := claims["realm_access"].(map[string]interface{}); ok {

@@ -164,7 +164,9 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fleetErr != nil {
-		resp.Warning = "FleetDM enrollment token creation failed: " + fleetErr.Error()
+		resp.Warning = "User created. Fleet enrollment failed — manual enrollment required."
+		respondJSON(w, http.StatusAccepted, resp)
+		return
 	}
 
 	respondJSON(w, http.StatusOK, resp)

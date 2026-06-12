@@ -30,8 +30,8 @@ export default function EmployeesPage() {
         setLoading(true);
         setError(null);
         const data = await listUsers();
-        const mapped = (Array.isArray(data) ? data : []).map((u: Record<string, unknown>) => ({
-          id: String(u.id || ""),
+        const mapped = (Array.isArray(data) ? data : []).map((u: User) => ({
+          id: String(u.keycloakUserId || ""),
           firstName: String(u.firstName || ""),
           lastName: String(u.lastName || ""),
           email: String(u.email || ""),

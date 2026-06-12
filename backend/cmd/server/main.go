@@ -77,7 +77,7 @@ func main() {
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
 
 	// Initialize JWT auth middleware
-	authMW := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm)
+	authMW := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)
 
 	// CORS origin from env or secure default
 	corsOrigin := os.Getenv("CORS_ORIGIN")

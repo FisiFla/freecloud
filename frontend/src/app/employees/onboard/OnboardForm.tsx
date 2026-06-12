@@ -18,6 +18,7 @@ export default function OnboardForm({ onSuccess }: OnboardFormProps) {
   const [result, setResult] = useState<{
     tempPassword: string;
     enrollmentUrl: string;
+    warning?: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -32,6 +33,7 @@ export default function OnboardForm({ onSuccess }: OnboardFormProps) {
       setResult({
         tempPassword: data.enrollmentToken || "TempPass123!",
         enrollmentUrl: data.enrollmentURL || "http://localhost:8080/enroll",
+        warning: data.warning,
       });
       setCopied(false);
     } catch (err: unknown) {
@@ -51,15 +53,25 @@ export default function OnboardForm({ onSuccess }: OnboardFormProps) {
 
     return (
       <div>
-        <div className="flex items-center gap-3 rounded-lg bg-emerald-50 p-4 text-emerald-800">
-          <CheckCircle className="h-5 w-5 shrink-0 text-emerald-600" />
-          <div>
-            <p className="font-medium">Employee onboarded successfully!</p>
-            <p className="text-sm text-emerald-600">
-              {firstName} {lastName} ({email})
-            </p>
+        {result.warning ? (
+          <div className="flex items-start gap-3 rounded-lg bg-amber-50 p-4 text-amber-800">
+            <AlertCircle className="h-5 w-5 shrink-0 text-amber-600" />
+            <div>
+              <p className="font-medium">User created with warnings</p>
+              <p className="text-sm text-amber-700">{result.warning}</p>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex items-center gap-3 rounded-lg bg-emerald-50 p-4 text-emerald-800">
+            <CheckCircle className="h-5 w-5 shrink-0 text-emerald-600" />
+            <div>
+              <p className="font-medium">Employee onboarded successfully!</p>
+              <p className="text-sm text-emerald-600">
+                {firstName} {lastName} ({email})
+              </p>
+            </div>
+          </div>
+        )}
 
         <div className="mt-6 space-y-4">
           <div>
