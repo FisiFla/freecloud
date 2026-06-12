@@ -31,6 +31,9 @@ var claimsKey = claimsKeyType{}
 
 // GetClaims retrieves JWT claims from the request context, if present.
 func GetClaims(ctx context.Context) *JWTClaims {
+	if ctx == nil {
+		return nil
+	}
 	if c, ok := ctx.Value(claimsKey).(*JWTClaims); ok {
 		return c
 	}
