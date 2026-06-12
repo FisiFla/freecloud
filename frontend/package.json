@@ -11,7 +11,8 @@
     "next": "^14.2.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "lucide-react": "^0.400.0"
+    "lucide-react": "^0.400.0",
+    "next-auth": "^4.24.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

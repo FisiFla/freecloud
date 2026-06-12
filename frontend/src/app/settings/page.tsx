@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { CheckCircle, XCircle, RefreshCw } from "lucide-react";
+import { useEffect, useState } from "react";
+import { CheckCircle, XCircle, RefreshCw, AlertCircle } from "lucide-react";
+import { healthCheck } from "@/lib/api";
 
 interface ConnectionStatus {
   label: string;
@@ -11,11 +12,31 @@ interface ConnectionStatus {
 }
 
 export default function SettingsPage() {
+  const [healthStatus, setHealthStatus] = useState<string | null>(null);
+  const [healthLoading, setHealthLoading] = useState(true);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
   const [services, setServices] = useState<ConnectionStatus[]>([
-    { label: "Backend API", endpoint: "http://localhost:8080/api/v1/health", status: "unknown", checking: false },
-    { label: "Keycloak Connection", endpoint: "http://localhost:8080/api/v1/health/keycloak", status: "unknown", checking: false },
-    { label: "FleetDM Connection", endpoint: "http://localhost:8080/api/v1/health/fleetdm", status: "unknown", checking: false },
+    { label: "Backend API", endpoint: "/api/v1/health", status: "unknown", checking: false },
+    { label: "Keycloak Connection", endpoint: "/api/v1/health/keycloak", status: "unknown", checking: false },
+    { label: "FleetDM Connection", endpoint: "/api/v1/health/fleetdm", status: "unknown", checking: false },
   ]);
+
+  useEffect(() => {
+    const fetchHealth = async () => {
+      try {
+        setHealthLoading(true);
+        setHealthError(null);
+        const result = await healthCheck();
+        setHealthStatus(result.status);
+      } catch (err: unknown) {
+        setHealthError(err instanceof Error ? err.message : "Health check failed");
+      } finally {
+        setHealthLoading(false);
+      }
+    };
+    fetchHealth();
+  }, []);
 
   const testConnection = async (index: number) => {
     setServices((prev) =>
@@ -23,7 +44,7 @@ export default function SettingsPage() {
     );
 
     try {
-      const res = await fetch(services[index].endpoint);
+      const res = await fetch(`http://localhost:8080${services[index].endpoint}`);
       const connected = res.ok;
       setServices((prev) =>
         prev.map((s, i) =>
@@ -44,7 +65,35 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold text-slate-800">Settings</h1>
       <p className="mt-1 text-sm text-slate-500">View connection status and system health.</p>
 
-      <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      {/* Health check status */}
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-slate-800">System Health</h2>
+        {healthLoading ? (
+          <div className="mt-3 h-6 w-48 animate-pulse rounded bg-slate-200" />
+        ) : healthError ? (
+          <div className="mt-3 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <AlertCircle className="h-5 w-5 shrink-0" />
+            <span>{healthError}</span>
+          </div>
+        ) : (
+          <div className="mt-3 flex items-center gap-2">
+            <span
+              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                healthStatus === "OK"
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-red-50 text-red-700"
+              }`}
+            >
+              {healthStatus === "OK" ? "Healthy" : healthStatus || "Unknown"}
+            </span>
+            <span className="text-sm text-slate-500">
+              Backend status: {healthStatus || "unknown"}
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="mt-6 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {services.map((service, index) => (
           <div
             key={service.label}

@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate build-backend build-frontend clean
+.PHONY: dev-up dev-down db-migrate kc-setup build-backend build-frontend clean
 
 dev-up:
 	docker compose -f docker/docker-compose.yml up -d
@@ -12,6 +12,13 @@ dev-down:
 
 db-migrate:
 	cd backend && go run cmd/server/migrate.go
+
+kc-setup:
+	@chmod +x backend/cmd/scripts/setup_realm.sh
+	@bash backend/cmd/scripts/setup_realm.sh
+
+test-integration:
+	cd backend && go test ./internal/handlers/ -v -run Integration
 
 build-backend:
 	cd backend && go build -o ../bin/freecloud-server ./cmd/server

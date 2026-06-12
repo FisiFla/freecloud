@@ -1,46 +1,69 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Search, UserPlus, Trash2 } from "lucide-react";
+import { Search, UserPlus, Trash2, AlertCircle } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
 import OnboardForm from "./onboard/OnboardForm";
+import { offboardUser } from "@/lib/api";
 
-const mockEmployees = [
-  {
-    id: "1",
-    firstName: "Alice",
-    lastName: "Johnson",
-    email: "alice@example.com",
-    department: "Engineering",
-    role: "Senior Developer",
-    status: "Active",
-  },
-  {
-    id: "2",
-    firstName: "Bob",
-    lastName: "Smith",
-    email: "bob@example.com",
-    department: "Marketing",
-    role: "Marketing Lead",
-    status: "Active",
-  },
-  {
-    id: "3",
-    firstName: "Carol",
-    lastName: "Williams",
-    email: "carol@example.com",
-    department: "Operations",
-    role: "Ops Manager",
-    status: "Suspended",
-  },
-];
+interface Employee {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  department: string;
+  role: string;
+  status: string;
+}
 
 export default function EmployeesPage() {
   const [search, setSearch] = useState("");
   const [showOnboard, setShowOnboard] = useState(false);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const filtered = mockEmployees.filter((e) => {
+  useEffect(() => {
+    const fetchEmployees = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const res = await fetch("http://localhost:8080/api/v1/users");
+        if (!res.ok) throw new Error(`Failed to fetch employees: ${res.statusText}`);
+        const json = await res.json();
+        // The backend returns {success, data} envelope
+        const data = json.success ? json.data : json;
+        const mapped = (Array.isArray(data) ? data : []).map((u: Record<string, unknown>) => ({
+          id: String(u.id || ""),
+          firstName: String(u.firstName || ""),
+          lastName: String(u.lastName || ""),
+          email: String(u.email || ""),
+          department: String(u.department || ""),
+          role: String(u.role || ""),
+          status: String(u.status || "Active"),
+        }));
+        setEmployees(mapped);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to load employees");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchEmployees();
+  }, []);
+
+  const handleDeprovision = async (userId: string) => {
+    if (!confirm("Deprovision this employee? This cannot be undone.")) return;
+    try {
+      await offboardUser(userId);
+      setEmployees((prev) => prev.filter((e) => e.id !== userId));
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to deprovision");
+    }
+  };
+
+  const filtered = employees.filter((e) => {
     const q = search.toLowerCase();
     return (
       e.firstName.toLowerCase().includes(q) ||
@@ -68,6 +91,14 @@ export default function EmployeesPage() {
           </button>
         </div>
 
+        {/* Error banner */}
+        {error && (
+          <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <AlertCircle className="h-5 w-5 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
         {/* Search */}
         <div className="mt-6 relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -80,64 +111,74 @@ export default function EmployeesPage() {
           />
         </div>
 
-        {/* Table */}
-        <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                <th className="px-6 py-3">Name</th>
-                <th className="px-6 py-3">Email</th>
-                <th className="px-6 py-3">Department</th>
-                <th className="px-6 py-3">Role</th>
-                <th className="px-6 py-3">Status</th>
-                <th className="px-6 py-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map((emp) => (
-                <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-4">
-                    <Link
-                      href={`/employees/${emp.id}`}
-                      className="font-medium text-indigo-600 hover:text-indigo-800"
-                    >
-                      {emp.firstName} {emp.lastName}
-                    </Link>
-                  </td>
-                  <td className="px-6 py-4 text-slate-600">{emp.email}</td>
-                  <td className="px-6 py-4 text-slate-600">{emp.department}</td>
-                  <td className="px-6 py-4 text-slate-600">{emp.role}</td>
-                  <td className="px-6 py-4">
-                    <span
-                      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                        emp.status === "Active"
-                          ? "bg-emerald-50 text-emerald-700"
-                          : "bg-amber-50 text-amber-700"
-                      }`}
-                    >
-                      {emp.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <button
-                      title="Deprovision"
-                      className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </td>
+        {/* Loading skeleton */}
+        {loading ? (
+          <div className="mt-6 space-y-3">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="h-16 animate-pulse rounded-xl bg-slate-200" />
+            ))}
+          </div>
+        ) : (
+          /* Table */
+          <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  <th className="px-6 py-3">Name</th>
+                  <th className="px-6 py-3">Email</th>
+                  <th className="px-6 py-3">Department</th>
+                  <th className="px-6 py-3">Role</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3">Actions</th>
                 </tr>
-              ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400">
-                    No employees match your search.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map((emp) => (
+                  <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4">
+                      <Link
+                        href={`/employees/${emp.id}`}
+                        className="font-medium text-indigo-600 hover:text-indigo-800"
+                      >
+                        {emp.firstName} {emp.lastName}
+                      </Link>
+                    </td>
+                    <td className="px-6 py-4 text-slate-600">{emp.email}</td>
+                    <td className="px-6 py-4 text-slate-600">{emp.department}</td>
+                    <td className="px-6 py-4 text-slate-600">{emp.role}</td>
+                    <td className="px-6 py-4">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                          emp.status === "Active"
+                            ? "bg-emerald-50 text-emerald-700"
+                            : "bg-amber-50 text-amber-700"
+                        }`}
+                      >
+                        {emp.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4">
+                      <button
+                        onClick={() => handleDeprovision(emp.id)}
+                        title="Deprovision"
+                        className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400">
+                      No employees match your search.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Slide-over Onboard Panel */}

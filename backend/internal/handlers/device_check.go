@@ -28,12 +28,12 @@ type Failure struct {
 func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 	var req DeviceCheckRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.KeycloakUserID == "" {
-		http.Error(w, `{"error":"keycloakUserId is required"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "keycloakUserId is required")
 		return
 	}
 
@@ -46,7 +46,7 @@ func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.logger.Error("failed to query device mapping", zap.Error(err))
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	defer rows.Close()
@@ -62,7 +62,7 @@ func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(deviceIDs) == 0 {
-		http.Error(w, `{"error":"no device found for user"}`, http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "no device found for user")
 		return
 	}
 
@@ -102,16 +102,13 @@ func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-
 	if len(failures) > 0 {
-		w.WriteHeader(http.StatusForbidden)
-		json.NewEncoder(w).Encode(DeviceCheckResponse{
+		respondJSON(w, http.StatusForbidden, DeviceCheckResponse{
 			Passed:   false,
 			Failures: failures,
 		})
 		return
 	}
 
-	json.NewEncoder(w).Encode(DeviceCheckResponse{Passed: true})
+	respondJSON(w, http.StatusOK, DeviceCheckResponse{Passed: true})
 }

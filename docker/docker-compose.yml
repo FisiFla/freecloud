@@ -22,6 +22,7 @@ services:
       KEYCLOAK_ADMIN_PASSWORD: admin
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_DATABASE: keycloak
       KC_DB_USERNAME: freecloud
       KC_DB_PASSWORD: freecloud
       KC_HOSTNAME: localhost
@@ -33,6 +34,12 @@ services:
         condition: service_healthy
     command: start-dev
 
+  # FleetDM mock — this is a PLACEHOLDER implementation using an echo server.
+  # It returns whatever request body it receives, NOT real FleetDM API shapes.
+  # In production, replace this service with a real FleetDM instance (https://fleetdm.com).
+  # The FleetClient in Go gracefully degrades: if the FleetDM API is unreachable or
+  # returns errors, GetHosts/GetHostSoftware/GetHostSecurityState return sensible
+  # zero/mock data so the app still works during development.
   fleetdm-mock:
     image: mendhak/http-https-echo:latest
     ports:

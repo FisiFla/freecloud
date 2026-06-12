@@ -1,65 +1,9 @@
 "use client";
 
-import { useState } from "react";
-import { Search, Filter } from "lucide-react";
-
-interface AuditEntry {
-  id: string;
-  timestamp: string;
-  actor: string;
-  action: string;
-  target_type: string;
-  target_id: string;
-  details: string;
-}
-
-const mockLogs: AuditEntry[] = [
-  {
-    id: "1",
-    timestamp: "2025-06-12T14:23:10Z",
-    actor: "admin@example.com",
-    action: "user.onboard",
-    target_type: "user",
-    target_id: "usr_abc123",
-    details: "Onboarded Alice Johnson",
-  },
-  {
-    id: "2",
-    timestamp: "2025-06-12T13:15:00Z",
-    actor: "alice@example.com",
-    action: "app.login",
-    target_type: "app",
-    target_id: "app_slack",
-    details: "Logged into Slack via SSO",
-  },
-  {
-    id: "3",
-    timestamp: "2025-06-12T11:45:30Z",
-    actor: "bob@example.com",
-    action: "user.offboard",
-    target_type: "user",
-    target_id: "usr_def456",
-    details: "Deprovisioned Bob Smith",
-  },
-  {
-    id: "4",
-    timestamp: "2025-06-12T09:00:00Z",
-    actor: "system",
-    action: "device.enroll",
-    target_type: "device",
-    target_id: "dev_789ghi",
-    details: "Enrolled MacBook Pro (ABCD1234)",
-  },
-  {
-    id: "5",
-    timestamp: "2025-06-11T22:10:15Z",
-    actor: "admin@example.com",
-    action: "settings.update",
-    target_type: "settings",
-    target_id: "sso_config",
-    details: "Updated SSO configuration",
-  },
-];
+import { useEffect, useState } from "react";
+import { Search, Filter, AlertCircle } from "lucide-react";
+import { listAuditLogs } from "@/lib/api";
+import type { AuditLogEntry } from "@/lib/api";
 
 const actionOptions = [
   "All Actions",
@@ -71,16 +15,39 @@ const actionOptions = [
 ];
 
 export default function AuditLogPage() {
+  const [logs, setLogs] = useState<AuditLogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   const [actorFilter, setActorFilter] = useState("");
   const [actionFilter, setActionFilter] = useState("All Actions");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  const filtered = mockLogs.filter((log) => {
-    if (actorFilter && !log.actor.toLowerCase().includes(actorFilter.toLowerCase())) return false;
+  useEffect(() => {
+    const fetchLogs = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const data = await listAuditLogs({
+          actor: actorFilter || undefined,
+          action: actionFilter !== "All Actions" ? actionFilter : undefined,
+        });
+        setLogs(data);
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to load audit logs");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchLogs();
+  }, [actorFilter, actionFilter]);
+
+  const filtered = logs.filter((log) => {
+    if (actorFilter && !log.actorId.toLowerCase().includes(actorFilter.toLowerCase())) return false;
     if (actionFilter !== "All Actions" && log.action !== actionFilter) return false;
-    if (dateFrom && new Date(log.timestamp) < new Date(dateFrom)) return false;
-    if (dateTo && new Date(log.timestamp) > new Date(dateTo + "T23:59:59Z")) return false;
+    if (dateFrom && new Date(log.createdAt) < new Date(dateFrom)) return false;
+    if (dateTo && new Date(log.createdAt) > new Date(dateTo + "T23:59:59Z")) return false;
     return true;
   });
 
@@ -98,6 +65,14 @@ export default function AuditLogPage() {
     <div>
       <h1 className="text-2xl font-bold text-slate-800">Audit Log</h1>
       <p className="mt-1 text-sm text-slate-500">Track all actions across your FreeCloud instance.</p>
+
+      {/* Error banner */}
+      {error && (
+        <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="h-5 w-5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="mt-6 flex flex-wrap items-end gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -162,52 +137,63 @@ export default function AuditLogPage() {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
-                <th className="px-6 py-3">Timestamp</th>
-                <th className="px-6 py-3">Actor</th>
-                <th className="px-6 py-3">Action</th>
-                <th className="px-6 py-3">Target Type</th>
-                <th className="px-6 py-3">Target ID</th>
-                <th className="px-6 py-3">Details</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map((log) => (
-                <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="whitespace-nowrap px-6 py-4 text-slate-600 font-mono text-xs">
-                    {formatTimestamp(log.timestamp)}
-                  </td>
-                  <td className="px-6 py-4 text-slate-700">{log.actor}</td>
-                  <td className="px-6 py-4">
-                    <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                      {log.action}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-slate-600 capitalize">{log.target_type}</td>
-                  <td className="px-6 py-4 font-mono text-xs text-slate-500">{log.target_id}</td>
-                  <td className="px-6 py-4 text-slate-600 max-w-xs truncate">{log.details}</td>
-                </tr>
-              ))}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400">
-                    No audit logs match your filters.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+      {/* Loading skeleton */}
+      {loading ? (
+        <div className="mt-4 space-y-2">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-200" />
+          ))}
         </div>
-      </div>
+      ) : (
+        <>
+          {/* Table */}
+          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                    <th className="px-6 py-3">Timestamp</th>
+                    <th className="px-6 py-3">Actor</th>
+                    <th className="px-6 py-3">Action</th>
+                    <th className="px-6 py-3">Target Type</th>
+                    <th className="px-6 py-3">Target ID</th>
+                    <th className="px-6 py-3">Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filtered.map((log) => (
+                    <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="whitespace-nowrap px-6 py-4 text-slate-600 font-mono text-xs">
+                        {formatTimestamp(log.createdAt)}
+                      </td>
+                      <td className="px-6 py-4 text-slate-700">{log.actorId}</td>
+                      <td className="px-6 py-4">
+                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                          {log.action}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-slate-600 capitalize">{log.targetType}</td>
+                      <td className="px-6 py-4 font-mono text-xs text-slate-500">{log.targetId}</td>
+                      <td className="px-6 py-4 text-slate-600 max-w-xs truncate">{log.details}</td>
+                    </tr>
+                  ))}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400">
+                        No audit logs match your filters.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
 
-      <p className="mt-4 text-xs text-slate-400">
-        Showing {filtered.length} of {mockLogs.length} events
-      </p>
+          <p className="mt-4 text-xs text-slate-400">
+            Showing {filtered.length} of {logs.length} events
+          </p>
+        </>
+      )}
     </div>
   );
 }

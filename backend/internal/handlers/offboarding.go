@@ -23,7 +23,7 @@ type OffboardResponse struct {
 func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userId")
 	if userID == "" {
-		http.Error(w, `{"error":"userId is required"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "userId is required")
 		return
 	}
 
@@ -86,7 +86,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	// Wait for the queries to complete
 	if err := g.Wait(); err != nil {
 		logger.Error("offboarding query failed", zap.Error(err))
-		http.Error(w, `{"error":"offboarding failed: `+err.Error()+`"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "offboarding failed: "+err.Error())
 		return
 	}
 
@@ -122,8 +122,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		logger.Warn("failed to write audit log", zap.Error(auditErr))
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(OffboardResponse{
+	respondJSON(w, http.StatusOK, OffboardResponse{
 		UserID:             userID,
 		SessionsTerminated: true,
 		DevicesWiped:       int(devicesWiped),

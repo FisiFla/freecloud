@@ -59,17 +59,17 @@ type AuditLogEntry struct {
 func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 	var req CreateAppRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.Name == "" || req.Protocol == "" {
-		http.Error(w, `{"error":"name and protocol are required"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "name and protocol are required")
 		return
 	}
 
 	if req.Protocol != "OIDC" && req.Protocol != "SAML" {
-		http.Error(w, `{"error":"protocol must be OIDC or SAML"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "protocol must be OIDC or SAML")
 		return
 	}
 
@@ -79,7 +79,7 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 	keycloakClientID, err := h.keycloak.CreateClient(ctx, req.Name, req.Protocol, req.RedirectURIs, req.BaseURL)
 	if err != nil {
 		h.logger.Error("failed to create keycloak client", zap.Error(err))
-		http.Error(w, `{"error":"failed to create app in Keycloak"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to create app in Keycloak")
 		return
 	}
 
@@ -93,7 +93,7 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 	).Scan(&appID)
 	if err != nil {
 		h.logger.Error("failed to store connected app", zap.Error(err))
-		http.Error(w, `{"error":"failed to store app"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to store app")
 		return
 	}
 
@@ -109,8 +109,7 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("failed to write audit log", zap.Error(auditErr))
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(CreateAppResponse{
+	respondJSON(w, http.StatusOK, CreateAppResponse{
 		ID:               appID,
 		Name:             req.Name,
 		KeycloakClientID: keycloakClientID,
@@ -121,18 +120,18 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
 	if appID == "" {
-		http.Error(w, `{"error":"appId is required"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "appId is required")
 		return
 	}
 
 	var req AssignAppRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.UserID == "" {
-		http.Error(w, `{"error":"userId is required"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "userId is required")
 		return
 	}
 
@@ -146,11 +145,11 @@ func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 	).Scan(&keycloakClientID)
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			http.Error(w, `{"error":"app not found"}`, http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "app not found")
 			return
 		}
 		h.logger.Error("failed to query app", zap.Error(err))
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -158,7 +157,7 @@ func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 	err = h.keycloak.AssignUserToClient(ctx, req.UserID, keycloakClientID)
 	if err != nil {
 		h.logger.Error("failed to assign user to keycloak client", zap.Error(err))
-		http.Error(w, `{"error":"failed to assign user to app"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to assign user to app")
 		return
 	}
 
@@ -185,8 +184,7 @@ func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("failed to write audit log", zap.Error(auditErr))
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"assigned": true})
+	respondJSON(w, http.StatusOK, map[string]bool{"assigned": true})
 }
 
 // ListApps lists all connected apps from the local database.
@@ -200,7 +198,7 @@ func (h *Handler) ListApps(w http.ResponseWriter, r *http.Request) {
 	)
 	if err != nil {
 		h.logger.Error("failed to query connected apps", zap.Error(err))
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	defer rows.Close()

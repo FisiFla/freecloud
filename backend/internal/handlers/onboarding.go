@@ -34,13 +34,13 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 
 	var req OnboardRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	// Validate required fields
 	if req.FirstName == "" || req.LastName == "" || req.Email == "" {
-		http.Error(w, `{"error":"firstName, lastName, and email are required"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "firstName, lastName, and email are required")
 		return
 	}
 
@@ -94,7 +94,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 
 		// If Keycloak creation failed, return error
 		if createdUser == nil {
-			http.Error(w, `{"error":"keycloak user creation failed: `+err.Error()+`"}`, http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "keycloak user creation failed: "+err.Error())
 			return
 		}
 		// If only Fleet failed, still return success with warning
@@ -137,6 +137,5 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		resp.Warning = "FleetDM enrollment token creation failed: " + fleetErr.Error()
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	respondJSON(w, http.StatusOK, resp)
 }

@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Cloud, Users, Grid, Shield, Settings } from "lucide-react";
+import { useSession, signOut } from "next-auth/react";
+import { Cloud, Users, Grid, Shield, Settings, LogOut } from "lucide-react";
 
 const navLinks = [
   { href: "/", label: "Dashboard", icon: Cloud },
@@ -14,6 +15,7 @@ const navLinks = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const { data: session } = useSession();
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
@@ -53,7 +55,33 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="border-t border-slate-100 px-6 py-4">
-        <p className="text-xs text-slate-400">FreeCloud v0.1.0</p>
+        {session?.user && (
+          <div className="mb-3 flex items-center gap-3">
+            <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-semibold text-indigo-700">
+              {session.user.name?.charAt(0) || "U"}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-slate-700 truncate">
+                {session.user.name}
+              </p>
+              <p className="text-xs text-slate-400 truncate">
+                {session.user.email}
+              </p>
+            </div>
+          </div>
+        )}
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-slate-400">FreeCloud v0.1.0</p>
+          {session && (
+            <button
+              onClick={() => signOut({ callbackUrl: "/signin" })}
+              className="text-slate-400 hover:text-red-500 transition-colors"
+              title="Sign out"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
     </aside>
   );

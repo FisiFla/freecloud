@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, FormEvent } from "react";
-import { CheckCircle, Copy } from "lucide-react";
+import { CheckCircle, Copy, AlertCircle } from "lucide-react";
+import { onboardEmployee } from "@/lib/api";
 
 interface OnboardFormProps {
   onSuccess?: () => void;
@@ -27,21 +28,10 @@ export default function OnboardForm({ onSuccess }: OnboardFormProps) {
     setError(null);
 
     try {
-      const res = await fetch("http://localhost:8080/api/v1/onboard", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ firstName, lastName, email, department, role }),
-      });
-
-      if (!res.ok) {
-        const errText = await res.text();
-        throw new Error(errText || "Onboarding failed");
-      }
-
-      const data = await res.json();
+      const data = await onboardEmployee({ firstName, lastName, email, department, role });
       setResult({
-        tempPassword: data.temp_password || "TempPass123!",
-        enrollmentUrl: data.enrollment_url || "http://localhost:8080/enroll",
+        tempPassword: data.enrollmentToken || "TempPass123!",
+        enrollmentUrl: data.enrollmentURL || "http://localhost:8080/enroll",
       });
       setCopied(false);
     } catch (err: unknown) {
