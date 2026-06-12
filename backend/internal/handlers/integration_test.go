@@ -178,7 +178,10 @@ func TestOffboardEndpoint(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if !resp.Success {
-		t.Errorf("expected success=true, got %v: error=%v", resp.Success, resp.Error)
+	if resp.Success {
+		t.Errorf("expected success=false on 500, got success=true: data=%v", resp.Data)
+	}
+	if resp.Error == "" {
+		t.Errorf("expected error message on 500, got empty error")
 	}
 }
