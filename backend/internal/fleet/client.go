@@ -175,8 +175,8 @@ func (f *FleetClient) GetHostSecurityState(ctx context.Context, hostID string) (
 	path := fmt.Sprintf("/api/v1/fleet/hosts/%s", hostID)
 	body, err := f.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		zap.L().Warn("fleet GetHostSecurityState failed, returning mock healthy state", zap.Error(err))
-		return &SecurityState{FirewallEnabled: true, DiskEncrypted: true, Vulnerabilities: nil}, nil
+		zap.L().Error("fleet GetHostSecurityState failed, cannot verify device", zap.Error(err))
+		return nil, fmt.Errorf("fleetdm unreachable: %w", err)
 	}
 
 	var result struct {
@@ -186,8 +186,8 @@ func (f *FleetClient) GetHostSecurityState(ctx context.Context, hostID string) (
 		} `json:"host"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		zap.L().Warn("fleet GetHostSecurityState parse failed, returning mock healthy state", zap.Error(err))
-		return &SecurityState{FirewallEnabled: true, DiskEncrypted: true, Vulnerabilities: nil}, nil
+		zap.L().Error("fleet GetHostSecurityState parse failed", zap.Error(err))
+		return nil, fmt.Errorf("fleetdm parse error: %w", err)
 	}
 
 	softwareList, err := f.GetHostSoftware(ctx, hostID)
@@ -219,11 +219,11 @@ func (f *FleetClient) IssueRemoteLock(ctx context.Context, hostID string) error 
 	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/lock", hostID)
 	_, err := f.doRequest(ctx, http.MethodPost, path, nil)
 	if err != nil {
-		zap.L().Warn("fleet IssueRemoteLock failed, continuing",
+		zap.L().Error("fleet IssueRemoteLock failed",
 			zap.String("host_id", hostID),
 			zap.Error(err),
 		)
-		return nil
+		return fmt.Errorf("remote lock failed for host %s: %w", hostID, err)
 	}
 
 	zap.L().Info("issued remote lock to host", zap.String("host_id", hostID))
@@ -235,11 +235,11 @@ func (f *FleetClient) IssueRemoteWipe(ctx context.Context, hostID string) error 
 	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/wipe", hostID)
 	_, err := f.doRequest(ctx, http.MethodPost, path, nil)
 	if err != nil {
-		zap.L().Warn("fleet IssueRemoteWipe failed, continuing",
+		zap.L().Error("fleet IssueRemoteWipe failed",
 			zap.String("host_id", hostID),
 			zap.Error(err),
 		)
-		return nil
+		return fmt.Errorf("remote wipe failed for host %s: %w", hostID, err)
 	}
 
 	zap.L().Info("issued remote wipe to host", zap.String("host_id", hostID))

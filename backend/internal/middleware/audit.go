@@ -13,11 +13,29 @@ const (
 	ActorIDKey contextKey = "actor_id"
 )
 
-// ActorIDMiddleware extracts the X-Actor-ID header from incoming requests
-// and stores it in the request context. If the header is missing, "system"
-// is used as the default actor.
+// ActorIDMiddleware extracts the actor identity from the request.
+// It first checks for validated JWT claims (set by AuthMiddleware).
+// If no JWT is present, it falls back to the X-Actor-ID header.
+// If neither is available, "system" is used as the default.
 func ActorIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Try JWT claims first (from AuthMiddleware)
+		if claims := GetClaims(r.Context()); claims != nil {
+			actorID := claims.PreferredUsername
+			if actorID == "" {
+				actorID = claims.Sub
+			}
+			if actorID == "" {
+				actorID = claims.Email
+			}
+			if actorID != "" {
+				ctx := context.WithValue(r.Context(), ActorIDKey, actorID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
+			}
+		}
+
+		// Fallback to X-Actor-ID header (dev/testing)
 		actorID := r.Header.Get("X-Actor-ID")
 		if actorID == "" {
 			actorID = "system"

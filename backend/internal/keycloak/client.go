@@ -11,7 +11,7 @@ import (
 
 // KeycloakClient wraps gocloak.GoCloak for FreeCloud operations.
 type KeycloakClient struct {
-	client     gocloak.GoCloak
+	client     *gocloak.GoCloak
 	clientID   string
 	clientSecret string
 	realm      string
@@ -239,6 +239,23 @@ func (k *KeycloakClient) AssignUserToClient(ctx context.Context, userID, clientI
 		zap.String("user_id", userID),
 		zap.String("client_id", clientID),
 	)
+	return nil
+}
+
+// DeleteClient deletes a client from Keycloak by its client ID.
+func (k *KeycloakClient) DeleteClient(ctx context.Context, clientID string) error {
+	logger := zap.L()
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	err = k.client.DeleteClient(ctx, token, k.realm, clientID)
+	if err != nil {
+		return fmt.Errorf("delete keycloak client %s: %w", clientID, err)
+	}
+
+	logger.Info("deleted keycloak client", zap.String("client_id", clientID))
 	return nil
 }
 

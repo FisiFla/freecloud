@@ -83,6 +83,20 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ensure we clean up the Keycloak client if DB operations fail
+	dbSucceeded := false
+	defer func() {
+		if !dbSucceeded {
+			h.logger.Warn("cleaning up orphaned Keycloak client", zap.String("kc_client_id", keycloakClientID))
+			if delErr := h.keycloak.DeleteClient(ctx, keycloakClientID); delErr != nil {
+				h.logger.Error("failed to clean up orphaned Keycloak client",
+					zap.String("kc_client_id", keycloakClientID),
+					zap.Error(delErr),
+				)
+			}
+		}
+	}()
+
 	// Store in local database
 	var appID string
 	err = h.db.QueryRow(ctx,
@@ -96,6 +110,7 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to store app")
 		return
 	}
+	dbSucceeded = true
 
 	// Write audit log
 	actorID := middleware.GetActorID(r.Context())

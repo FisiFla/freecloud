@@ -79,23 +79,32 @@ func main() {
 	// Setup router
 	r := chi.NewRouter()
 
+	// Initialize JWT auth middleware
+	authMW := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm)
+
+	// CORS origin from env or secure default
+	corsOrigin := os.Getenv("CORS_ORIGIN")
+	if corsOrigin == "" {
+		corsOrigin = "http://localhost:3000"
+	}
+
 	// Middleware
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RequestID)
 	r.Use(chimiddleware.RealIP)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowedOrigins:   []string{corsOrigin},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Actor-ID"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: false,
+		AllowCredentials: true,
 		MaxAge:           300,
 	}))
 	r.Use(middleware.ActorIDMiddleware)
 
 	// Register routes
-	handlers.SetupRoutes(r, handler)
+	handlers.SetupRoutes(r, handler, authMW.Middleware)
 
 	// Create HTTP server
 	srv := &http.Server{

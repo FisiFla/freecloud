@@ -16,7 +16,7 @@ const handler = NextAuth({
         token.accessToken = account.access_token;
         token.idToken = account.id_token;
         token.refreshToken = account.refresh_token;
-        token.expiresAt = Math.floor(Date.now() / 1000) + (account.expires_in || 0);
+        token.expiresAt = Math.floor(Date.now() / 1000) + (Number(account.expires_in) || 0);
         return token;
       }
 
@@ -48,7 +48,7 @@ const handler = NextAuth({
         token.accessToken = tokens.access_token;
         token.idToken = tokens.id_token || token.idToken;
         token.refreshToken = tokens.refresh_token || token.refreshToken;
-        token.expiresAt = Math.floor(Date.now() / 1000) + (tokens.expires_in || 0);
+        token.expiresAt = Math.floor(Date.now() / 1000) + (Number(tokens.expires_in) || 0);
       } catch {
         token.error = "RefreshAccessTokenError";
       }

@@ -90,15 +90,18 @@ interface ApiEnvelope<T> {
   error?: string;
 }
 
+// ---- Auth token store (set by Providers on session change) ----
+
+let authToken: string | null = null;
+
+export function setAuthToken(token: string | null) {
+  authToken = token;
+}
+
 // ---- Helpers ----
 
 function getBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-}
-
-function getActorId(): string {
-  if (typeof window === "undefined") return "anonymous";
-  return localStorage.getItem("actorId") || "anonymous";
 }
 
 async function request<T>(
@@ -109,8 +112,11 @@ async function request<T>(
   const url = `${getBaseUrl()}${path}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    "X-Actor-ID": getActorId(),
   };
+
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
 
   const res = await fetch(url, {
     method,

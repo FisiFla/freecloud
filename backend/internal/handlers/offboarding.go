@@ -17,6 +17,7 @@ type OffboardResponse struct {
 	UserID             string `json:"userId"`
 	SessionsTerminated bool   `json:"sessionsTerminated"`
 	DevicesWiped       int    `json:"devicesWiped"`
+	DevicesFailed      int    `json:"devicesFailed"`
 }
 
 // Offboard handles user offboarding (panic button).
@@ -37,6 +38,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	)
 
 	var devicesWiped int64
+	var devicesFailed int64
 
 	// Use errgroup for concurrent operations
 	g, ctx := errgroup.WithContext(ctx)
@@ -116,6 +118,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 					zap.String("device_id", devID),
 					zap.Error(err),
 				)
+				atomic.AddInt64(&devicesFailed, 1)
 				return err
 			}
 			atomic.AddInt64(&devicesWiped, 1)
@@ -126,8 +129,9 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 
 	// Write immutable audit log
 	details, _ := json.Marshal(map[string]interface{}{
-		"devices_wiped": devicesWiped,
-		"device_ids":    deviceIDs,
+		"devices_wiped":  devicesWiped,
+		"devices_failed": devicesFailed,
+		"device_ids":     deviceIDs,
 	})
 	if h.db != nil {
 		_, auditErr := h.db.Exec(ctx,
@@ -144,5 +148,6 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		UserID:             userID,
 		SessionsTerminated: true,
 		DevicesWiped:       int(devicesWiped),
+		DevicesFailed:      int(devicesFailed),
 	})
 }
