@@ -7,11 +7,10 @@ import type { AuditLogEntry } from "@/lib/api";
 
 const actionOptions = [
   "All Actions",
-  "user.onboard",
-  "user.offboard",
-  "app.login",
-  "device.enroll",
-  "settings.update",
+  "onboard",
+  "offboard",
+  "app_create",
+  "app_assign",
 ];
 
 export default function AuditLogPage() {

@@ -9,6 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./postgres/init-keycloak-db.sql:/docker-entrypoint-initdb.d/init-keycloak-db.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U freecloud"]
       interval: 5s
@@ -34,18 +35,12 @@ services:
         condition: service_healthy
     command: start-dev
 
-  # FleetDM mock — this is a PLACEHOLDER implementation using an echo server.
-  # It returns whatever request body it receives, NOT real FleetDM API shapes.
-  # In production, replace this service with a real FleetDM instance (https://fleetdm.com).
-  # The FleetClient in Go gracefully degrades: if the FleetDM API is unreachable or
-  # returns errors, GetHosts/GetHostSoftware/GetHostSecurityState return sensible
-  # zero/mock data so the app still works during development.
   fleetdm-mock:
-    image: mendhak/http-https-echo:latest
+    build:
+      context: ./fleetdm-mock
+      dockerfile: Dockerfile
     ports:
       - "8082:8080"
-    environment:
-      HTTP_PORT: 8080
 
 volumes:
   pgdata:

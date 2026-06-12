@@ -46,6 +46,19 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		if err := h.keycloak.DisableUser(ctx, userID); err != nil {
 			return err
 		}
+		// Soft-disable user in local DB
+		if h.db != nil {
+			_, dbErr := h.db.Exec(ctx,
+				`UPDATE users SET updated_at = NOW() WHERE keycloak_user_id = $1`,
+				userID,
+			)
+			if dbErr != nil {
+				logger.Warn("failed to soft-disable user in local DB",
+					zap.String("user_id", userID),
+					zap.Error(dbErr),
+				)
+			}
+		}
 		return nil
 	})
 
@@ -63,6 +76,9 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	// Task 3: Query device mappings and wipe each device
 	var deviceIDs []string
 	g.Go(func() error {
+		if h.db == nil {
+			return nil
+		}
 		rows, err := h.db.Query(ctx,
 			`SELECT device_id FROM users_devices_mapping WHERE user_id = $1`,
 			userID,
@@ -113,13 +129,15 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		"devices_wiped": devicesWiped,
 		"device_ids":    deviceIDs,
 	})
-	_, auditErr := h.db.Exec(ctx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "offboard", "user", userID, details,
-	)
-	if auditErr != nil {
-		logger.Warn("failed to write audit log", zap.Error(auditErr))
+	if h.db != nil {
+		_, auditErr := h.db.Exec(ctx,
+			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			actorID, "offboard", "user", userID, details,
+		)
+		if auditErr != nil {
+			logger.Warn("failed to write audit log", zap.Error(auditErr))
+		}
 	}
 
 	respondJSON(w, http.StatusOK, OffboardResponse{

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { offboardUser, checkDevice } from "@/lib/api";
+import { offboardUser, checkDevice, getUser } from "@/lib/api";
 
 interface Device {
   id: string;
@@ -43,10 +43,7 @@ export default function EmployeeDetailPage() {
         setError(null);
 
         // Fetch user details
-        const userRes = await fetch(`http://localhost:8080/api/v1/users/${userId}`);
-        if (!userRes.ok) throw new Error(`Failed to load employee: ${userRes.statusText}`);
-        const userJson = await userRes.json();
-        const userData = userJson.success ? userJson.data : userJson;
+        const userData = await getUser(userId);
         setEmployee({
           id: String(userData.id || ""),
           firstName: String(userData.firstName || ""),

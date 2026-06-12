@@ -61,6 +61,24 @@ export interface AuditLogEntry {
   createdAt: string;
 }
 
+export interface Device {
+  id: string;
+  name: string;
+  type: string;
+  os: string;
+}
+
+export interface User {
+  id: string;
+  keycloakUserId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  department: string;
+  role: string;
+  devices?: Device[];
+}
+
 export interface HealthStatus {
   status: string;
 }
@@ -129,7 +147,7 @@ export async function offboardUser(userId: string): Promise<void> {
 }
 
 export async function checkDevice(userId: string): Promise<DeviceCheckResponse> {
-  return request<DeviceCheckResponse>("GET", `/api/v1/devices/check/${userId}`);
+  return request<DeviceCheckResponse>("POST", "/api/v1/auth/device-check", { keycloakUserId: userId });
 }
 
 export async function createApp(req: CreateAppRequest): Promise<App> {
@@ -137,11 +155,19 @@ export async function createApp(req: CreateAppRequest): Promise<App> {
 }
 
 export async function assignAppToUser(appId: string, userId: string): Promise<void> {
-  return request<void>("POST", "/api/v1/apps/assign", { appId, userId });
+  return request<void>("POST", `/api/v1/apps/${appId}/assign`, { userId });
 }
 
 export async function listApps(): Promise<App[]> {
   return request<App[]>("GET", "/api/v1/apps");
+}
+
+export async function listUsers(): Promise<User[]> {
+  return request<User[]>("GET", "/api/v1/users");
+}
+
+export async function getUser(id: string): Promise<User> {
+  return request<User>("GET", `/api/v1/users/${id}`);
 }
 
 export async function listAuditLogs(filters?: AuditLogFilters): Promise<AuditLogEntry[]> {

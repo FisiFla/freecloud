@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Search, UserPlus, Trash2, AlertCircle } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
 import OnboardForm from "./onboard/OnboardForm";
-import { offboardUser } from "@/lib/api";
+import { offboardUser, listUsers } from "@/lib/api";
 
 interface Employee {
   id: string;
@@ -29,11 +29,7 @@ export default function EmployeesPage() {
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch("http://localhost:8080/api/v1/users");
-        if (!res.ok) throw new Error(`Failed to fetch employees: ${res.statusText}`);
-        const json = await res.json();
-        // The backend returns {success, data} envelope
-        const data = json.success ? json.data : json;
+        const data = await listUsers();
         const mapped = (Array.isArray(data) ? data : []).map((u: Record<string, unknown>) => ({
           id: String(u.id || ""),
           firstName: String(u.firstName || ""),

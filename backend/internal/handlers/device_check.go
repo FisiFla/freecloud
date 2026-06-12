@@ -40,6 +40,11 @@ func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Look up device mapping for this user
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
 	rows, err := h.db.Query(ctx,
 		`SELECT device_id FROM users_devices_mapping WHERE user_id = $1`,
 		req.KeycloakUserID,

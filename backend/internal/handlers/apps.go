@@ -219,8 +219,7 @@ func (h *Handler) ListApps(w http.ResponseWriter, r *http.Request) {
 		apps = []ConnectedApp{}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(apps)
+	respondJSON(w, http.StatusOK, apps)
 }
 
 // ListAuditLogs queries audit logs with optional filters.
@@ -260,7 +259,7 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.db.Query(ctx, query, args...)
 	if err != nil {
 		h.logger.Error("failed to query audit logs", zap.Error(err))
-		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	defer rows.Close()
@@ -288,6 +287,5 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 		entries = []AuditLogEntry{}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(entries)
+	respondJSON(w, http.StatusOK, entries)
 }

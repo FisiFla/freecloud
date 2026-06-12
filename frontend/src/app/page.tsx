@@ -1,13 +1,57 @@
-import { Users, AppWindow, Monitor, ShieldCheck } from "lucide-react";
+"use client";
 
-const stats = [
-  { label: "Total Employees", value: "128", icon: Users, color: "bg-indigo-500" },
-  { label: "Connected Apps", value: "14", icon: AppWindow, color: "bg-emerald-500" },
-  { label: "Devices Managed", value: "237", icon: Monitor, color: "bg-amber-500" },
-  { label: "Recent Audit Events", value: "1,842", icon: ShieldCheck, color: "bg-rose-500" },
-];
+import { useEffect, useState } from "react";
+import { Users, AppWindow, Monitor, ShieldCheck } from "lucide-react";
+import { listUsers, listApps, listAuditLogs } from "@/lib/api";
+
+interface StatData {
+  label: string;
+  value: string;
+  icon: React.ComponentType<{ className?: string }>;
+  color: string;
+}
 
 export default function DashboardPage() {
+  const [totalEmployees, setTotalEmployees] = useState<number | null>(null);
+  const [connectedApps, setConnectedApps] = useState<number | null>(null);
+  const [devicesManaged, setDevicesManaged] = useState<number | null>(null);
+  const [recentAuditEvents, setRecentAuditEvents] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const fetchStats = async () => {
+      try {
+        setLoading(true);
+        const [users, apps, auditLogs] = await Promise.all([
+          listUsers(),
+          listApps(),
+          listAuditLogs({ limit: 100 }),
+        ]);
+        setTotalEmployees(users.length);
+        setConnectedApps(apps.length);
+
+        // Count unique devices from all users
+        const deviceCount = users.reduce((count, u) => {
+          return count + ((u as any).devices?.length || 0);
+        }, 0);
+        setDevicesManaged(deviceCount);
+        setRecentAuditEvents(auditLogs.length);
+      } catch {
+        // On error leave nulls so skeletons show
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchStats();
+  }, []);
+
+  const stats: StatData[] = [
+    { label: "Total Employees", value: totalEmployees?.toLocaleString() ?? "—", icon: Users, color: "bg-indigo-500" },
+    { label: "Connected Apps", value: connectedApps?.toLocaleString() ?? "—", icon: AppWindow, color: "bg-emerald-500" },
+    { label: "Devices Managed", value: devicesManaged?.toLocaleString() ?? "—", icon: Monitor, color: "bg-amber-500" },
+    { label: "Recent Audit Events", value: recentAuditEvents?.toLocaleString() ?? "—", icon: ShieldCheck, color: "bg-rose-500" },
+  ];
+
   return (
     <div>
       <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
@@ -27,7 +71,11 @@ export default function DashboardPage() {
                   <Icon className="h-6 w-6 text-white" />
                 </div>
               </div>
-              <p className="mt-4 text-2xl font-bold text-slate-800">{stat.value}</p>
+              {loading ? (
+                <div className="mt-4 h-8 w-20 animate-pulse rounded bg-slate-200" />
+              ) : (
+                <p className="mt-4 text-2xl font-bold text-slate-800">{stat.value}</p>
+              )}
               <p className="mt-1 text-sm text-slate-500">{stat.label}</p>
             </div>
           );

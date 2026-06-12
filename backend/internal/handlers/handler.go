@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"net/http"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
@@ -24,4 +26,9 @@ func NewHandler(db *pgxpool.Pool, kc *keycloak.KeycloakClient, fc *fleet.FleetCl
 		fleet:    fc,
 		logger:   logger,
 	}
+}
+
+// Health returns a simple health check response.
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }

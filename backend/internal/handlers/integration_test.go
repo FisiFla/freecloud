@@ -49,6 +49,27 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestListUsersNilDB(t *testing.T) {
+	h := setupTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	rec := httptest.NewRecorder()
+
+	h.ListUsers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp APIResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("expected success=true, got %v", resp.Success)
+	}
+}
+
 func TestDeviceCheckEndpoint(t *testing.T) {
 	h := setupTestHandler(t)
 

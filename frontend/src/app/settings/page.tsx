@@ -79,12 +79,12 @@ export default function SettingsPage() {
           <div className="mt-3 flex items-center gap-2">
             <span
               className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                healthStatus === "OK"
+                healthStatus === "ok"
                   ? "bg-emerald-50 text-emerald-700"
                   : "bg-red-50 text-red-700"
               }`}
             >
-              {healthStatus === "OK" ? "Healthy" : healthStatus || "Unknown"}
+              {healthStatus === "ok" ? "Healthy" : healthStatus || "Unknown"}
             </span>
             <span className="text-sm text-slate-500">
               Backend status: {healthStatus || "unknown"}
