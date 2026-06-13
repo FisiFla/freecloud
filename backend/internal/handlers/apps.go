@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -72,6 +73,11 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		req.RedirectURIs[i] = strings.TrimSpace(req.RedirectURIs[i])
 	}
 
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
 	if req.Name == "" || req.Protocol == "" {
 		respondError(w, http.StatusBadRequest, "name and protocol are required")
 		return
@@ -105,32 +111,14 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 			}})
 			return
 		}
-		parsed, err := url.ParseRequestURI(uri)
-		if err != nil {
+		if err := validateRedirectURI(uri); err != nil {
 			respondValidationErrors(w, []ValidationError{{
 				Field:   "redirectURIs",
-				Message: "invalid redirect URI: " + err.Error(),
+				Message: err.Error(),
 			}})
 			return
 		}
-		if parsed.Scheme != "https" {
-			if parsed.Scheme != "http" {
-				respondValidationErrors(w, []ValidationError{{
-					Field:   "redirectURIs",
-					Message: "redirect URI must use https:// or http://localhost or http://127.0.0.1",
-				}})
-				return
-			}
-			// Allow http://localhost and http://127.0.0.1 for local dev
-			if parsed.Host != "localhost" && parsed.Host != "127.0.0.1" &&
-				!strings.HasPrefix(parsed.Host, "localhost:") && !strings.HasPrefix(parsed.Host, "127.0.0.1:") {
-				respondValidationErrors(w, []ValidationError{{
-					Field:   "redirectURIs",
-					Message: "redirect URI must use https:// or http://localhost or http://127.0.0.1",
-				}})
-				return
-			}
-		}
+	}
 	}
 
 	ctx := r.Context()
@@ -196,6 +184,11 @@ func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
 	if appID == "" {
 		respondError(w, http.StatusBadRequest, "appId is required")
+		return
+	}
+
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
@@ -266,6 +259,11 @@ func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListApps(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	if h.db == nil {
+		respondJSON(w, http.StatusOK, []ConnectedApp{})
+		return
+	}
+
 	rows, err := h.db.Query(ctx,
 		`SELECT id, keycloak_client_id, name, protocol, COALESCE(base_url, ''), enabled, created_at
 		 FROM connected_apps
@@ -300,6 +298,11 @@ func (h *Handler) ListApps(w http.ResponseWriter, r *http.Request) {
 // ListAuditLogs queries audit logs with optional filters.
 func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	if h.db == nil {
+		respondJSON(w, http.StatusOK, []AuditLogEntry{})
+		return
+	}
 
 	actorFilter := r.URL.Query().Get("actor")
 	actionFilter := r.URL.Query().Get("action")
@@ -363,4 +366,33 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, entries)
+}
+
+// validateRedirectURI checks that a redirect URI is valid and secure.
+func validateRedirectURI(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("redirect URI must be absolute")
+	}
+
+	if u.Scheme == "https" {
+		return nil
+	}
+
+	if u.Scheme != "http" {
+		return fmt.Errorf("redirect URI must use https or localhost http")
+	}
+
+	host := u.Hostname()
+	if host != "localhost" && host != "127.0.0.1" {
+		return fmt.Errorf("http redirect URI must use localhost or 127.0.0.1")
+	}
+
+	if port := u.Port(); port != "" {
+		if _, err := strconv.Atoi(port); err != nil {
+			return fmt.Errorf("localhost redirect URI port must be numeric")
+		}
+	}
+
+	return nil
 }

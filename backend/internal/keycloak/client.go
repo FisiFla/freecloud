@@ -215,7 +215,7 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 		Enabled:                   gocloak.BoolP(true),
 		StandardFlowEnabled:       gocloak.BoolP(true),
 		ImplicitFlowEnabled:       gocloak.BoolP(false),
-		DirectAccessGrantsEnabled: gocloak.BoolP(true),
+		DirectAccessGrantsEnabled: gocloak.BoolP(false),
 		ServiceAccountsEnabled:    gocloak.BoolP(false),
 		PublicClient:              gocloak.BoolP(false),
 	}

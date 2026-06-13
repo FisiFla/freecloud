@@ -368,14 +368,11 @@ func TestOnboardEmailWarningResponse(t *testing.T) {
 		t.Errorf("expected no error, got %s", resp.Error)
 	}
 	if resp.Data != nil {
-		if data, ok := resp.Data.(map[string]interface{}); ok {
-			if w, ok := data["warning"]; ok {
-				if ws, ok := w.(string); ok {
-					if !strings.Contains(ws, "email delivery failed") {
-						t.Errorf("expected warning to mention 'email delivery failed', got %q", ws)
-					}
-				}
-			}
+		b, _ := json.Marshal(resp.Data)
+		var obResp OnboardResponse
+		json.Unmarshal(b, &obResp)
+		if !strings.Contains(obResp.Warning, "email delivery failed") {
+			t.Fatalf("expected warning to contain 'email delivery failed', got %q", obResp.Warning)
 		}
 	}
 }
