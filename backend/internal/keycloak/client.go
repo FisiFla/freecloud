@@ -11,7 +11,7 @@ import (
 
 // KeycloakClientInterface defines the operations used by handlers.
 type KeycloakClientInterface interface {
-	CreateUser(ctx context.Context, firstName, lastName, email, department string) (*gocloak.User, error)
+	CreateUser(ctx context.Context, firstName, lastName, email, department string) (*CreateUserResult, error)
 	DisableUser(ctx context.Context, userID string) error
 	LogoutAllSessions(ctx context.Context, userID string) error
 	CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
@@ -19,6 +19,14 @@ type KeycloakClientInterface interface {
 	AssignUserToClient(ctx context.Context, userID, clientID string) error
 	GetUserGroups(ctx context.Context, userID string) ([]*gocloak.Group, error)
 	Ping(ctx context.Context) error
+}
+
+// CreateUserResult holds the outcome of a CreateUser operation.
+type CreateUserResult struct {
+	User         *gocloak.User
+	PasswordSet  bool
+	ResetEmailSent bool
+	SetupWarning string
 }
 
 // KeycloakClient wraps gocloak.GoCloak for FreeCloud operations.
@@ -50,7 +58,7 @@ func (k *KeycloakClient) login(ctx context.Context) (string, error) {
 
 // CreateUser creates a Keycloak user, sets a temporary password, and assigns them
 // to a group matching the provided department name.
-func (k *KeycloakClient) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*gocloak.User, error) {
+func (k *KeycloakClient) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*CreateUserResult, error) {
 	logger := zap.L()
 	token, err := k.login(ctx)
 	if err != nil {
@@ -76,27 +84,37 @@ func (k *KeycloakClient) CreateUser(ctx context.Context, firstName, lastName, em
 		zap.String("email", email),
 	)
 
+	result := &CreateUserResult{
+		User: &gocloak.User{
+			ID:        &created,
+			FirstName: &firstName,
+			LastName:  &lastName,
+			Email:     &email,
+			Enabled:   gocloak.BoolP(true),
+		},
+	}
+
 	// Set temporary password
 	tempPass := uuid.New().String()[:12] + "!Aa1"
 	err = k.client.SetPassword(ctx, token, created, k.realm, tempPass, true)
 	if err != nil {
-		logger.Warn("failed to set temporary password, continuing",
-			zap.String("user_id", created),
-			zap.Error(err),
-		)
+		return nil, fmt.Errorf("set password for user %s: %w", created, err)
 	}
+	result.PasswordSet = true
 
-	// Best-effort: send email with UPDATE_PASSWORD required action
-	if err == nil {
-		if execErr := k.client.ExecuteActionsEmail(ctx, token, k.realm, gocloak.ExecuteActionsEmail{
-			UserID:  &created,
-			Actions: &[]string{"UPDATE_PASSWORD"},
-		}); execErr != nil {
-			logger.Warn("failed to send execute-actions-email, continuing",
-				zap.String("user_id", created),
-				zap.Error(execErr),
-			)
-		}
+	// Send email with UPDATE_PASSWORD required action
+	if execErr := k.client.ExecuteActionsEmail(ctx, token, k.realm, gocloak.ExecuteActionsEmail{
+		UserID:  &created,
+		Actions: &[]string{"UPDATE_PASSWORD"},
+	}); execErr != nil {
+		logger.Warn("failed to send execute-actions-email",
+			zap.String("user_id", created),
+			zap.Error(execErr),
+		)
+		result.ResetEmailSent = false
+		result.SetupWarning = "Password reset email could not be sent"
+	} else {
+		result.ResetEmailSent = true
 	}
 
 	// Assign to department group
@@ -134,15 +152,7 @@ func (k *KeycloakClient) CreateUser(ctx context.Context, firstName, lastName, em
 		}
 	}
 
-	// Return the user object with the ID populated
-	result := gocloak.User{
-		ID:        &created,
-		FirstName: &firstName,
-		LastName:  &lastName,
-		Email:     &email,
-		Enabled:   gocloak.BoolP(true),
-	}
-	return &result, nil
+	return result, nil
 }
 
 // DisableUser disables a Keycloak user by setting enabled=false.

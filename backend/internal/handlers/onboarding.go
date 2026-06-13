@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
@@ -71,18 +72,21 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	// Use errgroup to run Keycloak and Fleet operations concurrently
 	g, ctx := errgroup.WithContext(r.Context())
 
-	var createdUser *gocloak.User
+	var createdUser *keycloak.CreateUserResult
 	var enrollmentToken string
 	var fleetErr error
 	var dbWarnings []string
 
 	// Goroutine 1: Create user in Keycloak
 	g.Go(func() error {
-		user, err := h.keycloak.CreateUser(ctx, req.FirstName, req.LastName, req.Email, req.Department)
+		result, err := h.keycloak.CreateUser(ctx, req.FirstName, req.LastName, req.Email, req.Department)
 		if err != nil {
 			return err
 		}
-		createdUser = user
+		if !result.PasswordSet {
+			return fmt.Errorf("password could not be set for user")
+		}
+		createdUser = result
 		// Insert into local database
 		if h.db != nil {
 			_, dbErr := h.db.Exec(ctx,
@@ -90,11 +94,11 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 				 VALUES ($1, $2, $3, $4, $5, $6)
 				 ON CONFLICT (keycloak_user_id) DO UPDATE
 				 SET email = $2, first_name = $3, last_name = $4, department = $5, role = $6, updated_at = NOW()`,
-				*user.ID, req.Email, req.FirstName, req.LastName, req.Department, req.Role,
+				*result.User.ID, req.Email, req.FirstName, req.LastName, req.Department, req.Role,
 			)
 			if dbErr != nil {
 				logger.Warn("failed to persist user to local DB, continuing",
-					zap.String("user_id", *user.ID),
+					zap.String("user_id", *result.User.ID),
 					zap.Error(dbErr),
 				)
 				dbWarnings = append(dbWarnings, fmt.Sprintf("user DB insert: %v", dbErr))
@@ -139,8 +143,8 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		"role":       req.Role,
 	})
 	var targetID string
-	if createdUser != nil && createdUser.ID != nil {
-		targetID = *createdUser.ID
+	if createdUser != nil && createdUser.User != nil && createdUser.User.ID != nil {
+		targetID = *createdUser.User.ID
 	} else {
 		targetID = req.Email
 	}
@@ -157,7 +161,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Wire devices: create placeholder device and mapping when we have a user and enrollment token
-	if createdUser != nil && createdUser.ID != nil && enrollmentToken != "" && h.db != nil {
+	if createdUser != nil && createdUser.User != nil && createdUser.User.ID != nil && enrollmentToken != "" && h.db != nil {
 		deviceID := uuid.New().String()
 		hostname := "pending-" + enrollmentToken[:8]
 		_, devErr := h.db.Exec(ctx,
@@ -174,7 +178,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 				`INSERT INTO users_devices_mapping (user_id, device_id)
 				 VALUES ($1, $2)
 				 ON CONFLICT (user_id, device_id) DO NOTHING`,
-				*createdUser.ID, deviceID,
+				*createdUser.User.ID, deviceID,
 			)
 			if mapErr != nil {
 				logger.Warn("failed to insert device mapping", zap.Error(mapErr))
@@ -183,11 +187,20 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	nextStep := "User created. Admin must provide login credentials to the user."
+	if createdUser != nil && createdUser.ResetEmailSent {
+		nextStep = "Password reset email sent to user."
+	}
+
 	resp := OnboardResponse{
-		User:            createdUser,
+		User:            createdUser.User,
 		EnrollmentToken: enrollmentToken,
 		EnrollmentURL:   enrollmentURL,
-		NextStep:        "User created. Admin must provide login credentials to the user.",
+		NextStep:        nextStep,
+	}
+
+	if createdUser != nil && !createdUser.ResetEmailSent {
+		resp.Warning = createdUser.SetupWarning
 	}
 
 	if fleetErr != nil {

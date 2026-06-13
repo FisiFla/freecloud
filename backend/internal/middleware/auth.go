@@ -154,8 +154,13 @@ func (a *AuthMiddleware) fetchKeys() ([]*rsa.PublicKey, error) {
 	// Also try the PEM cert endpoint as fallback
 	if len(keys) == 0 {
 		certURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", a.keycloakURL, a.realm)
-		resp2, err := http.Get(certURL)
-		if err == nil {
+		resp2, err := client.Get(certURL)
+		if err != nil || resp2.StatusCode != http.StatusOK {
+			if resp2 != nil {
+				resp2.Body.Close()
+			}
+		}
+		if err == nil && resp2.StatusCode == http.StatusOK {
 			defer resp2.Body.Close()
 			var certResp struct {
 				Keys []struct {

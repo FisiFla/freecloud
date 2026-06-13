@@ -3,6 +3,7 @@
 import { useState, FormEvent, useEffect } from "react";
 import { CheckCircle, Copy, AlertCircle } from "lucide-react";
 import { onboardEmployee } from "@/lib/api";
+import { ApiError } from "@/lib/api";
 
 interface OnboardFormProps {
   onSuccess?: () => void;
@@ -49,8 +50,12 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
       });
       setCopied(false);
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "Something went wrong";
-      setError(message);
+      if (err instanceof ApiError && err.fieldErrors && err.fieldErrors.length > 0) {
+        setError(err.fieldErrors.map((e) => e.message).join(", "));
+      } else {
+        const message = err instanceof Error ? err.message : "Something went wrong";
+        setError(message);
+      }
     } finally {
       setSubmitting(false);
     }

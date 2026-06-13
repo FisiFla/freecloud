@@ -11,6 +11,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/Nerzal/gocloak/v13"
+	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 	"go.uber.org/zap"
 )
@@ -202,15 +204,41 @@ func TestHealthKeycloakWithFakePingError(t *testing.T) {
 	}
 }
 
-func TestHealthFleetWithFakePingError(t *testing.T) {
+
+func TestOnboardKeycloakFailure(t *testing.T) {
 	logger := zap.NewNop()
-	kc := &fakeKeycloak{}
-	fleet := &fakeFleet{pingFn: func(ctx context.Context) error { return fmt.Errorf("fleet down") }}
+	kc := &fakeKeycloak{createUserFn: func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
+		return nil, fmt.Errorf("keycloak unavailable")
+	}}
+	fleet := &fakeFleet{}
 	h := NewHandler(nil, kc, fleet, logger)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/fleetdm", nil)
+	body := map[string]string{"firstName": "Test", "lastName": "User", "email": "test@test.com", "department": "Engineering", "role": "Dev"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
-	h.HealthFleet(rec, req)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Errorf("expected 503 (fleet down), got %d", rec.Code)
+	h.Onboard(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 (KC failure), got %d", rec.Code)
+	}
+}
+
+func TestOnboardEmailFailure(t *testing.T) {
+	logger := zap.NewNop()
+	kc := &fakeKeycloak{createUserFn: func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
+		uid := "kc-user-123"
+		user := &gocloak.User{ID: &uid, FirstName: &firstName, LastName: &lastName, Email: &email}
+		return &keycloak.CreateUserResult{User: user, PasswordSet: true, ResetEmailSent: false, SetupWarning: "email couldn't be sent"}, nil
+	}}
+	fleet := &fakeFleet{}
+	h := NewHandler(nil, kc, fleet, logger)
+	body := map[string]string{"firstName": "Test", "lastName": "User", "email": "test@test.com", "department": "Engineering", "role": "Dev"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.Onboard(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 (email fail is non-fatal), got %d", rec.Code)
 	}
 }

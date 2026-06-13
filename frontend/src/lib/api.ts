@@ -99,9 +99,10 @@ interface ApiEnvelope<T> {
   success: boolean;
   data?: T;
   error?: string;
+  errors?: { field: string; message: string }[];
 }
 
-// ---- Auth token store (set by Providers on session change) ----
+// ---- Auth token store ----
 
 let authToken: string | null = null;
 
@@ -110,6 +111,16 @@ export function setAuthToken(token: string | null) {
 }
 
 // ---- Helpers ----
+
+export class ApiError extends Error {
+  fieldErrors?: { field: string; message: string }[];
+  
+  constructor(message: string, fieldErrors?: { field: string; message: string }[]) {
+    super(message);
+    this.name = "ApiError";
+    this.fieldErrors = fieldErrors;
+  }
+}
 
 function getBaseUrl(): string {
   return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
@@ -147,7 +158,12 @@ async function request<T>(
   }
 
   if (!json.success) {
-    throw new Error(json.error || `Request failed with status ${res.status}`);
+    // If there are field-level errors, throw ApiError with both message and fieldErrors
+    if (json.errors && json.errors.length > 0) {
+      const messages = json.errors.map((e) => e.message).join("; ");
+      throw new ApiError(messages, json.errors);
+    }
+    throw new ApiError(json.error || `Request failed with status ${res.status}`);
   }
 
   return json.data as T;
@@ -164,7 +180,7 @@ export async function offboardUser(userId: string): Promise<OffboardResponse> {
 }
 
 export async function checkDevice(userId: string): Promise<DeviceCheckResponse> {
-  return request<DeviceCheckResponse>("POST", "/api/v1/auth/device-check", { keycloakUserId: userId });
+  return request<DeviceCheckResponse>("POST", "/api/v1/auth/device-check", {});
 }
 
 export async function createApp(req: CreateAppRequest): Promise<App> {

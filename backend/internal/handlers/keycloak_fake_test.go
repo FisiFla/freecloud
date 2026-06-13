@@ -11,7 +11,7 @@ import (
 var _ keycloak.KeycloakClientInterface = (*fakeKeycloak)(nil)
 
 type fakeKeycloak struct {
-	createUserFn          func(ctx context.Context, firstName, lastName, email, department string) (*gocloak.User, error)
+	createUserFn          func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error)
 	disableUserFn         func(ctx context.Context, userID string) error
 	logoutSessionsFn      func(ctx context.Context, userID string) error
 	createClientFn        func(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
@@ -21,10 +21,11 @@ type fakeKeycloak struct {
 	pingFn                func(ctx context.Context) error
 }
 
-func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*gocloak.User, error) {
+func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
 	if f.createUserFn != nil { return f.createUserFn(ctx, firstName, lastName, email, department) }
 	uid := "kc-user-123"
-	return &gocloak.User{ID: &uid, FirstName: &firstName, LastName: &lastName, Email: &email}, nil
+	user := &gocloak.User{ID: &uid, FirstName: &firstName, LastName: &lastName, Email: &email}
+	return &keycloak.CreateUserResult{User: user, PasswordSet: true, ResetEmailSent: true}, nil
 }
 
 func (f *fakeKeycloak) DisableUser(ctx context.Context, userID string) error {
