@@ -73,11 +73,6 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		req.RedirectURIs[i] = strings.TrimSpace(req.RedirectURIs[i])
 	}
 
-	if h.db == nil {
-		respondError(w, http.StatusInternalServerError, "database not available")
-		return
-	}
-
 	if req.Name == "" || req.Protocol == "" {
 		respondError(w, http.StatusBadRequest, "name and protocol are required")
 		return
@@ -119,6 +114,10 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return
 	}
 
 	ctx := r.Context()
