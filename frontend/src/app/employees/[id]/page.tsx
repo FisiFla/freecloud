@@ -117,9 +117,13 @@ export default function EmployeeDetailPage() {
         >
           &larr; Back to Employees
         </a>
-        <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <AlertCircle className="h-5 w-5 shrink-0" />
-          <span>{error}</span>
+        <div className="mt-8 text-center rounded-xl border border-dashed border-slate-200 bg-white p-12">
+          <AlertCircle className="mx-auto h-8 w-8 text-red-300" />
+          <h3 className="mt-3 text-sm font-medium text-red-600">User not found</h3>
+          <p className="mt-1 text-sm text-slate-400">This employee may have been removed or the ID is invalid.</p>
+          <a href="/employees" className="mt-4 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-800">
+            &larr; Back to Employees
+          </a>
         </div>
       </div>
     );

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -71,6 +72,21 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 	if req.Protocol != "OIDC" && req.Protocol != "SAML" {
 		respondError(w, http.StatusBadRequest, "protocol must be OIDC or SAML")
 		return
+	}
+
+	if len(req.Name) > 255 {
+		respondError(w, http.StatusBadRequest, "name must be ≤ 255 characters")
+		return
+	}
+	if req.Protocol == "OIDC" && len(req.RedirectURIs) == 0 {
+		respondError(w, http.StatusBadRequest, "at least one redirect URI is required for OIDC apps")
+		return
+	}
+	for _, uri := range req.RedirectURIs {
+		if !strings.HasPrefix(uri, "https://") && !strings.HasPrefix(uri, "http://localhost") {
+			respondError(w, http.StatusBadRequest, "redirect URI must use https:// or http://localhost")
+			return
+		}
 	}
 
 	ctx := r.Context()

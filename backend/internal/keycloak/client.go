@@ -65,8 +65,8 @@ func (k *KeycloakClient) CreateUser(ctx context.Context, firstName, lastName, em
 	)
 
 	// Set temporary password
-	tempPass := "TempPass123!"
-	err = k.client.SetPassword(ctx, token, created, k.realm, tempPass, false)
+	tempPass := uuid.New().String()[:12] + "!Aa1"
+	err = k.client.SetPassword(ctx, token, created, k.realm, tempPass, true)
 	if err != nil {
 		logger.Warn("failed to set temporary password, continuing",
 			zap.String("user_id", created),
@@ -272,4 +272,10 @@ func (k *KeycloakClient) GetUserGroups(ctx context.Context, userID string) ([]*g
 	}
 
 	return groups, nil
+}
+
+// Ping checks connectivity to Keycloak by attempting a login.
+func (k *KeycloakClient) Ping(ctx context.Context) error {
+	_, err := k.login(ctx)
+	return err
 }

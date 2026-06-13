@@ -17,13 +17,14 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
   const [role, setRole] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{
-    tempPassword: string;
     enrollmentToken: string;
     enrollmentUrl: string;
     warning?: string;
+    nextStep?: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [emailError, setEmailError] = useState<string | null>(null);
 
   // Track dirty state: any form field filled in
   useEffect(() => {
@@ -41,10 +42,10 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
     try {
       const data = await onboardEmployee({ firstName, lastName, email, department, role });
       setResult({
-        tempPassword: data.tempPassword || "",
         enrollmentToken: data.enrollmentToken || "",
         enrollmentUrl: data.enrollmentURL || "http://localhost:8080/enroll",
         warning: data.warning,
+        nextStep: data.nextStep,
       });
       setCopied(false);
     } catch (err: unknown) {
@@ -85,22 +86,10 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
         )}
 
         <div className="mt-6 space-y-4">
-          {/* Temporary Password (from backend) */}
-          {result.tempPassword && (
-            <div>
-              <label className="block text-sm font-medium text-slate-700">Temporary Password</label>
-              <div className="mt-1 flex items-center gap-2">
-                <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800">
-                  {result.tempPassword}
-                </code>
-                <button
-                  onClick={() => copyToClipboard(result.tempPassword)}
-                  className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
-                  title="Copy password"
-                >
-                  <Copy className="h-4 w-4" />
-                </button>
-              </div>
+          {/* Next Step notice */}
+          {result.nextStep && (
+            <div className="mt-4 rounded-lg bg-indigo-50 p-3 text-sm text-indigo-700">
+              {result.nextStep}
             </div>
           )}
 
@@ -194,10 +183,18 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
           type="email"
           required
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={(e) => {
+            setEmail(e.target.value);
+            if (e.target.value && !e.target.value.includes('@')) {
+              setEmailError('Please enter a valid email address');
+            } else {
+              setEmailError(null);
+            }
+          }}
           className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
           placeholder="jane@example.com"
         />
+        {emailError && <p className="mt-1 text-xs text-red-500">{emailError}</p>}
       </div>
 
       <div>

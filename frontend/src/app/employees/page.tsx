@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Search, UserPlus, Trash2, AlertCircle, AlertTriangle } from "lucide-react";
+import { Search, UserPlus, Trash2, AlertCircle, AlertTriangle, Users } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import OnboardForm from "./onboard/OnboardForm";
@@ -137,6 +137,18 @@ export default function EmployeesPage() {
               <div key={i} className="h-16 animate-pulse rounded-xl bg-slate-200" />
             ))}
           </div>
+        ) : filtered.length === 0 && employees.length === 0 ? (
+          <div className="mt-8 text-center rounded-xl border border-dashed border-slate-200 bg-white p-12">
+            <Users className="mx-auto h-8 w-8 text-slate-300" />
+            <h3 className="mt-3 text-sm font-medium text-slate-600">No employees found</h3>
+            <p className="mt-1 text-sm text-slate-400">Onboard your first employee to get started.</p>
+          </div>
+        ) : filtered.length === 0 && employees.length > 0 ? (
+          <div className="mt-8 text-center rounded-xl border border-dashed border-slate-200 bg-white p-12">
+            <Search className="mx-auto h-8 w-8 text-slate-300" />
+            <h3 className="mt-3 text-sm font-medium text-slate-600">No employees match your search</h3>
+            <p className="mt-1 text-sm text-slate-400">Try a different search term.</p>
+          </div>
         ) : (
           /* Table */
           <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -187,20 +199,6 @@ export default function EmployeesPage() {
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && employees.length === 0 && !error && (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400">
-                      No employees found. Click &apos;Onboard New Employee&apos; to add the first one.
-                    </td>
-                  </tr>
-                )}
-                {filtered.length === 0 && employees.length > 0 && (
-                  <tr>
-                    <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400">
-                      No employees match your search.
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>

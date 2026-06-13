@@ -22,6 +22,7 @@ export interface OnboardResponse {
   enrollmentToken: string;
   enrollmentURL: string;
   warning?: string;
+  nextStep?: string;
 }
 
 export interface OffboardResponse {

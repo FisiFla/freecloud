@@ -67,3 +67,11 @@ func TestGetClaimsNil(t *testing.T) {
 		t.Error("expected nil claims from nil context")
 	}
 }
+
+// TODO: Add tests for JWT validation that require generating test tokens:
+//   - TestAuthAudienceCheck: verify audience validation (invalid aud → 401)
+//   - TestAuthIssuerCheck: verify issuer validation (wrong iss → 401)
+//   - TestAuthExpiredToken: verify expired JWT rejection
+//   - TestAuthWrongKey: verify token signed with wrong key is rejected
+//   - TestAuthManagementEndpointRequiresAdmin: verify admin endpoint rejects non-admin tokens
+// These tests require generating RS256 JWTs with known keys or using a test fixture.

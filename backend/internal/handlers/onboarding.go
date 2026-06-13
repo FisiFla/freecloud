@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/google/uuid"
@@ -26,7 +27,7 @@ type OnboardResponse struct {
 	User            *gocloak.User `json:"user"`
 	EnrollmentToken string        `json:"enrollmentToken"`
 	EnrollmentURL   string        `json:"enrollmentURL"`
-	TempPassword    string        `json:"tempPassword,omitempty"`
+	NextStep        string        `json:"nextStep,omitempty"`
 	Warning         string        `json:"warning,omitempty"`
 }
 
@@ -43,6 +44,23 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	// Validate required fields
 	if req.FirstName == "" || req.LastName == "" || req.Email == "" {
 		respondError(w, http.StatusBadRequest, "firstName, lastName, and email are required")
+		return
+	}
+
+	if len(req.FirstName) == 0 || len(req.FirstName) > 100 {
+		respondError(w, http.StatusBadRequest, "firstName is required and must be ≤ 100 characters")
+		return
+	}
+	if len(req.LastName) == 0 || len(req.LastName) > 100 {
+		respondError(w, http.StatusBadRequest, "lastName is required and must be ≤ 100 characters")
+		return
+	}
+	if len(req.Email) == 0 || len(req.Email) > 254 {
+		respondError(w, http.StatusBadRequest, "email is required and must be ≤ 254 characters")
+		return
+	}
+	if !strings.Contains(req.Email, "@") {
+		respondError(w, http.StatusBadRequest, "email must contain @")
 		return
 	}
 
@@ -162,12 +180,11 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		User:            createdUser,
 		EnrollmentToken: enrollmentToken,
 		EnrollmentURL:   enrollmentURL,
-		TempPassword:    "TempPass123!",
+		NextStep:        "User must set password on first login. A setup email will be sent.",
 	}
 
 	if fleetErr != nil {
 		resp.Warning = "User created. Fleet enrollment failed — manual enrollment required."
-		resp.TempPassword = "TempPass123!"
 		respondJSON(w, http.StatusAccepted, resp)
 		return
 	}

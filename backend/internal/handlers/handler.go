@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -36,9 +35,9 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 
 // HealthKeycloak checks connectivity to the Keycloak server.
 func (h *Handler) HealthKeycloak(w http.ResponseWriter, r *http.Request) {
-	_, err := h.keycloak.GetUserGroups(r.Context(), "nonexistent")
+	err := h.keycloak.Ping(r.Context())
 	if err != nil {
-		respondJSON(w, http.StatusOK, map[string]string{"status": "unreachable"})
+		respondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unreachable"})
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -46,9 +45,9 @@ func (h *Handler) HealthKeycloak(w http.ResponseWriter, r *http.Request) {
 
 // HealthFleet checks connectivity to the FleetDM server.
 func (h *Handler) HealthFleet(w http.ResponseWriter, r *http.Request) {
-	_, err := h.fleet.GetHosts(r.Context(), "")
+	err := h.fleet.Ping(r.Context())
 	if err != nil {
-		respondJSON(w, http.StatusOK, map[string]string{"status": "unreachable"})
+		respondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unreachable"})
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})

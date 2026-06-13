@@ -172,9 +172,11 @@ export default function AppsPage() {
               </div>
             ))}
             {apps.length === 0 && (
-              <p className="col-span-full py-8 text-center text-sm text-slate-400">
-                No applications configured yet. Add your first SSO application to get started.
-              </p>
+              <div className="col-span-full mt-8 text-center rounded-xl border border-dashed border-slate-200 bg-white p-12">
+                <Globe className="mx-auto h-8 w-8 text-slate-300" />
+                <h3 className="mt-3 text-sm font-medium text-slate-600">No applications configured yet</h3>
+                <p className="mt-1 text-sm text-slate-400">Add your first SSO application to get started.</p>
+              </div>
             )}
           </div>
         )}
@@ -240,6 +242,12 @@ export default function AppsPage() {
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
               placeholder="https://myapp.com/callback"
             />
+            {newProtocol === "OIDC" && !newRedirectUris.trim() && (
+              <p className="mt-1 text-xs text-amber-600">At least one redirect URI is required for OIDC apps</p>
+            )}
+            {newRedirectUris.trim() && (
+              <p className="mt-1 text-xs text-slate-400">Redirect URIs must start with https:// or http://localhost</p>
+            )}
           </div>
 
           <div>

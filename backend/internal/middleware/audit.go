@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"os"
 )
 
 // contextKey is a private type for context keys to avoid collisions.
@@ -33,6 +34,14 @@ func ActorIDMiddleware(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
+		}
+
+		// In non-development environments, reject requests without valid JWT
+		if os.Getenv("APP_ENV") != "" && os.Getenv("APP_ENV") != "development" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"success":false,"error":"unauthorized: valid JWT required"}`))
+			return
 		}
 
 		// Fallback to X-Actor-ID header (dev/testing)

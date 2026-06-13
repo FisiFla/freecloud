@@ -116,7 +116,6 @@ func (f *FleetClient) CreateEnrollmentToken(ctx context.Context) (string, error)
 }
 
 // GetHosts retrieves hosts from FleetDM, optionally filtered by a query.
-// Falls back to mock data if the FleetDM API is unavailable (graceful degradation).
 func (f *FleetClient) GetHosts(ctx context.Context, query string) ([]Host, error) {
 	path := "/api/v1/fleet/hosts"
 	if query != "" {
@@ -125,20 +124,18 @@ func (f *FleetClient) GetHosts(ctx context.Context, query string) ([]Host, error
 
 	body, err := f.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		zap.L().Warn("fleet GetHosts failed, returning mock data", zap.Error(err))
-		return []Host{{ID: "mock-host-001", Hostname: "mock-device.local", OsVersion: "macOS 15", Status: "online"}}, nil
+		return nil, fmt.Errorf("fleet hosts: %w", err)
 	}
 
 	var result struct {
 		Hosts []Host `json:"hosts"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		zap.L().Warn("fleet GetHosts parse failed, returning mock data", zap.Error(err))
-		return []Host{{ID: "mock-host-001", Hostname: "mock-device.local", OsVersion: "macOS 15", Status: "online"}}, nil
+		return nil, fmt.Errorf("fleet parse hosts: %w", err)
 	}
 
 	if len(result.Hosts) == 0 {
-		return []Host{{ID: "mock-host-001", Hostname: "mock-device.local", OsVersion: "macOS 15", Status: "online"}}, nil
+		return []Host{}, nil
 	}
 
 	return result.Hosts, nil
@@ -208,6 +205,12 @@ func (f *FleetClient) GetHostSecurityState(ctx context.Context, hostID string) (
 	}
 
 	return state, nil
+}
+
+// Ping checks connectivity to the FleetDM server.
+func (f *FleetClient) Ping(ctx context.Context) error {
+	_, err := f.doRequest(ctx, http.MethodGet, "/api/v1/fleet/status", nil)
+	return err
 }
 
 // IssueRemoteLock issues a remote lock command to a host.

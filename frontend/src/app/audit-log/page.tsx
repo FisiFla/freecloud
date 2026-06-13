@@ -144,8 +144,10 @@ export default function AuditLogPage() {
           ))}
         </div>
       ) : logs.length === 0 ? (
-        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
-          <p className="text-sm text-slate-400">No audit events found.</p>
+        <div className="mt-8 text-center rounded-xl border border-dashed border-slate-200 bg-white p-12">
+          <Search className="mx-auto h-8 w-8 text-slate-300" />
+          <h3 className="mt-3 text-sm font-medium text-slate-600">No audit events found</h3>
+          <p className="mt-1 text-sm text-slate-400">Actions will appear here as you onboard employees and manage apps.</p>
         </div>
       ) : (
         <>

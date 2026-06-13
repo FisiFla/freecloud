@@ -50,11 +50,11 @@ export default function SettingsPage() {
         await healthCheck();
         connected = true;
       } else if (endpoint === "/api/v1/health/keycloak") {
-        await healthKeycloak();
-        connected = true;
+        const result = await healthKeycloak();
+        connected = result.status === "ok";
       } else if (endpoint === "/api/v1/health/fleetdm") {
-        await healthFleet();
-        connected = true;
+        const result = await healthFleet();
+        connected = result.status === "ok";
       }
       setServices((prev) =>
         prev.map((s, i) =>

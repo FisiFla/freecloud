@@ -58,20 +58,22 @@ func isManagementEndpoint(path string) bool {
 
 // AuthMiddleware validates JWTs against a Keycloak realm.
 type AuthMiddleware struct {
-	keycloakURL string
-	realm       string
-	audience    string
-	mu          sync.RWMutex
-	keys        []*rsa.PublicKey
-	lastFetch   time.Time
+	keycloakURL    string
+	realm          string
+	audience       string
+	expectedIssuer string
+	mu             sync.RWMutex
+	keys           []*rsa.PublicKey
+	lastFetch      time.Time
 }
 
 // NewAuthMiddleware creates a new AuthMiddleware.
 func NewAuthMiddleware(keycloakURL, realm, audience string) *AuthMiddleware {
 	return &AuthMiddleware{
-		keycloakURL: keycloakURL,
-		realm:       realm,
-		audience:    audience,
+		keycloakURL:    keycloakURL,
+		realm:          realm,
+		audience:       audience,
+		expectedIssuer: fmt.Sprintf("%s/realms/%s", keycloakURL, realm),
 	}
 }
 
@@ -250,6 +252,15 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 							w.Header().Set("Content-Type", "application/json")
 							w.WriteHeader(http.StatusUnauthorized)
 							w.Write([]byte(`{"success":false,"error":"unauthorized: invalid audience"}`))
+							return
+						}
+					}
+					// Validate issuer
+					if a.expectedIssuer != "" {
+						if iss, ok := claims["iss"].(string); !ok || iss != a.expectedIssuer {
+							w.Header().Set("Content-Type", "application/json")
+							w.WriteHeader(http.StatusUnauthorized)
+							w.Write([]byte(`{"success":false,"error":"unauthorized: invalid issuer"}`))
 							return
 						}
 					}
