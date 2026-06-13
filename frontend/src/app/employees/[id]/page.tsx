@@ -166,6 +166,19 @@ export default function EmployeeDetailPage() {
             </div>
           )}
 
+          {/* Warnings banner */}
+          {offboardResult?.warnings && offboardResult.warnings.length > 0 && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-800">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" />
+              <div>
+                <p className="font-medium">Offboarding warnings</p>
+                <ul className="mt-1 list-inside list-disc text-sm text-amber-700">
+                  {offboardResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              </div>
+            </div>
+          )}
+
           {/* Result panel */}
           <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="flex items-center gap-3">

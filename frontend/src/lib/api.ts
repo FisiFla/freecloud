@@ -31,6 +31,7 @@ export interface OffboardResponse {
   sessionTerminationError?: string;
   devicesWiped: number;
   devicesFailed: number;
+  warnings?: string[];
 }
 
 export interface DeviceCheckResponse {

@@ -326,3 +326,44 @@ func TestOnboardValidationWhitespaceEmailNormalized(t *testing.T) {
 		t.Errorf("expected 200, got %d", rec.Code)
 	}
 }
+
+func TestOnboardValidationWhitespaceOnly(t *testing.T) {
+	h := setupTestHandler(t)
+	body := map[string]string{
+		"firstName": "   ", "lastName": "User", "email": "test@test.com",
+		"department": "Engineering", "role": "Dev",
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.Onboard(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 (whitespace-only firstName), got %d", rec.Code)
+	}
+}
+
+func TestOnboardEmailWarningResponse(t *testing.T) {
+	logger := zap.NewNop()
+	kc := &fakeKeycloak{createUserFn: func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
+		uid := "kc-user-warn"
+		user := &gocloak.User{ID: &uid}
+		return &keycloak.CreateUserResult{User: user, PasswordSet: true, ResetEmailSent: false, SetupWarning: "email delivery failed"}, nil
+	}}
+	fleet := &fakeFleet{}
+	h := NewHandler(nil, kc, fleet, logger)
+	body := map[string]string{"firstName": "Test", "lastName": "User", "email": "test@test.com", "department": "Engineering", "role": "Dev"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.Onboard(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	var resp APIResponse
+	json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.Error != "" {
+		t.Errorf("expected no error, got %s", resp.Error)
+	}
+}
