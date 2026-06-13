@@ -7,18 +7,18 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 // OffboardResponse is the JSON response for the offboard endpoint.
 type OffboardResponse struct {
-	UserID                  string `json:"userId"`
-	SessionsTerminated       bool   `json:"sessionsTerminated"`
-	SessionTerminationError  string `json:"sessionTerminationError,omitempty"`
-	DevicesWiped             int    `json:"devicesWiped"`
-	DevicesFailed            int    `json:"devicesFailed"`
+	UserID                  string   `json:"userId"`
+	SessionsTerminated       bool     `json:"sessionsTerminated"`
+	SessionTerminationError  string   `json:"sessionTerminationError,omitempty"`
+	DevicesWiped             int      `json:"devicesWiped"`
+	DevicesFailed            int      `json:"devicesFailed"`
+	Warnings                 []string `json:"warnings,omitempty"`
 }
 
 // Offboard handles user offboarding (panic button).
@@ -42,15 +42,14 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	var devicesFailed int64
 	var sessionsTerminated bool
 	var sessionError string
+	var warnings []string
 
-	// Use errgroup for concurrent operations
-	g, ctx := errgroup.WithContext(ctx)
+	// Sequential best-effort offboarding — each step continues regardless of failures
 
-	// Task 1: Disable user in Keycloak
-	g.Go(func() error {
-		if err := h.keycloak.DisableUser(ctx, userID); err != nil {
-			return err
-		}
+	// Step 1: Disable user in Keycloak
+	if err := h.keycloak.DisableUser(ctx, userID); err != nil {
+		warnings = append(warnings, "disable user: "+err.Error())
+	} else {
 		// Soft-disable user in local DB
 		if h.db != nil {
 			_, dbErr := h.db.Exec(ctx,
@@ -62,76 +61,58 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 					zap.String("user_id", userID),
 					zap.Error(dbErr),
 				)
+				warnings = append(warnings, "local DB disable: "+dbErr.Error())
 			}
 		}
-		return nil
-	})
+	}
 
-	// Task 2: Logout all sessions
-	g.Go(func() error {
-		if err := h.keycloak.LogoutAllSessions(ctx, userID); err != nil {
-			logger.Warn("failed to logout sessions",
-				zap.String("user_id", userID),
-				zap.Error(err),
-			)
-			sessionError = err.Error()
-			return nil // don't fail the whole offboard
-		}
+	// Step 2: Logout all sessions
+	if err := h.keycloak.LogoutAllSessions(ctx, userID); err != nil {
+		sessionError = err.Error()
+		warnings = append(warnings, "logout sessions: "+sessionError)
+	} else {
 		sessionsTerminated = true
-		return nil
-	})
+	}
 
-	// Task 3: Query device mappings and wipe each device
+	// Step 3: Look up device IDs
 	var deviceIDs []string
-	g.Go(func() error {
-		if h.db == nil {
-			return nil
-		}
+	if h.db != nil {
 		rows, err := h.db.Query(ctx,
 			`SELECT device_id FROM users_devices_mapping WHERE user_id = $1`,
 			userID,
 		)
 		if err != nil {
-			return err
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			var devID string
-			if err := rows.Scan(&devID); err != nil {
-				logger.Warn("failed to scan device ID", zap.Error(err))
-				continue
+			logger.Error("failed to query device mapping", zap.Error(err))
+			warnings = append(warnings, "device lookup: "+err.Error())
+		} else {
+			for rows.Next() {
+				var devID string
+				if err := rows.Scan(&devID); err != nil {
+					logger.Warn("failed to scan device ID", zap.Error(err))
+					continue
+				}
+				deviceIDs = append(deviceIDs, devID)
 			}
-			deviceIDs = append(deviceIDs, devID)
+			if err := rows.Err(); err != nil {
+				logger.Error("error iterating device rows", zap.Error(err))
+				warnings = append(warnings, "device iterator: "+err.Error())
+			}
+			rows.Close()
 		}
-		return rows.Err()
-	})
-
-	// Wait for the queries to complete
-	if err := g.Wait(); err != nil {
-		logger.Error("offboarding query failed", zap.Error(err))
-		respondError(w, http.StatusInternalServerError, "offboarding failed: "+err.Error())
-		return
 	}
 
-	// Now wipe each device concurrently
-	wipeGroup := new(errgroup.Group)
+	// Step 4: Wipe each device best-effort (no context cancellation across wipes)
 	for _, devID := range deviceIDs {
-		devID := devID // capture
-		wipeGroup.Go(func() error {
-			if err := h.fleet.IssueRemoteWipe(ctx, devID); err != nil {
-				logger.Error("failed to wipe device",
-					zap.String("device_id", devID),
-					zap.Error(err),
-				)
-				atomic.AddInt64(&devicesFailed, 1)
-				return err
-			}
+		if err := h.fleet.IssueRemoteWipe(ctx, devID); err != nil {
+			logger.Error("failed to wipe device",
+				zap.String("device_id", devID),
+				zap.Error(err),
+			)
+			atomic.AddInt64(&devicesFailed, 1)
+		} else {
 			atomic.AddInt64(&devicesWiped, 1)
-			return nil
-		})
+		}
 	}
-	_ = wipeGroup.Wait() // best effort
 
 	// Write immutable audit log
 	details, _ := json.Marshal(map[string]interface{}{
@@ -156,5 +137,6 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		SessionTerminationError:  sessionError,
 		DevicesWiped:             int(devicesWiped),
 		DevicesFailed:            int(devicesFailed),
+		Warnings:                 warnings,
 	})
 }

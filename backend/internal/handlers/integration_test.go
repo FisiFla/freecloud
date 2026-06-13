@@ -275,3 +275,54 @@ func TestOffboardMissingUserID(t *testing.T) {
 		t.Errorf("expected 400 (missing user ID), got %d", rec.Code)
 	}
 }
+
+func TestOffboardContinuesOnDisableFailure(t *testing.T) {
+	logger := zap.NewNop()
+	kc := &fakeKeycloak{
+		disableUserFn: func(ctx context.Context, userID string) error {
+			return fmt.Errorf("keycloak unavailable")
+		},
+		logoutSessionsFn: func(ctx context.Context, userID string) error {
+			return nil
+		},
+	}
+	fleet := &fakeFleet{}
+	h := NewHandler(nil, kc, fleet, logger)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/test-user-456", nil)
+	req.Header.Set("Content-Type", "application/json")
+	chiCtx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
+		URLParams: chi.RouteParams{Keys: []string{"userId"}, Values: []string{"test-user-456"}},
+	})
+	req = req.WithContext(chiCtx)
+	rec := httptest.NewRecorder()
+	h.Offboard(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 (best-effort), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOnboardValidationWhitespaceEmailNormalized(t *testing.T) {
+	logger := zap.NewNop()
+	kc := &fakeKeycloak{createUserFn: func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
+		if email != "test@example.com" {
+			t.Errorf("expected normalized email 'test@example.com', got %q", email)
+		}
+		uid := "kc-user-email"
+		user := &gocloak.User{ID: &uid}
+		return &keycloak.CreateUserResult{User: user, PasswordSet: true, ResetEmailSent: true}, nil
+	}}
+	fleet := &fakeFleet{}
+	h := NewHandler(nil, kc, fleet, logger)
+	body := map[string]string{
+		"firstName": " Test ", "lastName": "User", "email": " TEST@Example.COM ",
+		"department": "Engineering", "role": "Dev",
+	}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.Onboard(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+}

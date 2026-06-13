@@ -66,6 +66,13 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Normalize input
+	req.FirstName = strings.TrimSpace(req.FirstName)
+	req.LastName = strings.TrimSpace(req.LastName)
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	req.Department = strings.TrimSpace(req.Department)
+	req.Role = strings.TrimSpace(req.Role)
+
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
