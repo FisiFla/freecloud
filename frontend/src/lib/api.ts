@@ -18,9 +18,18 @@ export interface OnboardResponse {
     username: string;
     email: string;
   };
+  tempPassword?: string;
   enrollmentToken: string;
   enrollmentURL: string;
   warning?: string;
+}
+
+export interface OffboardResponse {
+  userId: string;
+  sessionsTerminated: boolean;
+  sessionTerminationError?: string;
+  devicesWiped: number;
+  devicesFailed: number;
 }
 
 export interface DeviceCheckResponse {
@@ -149,8 +158,8 @@ export async function onboardEmployee(req: OnboardRequest): Promise<OnboardRespo
   return request<OnboardResponse>("POST", "/api/v1/onboard", req);
 }
 
-export async function offboardUser(userId: string): Promise<void> {
-  return request<void>("POST", `/api/v1/offboard/${userId}`);
+export async function offboardUser(userId: string): Promise<OffboardResponse> {
+  return request<OffboardResponse>("POST", `/api/v1/offboard/${userId}`);
 }
 
 export async function checkDevice(userId: string): Promise<DeviceCheckResponse> {
@@ -188,4 +197,12 @@ export async function listAuditLogs(filters?: AuditLogFilters): Promise<AuditLog
 
 export async function healthCheck(): Promise<HealthStatus> {
   return request<HealthStatus>("GET", "/api/v1/health");
+}
+
+export async function healthKeycloak(): Promise<{status: string}> {
+  return request<{status: string}>("GET", "/api/v1/health/keycloak");
+}
+
+export async function healthFleet(): Promise<{status: string}> {
+  return request<{status: string}>("GET", "/api/v1/health/fleetdm");
 }

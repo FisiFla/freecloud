@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Plus, Globe, ToggleLeft, ToggleRight, AlertCircle } from "lucide-react";
+import { Plus, Globe, AlertCircle, UserPlus } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
-import { listApps, createApp } from "@/lib/api";
-import type { App } from "@/lib/api";
+import { listApps, createApp, listUsers, assignAppToUser } from "@/lib/api";
+import type { App, User } from "@/lib/api";
 
 export default function AppsPage() {
   const [apps, setApps] = useState<App[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
@@ -17,6 +18,12 @@ export default function AppsPage() {
   const [newBaseUrl, setNewBaseUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Assign dialog state
+  const [assignAppId, setAssignAppId] = useState<string | null>(null);
+  const [assignUserId, setAssignUserId] = useState("");
+  const [assigning, setAssigning] = useState(false);
+  const [assignMessage, setAssignMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     const fetchApps = async () => {
@@ -32,6 +39,18 @@ export default function AppsPage() {
       }
     };
     fetchApps();
+  }, []);
+
+  useEffect(() => {
+    const fetchUsers = async () => {
+      try {
+        const data = await listUsers();
+        setUsers(Array.isArray(data) ? data : []);
+      } catch {
+        // Silently ignore — users are optional for the assign flow
+      }
+    };
+    fetchUsers();
   }, []);
 
   const handleAddApp = async (e: React.FormEvent) => {
@@ -55,6 +74,20 @@ export default function AppsPage() {
       setSubmitError(err instanceof Error ? err.message : "Failed to create app");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleAssign = async () => {
+    if (!assignAppId || !assignUserId) return;
+    setAssigning(true);
+    setAssignMessage(null);
+    try {
+      await assignAppToUser(assignAppId, assignUserId);
+      setAssignMessage({ type: "success", text: "Application assigned successfully!" });
+    } catch (err: unknown) {
+      setAssignMessage({ type: "error", text: err instanceof Error ? err.message : "Failed to assign app" });
+    } finally {
+      setAssigning(false);
     }
   };
 
@@ -127,11 +160,20 @@ export default function AppsPage() {
                     {app.enabled ? "Enabled" : "Disabled"}
                   </span>
                 </div>
+
+                {/* Assign button */}
+                <button
+                  onClick={() => { setAssignAppId(app.id); setAssignUserId(""); setAssignMessage(null); }}
+                  className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200"
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  Assign
+                </button>
               </div>
             ))}
             {apps.length === 0 && (
               <p className="col-span-full py-8 text-center text-sm text-slate-400">
-                No applications yet.
+                No applications configured yet. Add your first SSO application to get started.
               </p>
             )}
           </div>
@@ -221,6 +263,63 @@ export default function AppsPage() {
           </button>
         </form>
       </SlideOver>
+
+      {/* Assign dialog modal */}
+      {assignAppId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Overlay */}
+          <div className="fixed inset-0 bg-black/40" onClick={() => setAssignAppId(null)} />
+          {/* Modal */}
+          <div className="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-800">Assign Application</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Select a user to assign this application to.
+            </p>
+
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-slate-700">User</label>
+              <select
+                value={assignUserId}
+                onChange={(e) => setAssignUserId(e.target.value)}
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              >
+                <option value="">Select a user...</option>
+                {users.map((u) => (
+                  <option key={u.id} value={u.keycloakUserId || u.id}>
+                    {u.firstName} {u.lastName} ({u.email})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {assignMessage && (
+              <p
+                className={`mt-3 text-sm ${
+                  assignMessage.type === "success" ? "text-emerald-600" : "text-red-600"
+                }`}
+              >
+                {assignMessage.text}
+              </p>
+            )}
+
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                onClick={() => setAssignAppId(null)}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAssign}
+                disabled={!assignUserId || assigning}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {assigning ? "Assigning..." : "Assign"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

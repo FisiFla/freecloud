@@ -26,6 +26,7 @@ type OnboardResponse struct {
 	User            *gocloak.User `json:"user"`
 	EnrollmentToken string        `json:"enrollmentToken"`
 	EnrollmentURL   string        `json:"enrollmentURL"`
+	TempPassword    string        `json:"tempPassword,omitempty"`
 	Warning         string        `json:"warning,omitempty"`
 }
 
@@ -161,10 +162,12 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		User:            createdUser,
 		EnrollmentToken: enrollmentToken,
 		EnrollmentURL:   enrollmentURL,
+		TempPassword:    "TempPass123!",
 	}
 
 	if fleetErr != nil {
 		resp.Warning = "User created. Fleet enrollment failed — manual enrollment required."
+		resp.TempPassword = "TempPass123!"
 		respondJSON(w, http.StatusAccepted, resp)
 		return
 	}

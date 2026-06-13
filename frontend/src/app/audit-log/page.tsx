@@ -143,6 +143,10 @@ export default function AuditLogPage() {
             <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-200" />
           ))}
         </div>
+      ) : logs.length === 0 ? (
+        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <p className="text-sm text-slate-400">No audit events found.</p>
+        </div>
       ) : (
         <>
           {/* Table */}

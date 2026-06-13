@@ -12,6 +12,8 @@ import (
 // authMW is applied to all /api/v1 routes except /health.
 func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handler) {
 	r.Get("/api/v1/health", h.Health)
+	r.Get("/api/v1/health/keycloak", h.HealthKeycloak)
+	r.Get("/api/v1/health/fleetdm", h.HealthFleet)
 
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)

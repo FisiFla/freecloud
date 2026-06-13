@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, FormEvent, useEffect } from "react";
 import { CheckCircle, Copy, AlertCircle } from "lucide-react";
 import { onboardEmployee } from "@/lib/api";
 
 interface OnboardFormProps {
   onSuccess?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-export default function OnboardForm({ onSuccess }: OnboardFormProps) {
+export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormProps) {
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -17,11 +18,20 @@ export default function OnboardForm({ onSuccess }: OnboardFormProps) {
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<{
     tempPassword: string;
+    enrollmentToken: string;
     enrollmentUrl: string;
     warning?: string;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Track dirty state: any form field filled in
+  useEffect(() => {
+    if (onDirtyChange) {
+      const isDirty = firstName !== "" || lastName !== "" || email !== "" || role !== "";
+      onDirtyChange(isDirty);
+    }
+  }, [firstName, lastName, email, role, onDirtyChange]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -31,7 +41,8 @@ export default function OnboardForm({ onSuccess }: OnboardFormProps) {
     try {
       const data = await onboardEmployee({ firstName, lastName, email, department, role });
       setResult({
-        tempPassword: data.enrollmentToken || "TempPass123!",
+        tempPassword: data.tempPassword || "",
+        enrollmentToken: data.enrollmentToken || "",
         enrollmentUrl: data.enrollmentURL || "http://localhost:8080/enroll",
         warning: data.warning,
       });
@@ -74,22 +85,43 @@ export default function OnboardForm({ onSuccess }: OnboardFormProps) {
         )}
 
         <div className="mt-6 space-y-4">
+          {/* Temporary Password (from backend) */}
+          {result.tempPassword && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700">Temporary Password</label>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800">
+                  {result.tempPassword}
+                </code>
+                <button
+                  onClick={() => copyToClipboard(result.tempPassword)}
+                  className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
+                  title="Copy password"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Enrollment Token */}
           <div>
-            <label className="block text-sm font-medium text-slate-700">Temporary Password</label>
+            <label className="block text-sm font-medium text-slate-700">Enrollment Token</label>
             <div className="mt-1 flex items-center gap-2">
               <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800">
-                {result.tempPassword}
+                {result.enrollmentToken}
               </code>
               <button
-                onClick={() => copyToClipboard(result.tempPassword)}
+                onClick={() => copyToClipboard(result.enrollmentToken)}
                 className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
-                title="Copy password"
+                title="Copy token"
               >
                 <Copy className="h-4 w-4" />
               </button>
             </div>
           </div>
 
+          {/* Enrollment URL */}
           <div>
             <label className="block text-sm font-medium text-slate-700">Enrollment URL</label>
             <div className="mt-1 flex items-center gap-2">

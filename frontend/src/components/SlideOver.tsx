@@ -8,18 +8,24 @@ interface SlideOverProps {
   onClose: () => void;
   title: string;
   children: ReactNode;
+  beforeClose?: () => boolean;
 }
 
-export default function SlideOver({ isOpen, onClose, title, children }: SlideOverProps) {
+export default function SlideOver({ isOpen, onClose, title, children, beforeClose }: SlideOverProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+
+  const handleClose = () => {
+    if (beforeClose && !beforeClose()) return;
+    onClose();
+  };
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") handleClose();
     };
     if (isOpen) document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
-  }, [isOpen, onClose]);
+  }, [isOpen, handleClose]);
 
   return (
     <>
@@ -28,7 +34,7 @@ export default function SlideOver({ isOpen, onClose, title, children }: SlideOve
         className={`fixed inset-0 z-40 bg-black/40 transition-opacity duration-300 ${
           isOpen ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
-        onClick={onClose}
+        onClick={handleClose}
       />
 
       {/* Slide panel */}
@@ -43,7 +49,7 @@ export default function SlideOver({ isOpen, onClose, title, children }: SlideOve
           <div className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
             <h2 className="text-lg font-semibold text-slate-800">{title}</h2>
             <button
-              onClick={onClose}
+              onClick={handleClose}
               className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition-colors"
             >
               <X className="h-5 w-5" />

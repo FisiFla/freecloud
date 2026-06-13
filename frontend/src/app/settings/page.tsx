@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { CheckCircle, XCircle, RefreshCw, AlertCircle } from "lucide-react";
-import { healthCheck } from "@/lib/api";
+import { healthCheck, healthKeycloak, healthFleet } from "@/lib/api";
 
 interface ConnectionStatus {
   label: string;
@@ -44,8 +44,18 @@ export default function SettingsPage() {
     );
 
     try {
-      const res = await fetch(`http://localhost:8080${services[index].endpoint}`);
-      const connected = res.ok;
+      let connected = false;
+      const endpoint = services[index].endpoint;
+      if (endpoint === "/api/v1/health") {
+        await healthCheck();
+        connected = true;
+      } else if (endpoint === "/api/v1/health/keycloak") {
+        await healthKeycloak();
+        connected = true;
+      } else if (endpoint === "/api/v1/health/fleetdm") {
+        await healthFleet();
+        connected = true;
+      }
       setServices((prev) =>
         prev.map((s, i) =>
           i === index ? { ...s, checking: false, status: connected ? "connected" : "disconnected" } : s

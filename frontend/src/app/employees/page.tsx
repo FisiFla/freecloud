@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { Search, UserPlus, Trash2, AlertCircle } from "lucide-react";
+import { Search, UserPlus, Trash2, AlertCircle, AlertTriangle } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
+import ConfirmDialog from "@/components/ConfirmDialog";
 import OnboardForm from "./onboard/OnboardForm";
 import { offboardUser, listUsers } from "@/lib/api";
 import type { User } from "@/lib/api";
@@ -24,40 +25,61 @@ export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [formDirty, setFormDirty] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
 
-  useEffect(() => {
-    const fetchEmployees = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await listUsers();
-        const mapped = (Array.isArray(data) ? data : []).map((u: User) => ({
-          id: String(u.keycloakUserId || ""),
-          firstName: String(u.firstName || ""),
-          lastName: String(u.lastName || ""),
-          email: String(u.email || ""),
-          department: String(u.department || ""),
-          role: String(u.role || ""),
-          status: String(u.status || "Active"),
-        }));
-        setEmployees(mapped);
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to load employees");
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchEmployees();
+  const [deprovisionTarget, setDeprovisionTarget] = useState<string | null>(null);
+
+  const fetchEmployees = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const data = await listUsers();
+      const mapped = (Array.isArray(data) ? data : []).map((u: User) => ({
+        id: String(u.keycloakUserId || ""),
+        firstName: String(u.firstName || ""),
+        lastName: String(u.lastName || ""),
+        email: String(u.email || ""),
+        department: String(u.department || ""),
+        role: String(u.role || ""),
+        status: String(u.status || "Active"),
+      }));
+      setEmployees(mapped);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load employees");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const handleDeprovision = async (userId: string) => {
-    if (!confirm("Deprovision this employee? This cannot be undone.")) return;
+  useEffect(() => {
+    fetchEmployees();
+  }, [fetchEmployees]);
+
+  const handleDeprovision = async () => {
+    if (!deprovisionTarget) return;
     try {
-      await offboardUser(userId);
-      setEmployees((prev) => prev.filter((e) => e.id !== userId));
+      await offboardUser(deprovisionTarget);
+      setEmployees((prev) => prev.filter((e) => e.id !== deprovisionTarget));
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Failed to deprovision");
+    } finally {
+      setDeprovisionTarget(null);
     }
+  };
+
+  const handleSlideOverClose = () => {
+    if (formDirty) {
+      setConfirmClose(true);
+      return false;
+    }
+    return true;
+  };
+
+  const handleConfirmCloseYes = () => {
+    setConfirmClose(false);
+    setFormDirty(false);
+    setShowOnboard(false);
   };
 
   const filtered = employees.filter((e) => {
@@ -156,7 +178,7 @@ export default function EmployeesPage() {
                     </td>
                     <td className="px-6 py-4">
                       <button
-                        onClick={() => handleDeprovision(emp.id)}
+                        onClick={() => setDeprovisionTarget(emp.id)}
                         title="Deprovision"
                         className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
                       >
@@ -165,7 +187,14 @@ export default function EmployeesPage() {
                     </td>
                   </tr>
                 ))}
-                {filtered.length === 0 && (
+                {filtered.length === 0 && employees.length === 0 && !error && (
+                  <tr>
+                    <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400">
+                      No employees found. Click &apos;Onboard New Employee&apos; to add the first one.
+                    </td>
+                  </tr>
+                )}
+                {filtered.length === 0 && employees.length > 0 && (
                   <tr>
                     <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400">
                       No employees match your search.
@@ -179,9 +208,39 @@ export default function EmployeesPage() {
       </div>
 
       {/* Slide-over Onboard Panel */}
-      <SlideOver isOpen={showOnboard} onClose={() => setShowOnboard(false)} title="Onboard New Employee">
-        <OnboardForm onSuccess={() => setShowOnboard(false)} />
+      <SlideOver
+        isOpen={showOnboard}
+        onClose={() => setShowOnboard(false)}
+        title="Onboard New Employee"
+        beforeClose={handleSlideOverClose}
+      >
+        <OnboardForm
+          onSuccess={() => { setShowOnboard(false); fetchEmployees(); }}
+          onDirtyChange={setFormDirty}
+        />
       </SlideOver>
+
+      {/* Confirm close dialog (dirty form) */}
+      <ConfirmDialog
+        isOpen={confirmClose}
+        onClose={() => setConfirmClose(false)}
+        onConfirm={handleConfirmCloseYes}
+        title="Discard changes?"
+        message="The form has unsaved data. Are you sure you want to close?"
+        confirmLabel="Yes, Discard"
+        variant="default"
+      />
+
+      {/* Confirm deprovision dialog */}
+      <ConfirmDialog
+        isOpen={deprovisionTarget !== null}
+        onClose={() => setDeprovisionTarget(null)}
+        onConfirm={handleDeprovision}
+        title="Deprovision Employee?"
+        message="This will permanently deprovision this employee. This action cannot be undone."
+        confirmLabel="Yes, Deprovision"
+        variant="danger"
+      />
     </>
   );
 }

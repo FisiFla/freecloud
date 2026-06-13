@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle } from "lucide-react";
+import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { offboardUser, checkDevice, getUser } from "@/lib/api";
+import type { OffboardResponse } from "@/lib/api";
 
 interface Device {
   id: string;
@@ -35,6 +36,7 @@ export default function EmployeeDetailPage() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [deprovisioning, setDeprovisioning] = useState(false);
   const [deprovisioned, setDeprovisioned] = useState(false);
+  const [offboardResult, setOffboardResult] = useState<OffboardResponse | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -86,7 +88,8 @@ export default function EmployeeDetailPage() {
   const handleDeprovision = async () => {
     setDeprovisioning(true);
     try {
-      await offboardUser(userId);
+      const result = await offboardUser(userId);
+      setOffboardResult(result);
       setDeprovisioned(true);
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Failed to deprovision. Check the backend is running.");
@@ -147,12 +150,71 @@ export default function EmployeeDetailPage() {
       </a>
 
       {deprovisioned ? (
-        <div className="mt-8 rounded-xl border border-red-200 bg-red-50 p-8 text-center">
-          <AlertTriangle className="mx-auto h-10 w-10 text-red-500" />
-          <h2 className="mt-3 text-lg font-semibold text-red-800">Account Deprovisioned</h2>
-          <p className="mt-1 text-sm text-red-600">
-            {employee.firstName} {employee.lastName} has been deprovisioned.
-          </p>
+        <div className="mt-8 space-y-4">
+          {/* Warning banner if sessionTerminationError exists */}
+          {offboardResult?.sessionTerminationError && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-800">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600" />
+              <div>
+                <p className="font-medium">Session termination warning</p>
+                <p className="text-sm text-amber-700">{offboardResult.sessionTerminationError}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Result panel */}
+          <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="h-8 w-8 text-red-500" />
+              <div>
+                <h2 className="text-lg font-semibold text-slate-800">Account Deprovisioned</h2>
+                <p className="text-sm text-slate-500">
+                  {employee.firstName} {employee.lastName} has been deprovisioned.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-3 border-t border-slate-100 pt-4">
+              {/* Sessions terminated */}
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
+                <span className="text-sm text-slate-700">Sessions terminated</span>
+                {offboardResult?.sessionsTerminated ? (
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-emerald-700">
+                    <CheckCircle className="h-4 w-4" />
+                    Yes
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5 text-sm font-medium text-red-600">
+                    <XCircle className="h-4 w-4" />
+                    No
+                  </span>
+                )}
+              </div>
+
+              {/* Devices wiped */}
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
+                <span className="text-sm text-slate-700">Devices wiped</span>
+                <span className="text-sm font-medium text-slate-800">
+                  {offboardResult?.devicesWiped ?? 0}
+                </span>
+              </div>
+
+              {/* Devices failed */}
+              <div className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
+                <span className="text-sm text-slate-700">Devices failed</span>
+                <span className={`text-sm font-medium ${(offboardResult?.devicesFailed ?? 0) > 0 ? "text-red-600" : "text-slate-800"}`}>
+                  {offboardResult?.devicesFailed ?? 0}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <a
+            href="/employees"
+            className="inline-flex items-center text-sm text-indigo-600 hover:text-indigo-800"
+          >
+            &larr; Back to Employees
+          </a>
         </div>
       ) : (
         <>
