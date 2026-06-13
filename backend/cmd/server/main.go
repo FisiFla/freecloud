@@ -36,6 +36,11 @@ func main() {
 	// Load configuration
 	cfg := config.Load()
 
+	// Validate configuration for non-development environments
+	if err := cfg.Validate(); err != nil {
+		logger.Fatal("configuration validation failed", zap.Error(err))
+	}
+
 	logger.Info("starting freecloud backend",
 		zap.String("port", cfg.Port),
 		zap.String("database_url", cfg.DatabaseURL),

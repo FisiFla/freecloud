@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
 // Config holds application configuration loaded from environment variables.
 type Config struct {
@@ -28,6 +31,25 @@ func Load() *Config {
 		FleetURL:             getEnv("FLEET_URL", "http://localhost:8082"),
 		FleetAPIToken:        getEnv("FLEET_API_TOKEN", ""),
 	}
+}
+
+// Validate checks that required configuration is set for non-development environments.
+func (c *Config) Validate() error {
+	env := os.Getenv("APP_ENV")
+	if env == "" || env == "development" {
+		return nil // dev defaults are acceptable
+	}
+
+	if c.KeycloakClientSecret == "" {
+		return fmt.Errorf("KEYCLOAK_CLIENT_SECRET is required in %s environment", env)
+	}
+	if c.FleetAPIToken == "" {
+		return fmt.Errorf("FLEET_API_TOKEN is required in %s environment", env)
+	}
+	if c.DatabaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required in %s environment", env)
+	}
+	return nil
 }
 
 func getEnv(key, fallback string) string {

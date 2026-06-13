@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -365,5 +366,75 @@ func TestOnboardEmailWarningResponse(t *testing.T) {
 	json.NewDecoder(rec.Body).Decode(&resp)
 	if resp.Error != "" {
 		t.Errorf("expected no error, got %s", resp.Error)
+	}
+	if resp.Data != nil {
+		if data, ok := resp.Data.(map[string]interface{}); ok {
+			if w, ok := data["warning"]; ok {
+				if ws, ok := w.(string); ok {
+					if !strings.Contains(ws, "email delivery failed") {
+						t.Errorf("expected warning to mention 'email delivery failed', got %q", ws)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestCreateAppValidation(t *testing.T) {
+	h := setupTestHandler(t)
+
+	tests := []struct {
+		name       string
+		body       map[string]interface{}
+		wantStatus int
+	}{
+		{
+			name:       "missing name and protocol",
+			body:       map[string]interface{}{"redirectURIs": []string{"https://example.com/callback"}},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "invalid protocol",
+			body:       map[string]interface{}{"name": "MyApp", "protocol": "LDAP"},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "name too long",
+			body:       map[string]interface{}{"name": string(make([]byte, 256)), "protocol": "OIDC"},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "OIDC without redirect URIs",
+			body:       map[string]interface{}{"name": "MyApp", "protocol": "OIDC"},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "too many redirect URIs",
+			body:       map[string]interface{}{"name": "MyApp", "protocol": "OIDC", "redirectURIs": make([]string, 21)},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "redirect URI too long",
+			body:       map[string]interface{}{"name": "MyApp", "protocol": "OIDC", "redirectURIs": []string{"https://example.com/" + string(make([]byte, 2000))}},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "invalid redirect URI scheme",
+			body:       map[string]interface{}{"name": "MyApp", "protocol": "OIDC", "redirectURIs": []string{"ftp://example.com"}},
+			wantStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b, _ := json.Marshal(tt.body)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/apps", bytes.NewReader(b))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			h.CreateApp(rec, req)
+			if rec.Code != tt.wantStatus {
+				t.Errorf("expected %d, got %d: %s", tt.wantStatus, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }

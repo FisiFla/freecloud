@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -64,6 +65,13 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.Name = strings.TrimSpace(req.Name)
+	req.Protocol = strings.ToUpper(strings.TrimSpace(req.Protocol))
+	req.BaseURL = strings.TrimSpace(req.BaseURL)
+	for i := range req.RedirectURIs {
+		req.RedirectURIs[i] = strings.TrimSpace(req.RedirectURIs[i])
+	}
+
 	if req.Name == "" || req.Protocol == "" {
 		respondError(w, http.StatusBadRequest, "name and protocol are required")
 		return
@@ -82,10 +90,46 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "at least one redirect URI is required for OIDC apps")
 		return
 	}
+	if len(req.RedirectURIs) > 20 {
+		respondValidationErrors(w, []ValidationError{{
+			Field:   "redirectURIs",
+			Message: "maximum 20 redirect URIs allowed",
+		}})
+		return
+	}
 	for _, uri := range req.RedirectURIs {
-		if !strings.HasPrefix(uri, "https://") && !strings.HasPrefix(uri, "http://localhost") {
-			respondError(w, http.StatusBadRequest, "redirect URI must use https:// or http://localhost")
+		if len(uri) > 2000 {
+			respondValidationErrors(w, []ValidationError{{
+				Field:   "redirectURIs",
+				Message: "redirect URI must be ≤ 2000 characters",
+			}})
 			return
+		}
+		parsed, err := url.ParseRequestURI(uri)
+		if err != nil {
+			respondValidationErrors(w, []ValidationError{{
+				Field:   "redirectURIs",
+				Message: "invalid redirect URI: " + err.Error(),
+			}})
+			return
+		}
+		if parsed.Scheme != "https" {
+			if parsed.Scheme != "http" {
+				respondValidationErrors(w, []ValidationError{{
+					Field:   "redirectURIs",
+					Message: "redirect URI must use https:// or http://localhost or http://127.0.0.1",
+				}})
+				return
+			}
+			// Allow http://localhost and http://127.0.0.1 for local dev
+			if parsed.Host != "localhost" && parsed.Host != "127.0.0.1" &&
+				!strings.HasPrefix(parsed.Host, "localhost:") && !strings.HasPrefix(parsed.Host, "127.0.0.1:") {
+				respondValidationErrors(w, []ValidationError{{
+					Field:   "redirectURIs",
+					Message: "redirect URI must use https:// or http://localhost or http://127.0.0.1",
+				}})
+				return
+			}
 		}
 	}
 
