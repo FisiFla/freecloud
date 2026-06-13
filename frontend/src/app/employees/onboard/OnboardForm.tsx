@@ -233,13 +233,19 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
         <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>
       )}
 
-      <button
-        type="submit"
-        disabled={submitting}
-        className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {submitting ? "Onboarding..." : "Submit Onboarding"}
-      </button>
+      {(() => {
+        const isValid = firstName.trim() !== '' && lastName.trim() !== '' && email.includes('@') && role.trim() !== '';
+        return (
+          <button
+            type="submit"
+            disabled={submitting || !isValid}
+            title={!isValid ? "Please fill in all required fields correctly" : ""}
+            className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? "Onboarding..." : "Submit Onboarding"}
+          </button>
+        );
+      })()}
     </form>
   );
 }

@@ -5,12 +5,13 @@ import (
 	"net/http"
 
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 // DeviceCheckRequest is the JSON request body for the device check endpoint.
-type DeviceCheckRequest struct {
-	KeycloakUserID string `json:"keycloakUserId"`
-}
+// The body is optional; the user identity is derived from the JWT token.
+type DeviceCheckRequest struct{}
 
 // DeviceCheckResponse is the JSON response for the device check endpoint.
 type DeviceCheckResponse struct {
@@ -26,16 +27,16 @@ type Failure struct {
 
 // DeviceCheck checks the security state of a user's device.
 func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
-	var req DeviceCheckRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
+	// Derive user ID from JWT claims
+	claims := middleware.GetClaims(r.Context())
+	if claims == nil || claims.Sub == "" {
+		respondError(w, http.StatusUnauthorized, "valid JWT claims required")
 		return
 	}
+	userID := claims.Sub
 
-	if req.KeycloakUserID == "" {
-		respondError(w, http.StatusBadRequest, "keycloakUserId is required")
-		return
-	}
+	// Body is optional; discard it
+	_ = json.NewDecoder(r.Body).Decode(&DeviceCheckRequest{})
 
 	ctx := r.Context()
 
@@ -47,7 +48,7 @@ func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.db.Query(ctx,
 		`SELECT device_id FROM users_devices_mapping WHERE user_id = $1`,
-		req.KeycloakUserID,
+		userID,
 	)
 	if err != nil {
 		h.logger.Error("failed to query device mapping", zap.Error(err))
@@ -104,6 +105,11 @@ func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 				Type:   "vulnerability",
 				Detail: v,
 			})
+		}
+		if state.UnknownVulns {
+			h.logger.Warn("vulnerability data incomplete for device, posture may be inaccurate",
+				zap.String("device_id", devID),
+			)
 		}
 	}
 

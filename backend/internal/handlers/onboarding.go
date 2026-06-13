@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -42,25 +43,26 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate required fields
-	if req.FirstName == "" || req.LastName == "" || req.Email == "" {
-		respondError(w, http.StatusBadRequest, "firstName, lastName, and email are required")
-		return
+	var valErrors []ValidationError
+	if req.FirstName == "" {
+		valErrors = append(valErrors, ValidationError{Field: "firstName", Message: "firstName is required"})
+	} else if len(req.FirstName) > 100 {
+		valErrors = append(valErrors, ValidationError{Field: "firstName", Message: "firstName must be ≤ 100 characters"})
 	}
-
-	if len(req.FirstName) == 0 || len(req.FirstName) > 100 {
-		respondError(w, http.StatusBadRequest, "firstName is required and must be ≤ 100 characters")
-		return
+	if req.LastName == "" {
+		valErrors = append(valErrors, ValidationError{Field: "lastName", Message: "lastName is required"})
+	} else if len(req.LastName) > 100 {
+		valErrors = append(valErrors, ValidationError{Field: "lastName", Message: "lastName must be ≤ 100 characters"})
 	}
-	if len(req.LastName) == 0 || len(req.LastName) > 100 {
-		respondError(w, http.StatusBadRequest, "lastName is required and must be ≤ 100 characters")
-		return
+	if req.Email == "" {
+		valErrors = append(valErrors, ValidationError{Field: "email", Message: "email is required"})
+	} else if len(req.Email) > 254 {
+		valErrors = append(valErrors, ValidationError{Field: "email", Message: "email must be ≤ 254 characters"})
+	} else if !strings.Contains(req.Email, "@") {
+		valErrors = append(valErrors, ValidationError{Field: "email", Message: "email must contain @"})
 	}
-	if len(req.Email) == 0 || len(req.Email) > 254 {
-		respondError(w, http.StatusBadRequest, "email is required and must be ≤ 254 characters")
-		return
-	}
-	if !strings.Contains(req.Email, "@") {
-		respondError(w, http.StatusBadRequest, "email must contain @")
+	if len(valErrors) > 0 {
+		respondValidationErrors(w, valErrors)
 		return
 	}
 
@@ -72,6 +74,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	var createdUser *gocloak.User
 	var enrollmentToken string
 	var fleetErr error
+	var dbWarnings []string
 
 	// Goroutine 1: Create user in Keycloak
 	g.Go(func() error {
@@ -94,6 +97,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 					zap.String("user_id", *user.ID),
 					zap.Error(dbErr),
 				)
+				dbWarnings = append(dbWarnings, fmt.Sprintf("user DB insert: %v", dbErr))
 			}
 		}
 		return nil
@@ -148,6 +152,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		)
 		if auditErr != nil {
 			logger.Warn("failed to write audit log", zap.Error(auditErr))
+			dbWarnings = append(dbWarnings, fmt.Sprintf("audit log insert: %v", auditErr))
 		}
 	}
 
@@ -163,6 +168,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		)
 		if devErr != nil {
 			logger.Warn("failed to insert placeholder device", zap.Error(devErr))
+			dbWarnings = append(dbWarnings, fmt.Sprintf("device insert: %v", devErr))
 		} else {
 			_, mapErr := h.db.Exec(ctx,
 				`INSERT INTO users_devices_mapping (user_id, device_id)
@@ -172,6 +178,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 			)
 			if mapErr != nil {
 				logger.Warn("failed to insert device mapping", zap.Error(mapErr))
+				dbWarnings = append(dbWarnings, fmt.Sprintf("device mapping insert: %v", mapErr))
 			}
 		}
 	}
@@ -180,12 +187,22 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		User:            createdUser,
 		EnrollmentToken: enrollmentToken,
 		EnrollmentURL:   enrollmentURL,
-		NextStep:        "User must set password on first login. A setup email will be sent.",
+		NextStep:        "User must log in and set password using temporary credentials.",
 	}
 
 	if fleetErr != nil {
-		resp.Warning = "User created. Fleet enrollment failed — manual enrollment required."
+		warning := "User created. Fleet enrollment failed — manual enrollment required."
+		if len(dbWarnings) > 0 {
+			warning += " DB warnings: " + strings.Join(dbWarnings, "; ")
+		}
+		resp.Warning = warning
 		respondJSON(w, http.StatusAccepted, resp)
+		return
+	}
+
+	if len(dbWarnings) > 0 {
+		resp.Warning = strings.Join(dbWarnings, "; ")
+		respondJSON(w, http.StatusOK, resp)
 		return
 	}
 

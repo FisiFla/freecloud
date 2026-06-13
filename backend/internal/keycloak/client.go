@@ -74,6 +74,19 @@ func (k *KeycloakClient) CreateUser(ctx context.Context, firstName, lastName, em
 		)
 	}
 
+	// Best-effort: send email with UPDATE_PASSWORD required action
+	if err == nil {
+		if execErr := k.client.ExecuteActionsEmail(ctx, token, k.realm, gocloak.ExecuteActionsEmail{
+			UserID:  &created,
+			Actions: &[]string{"UPDATE_PASSWORD"},
+		}); execErr != nil {
+			logger.Warn("failed to send execute-actions-email, continuing",
+				zap.String("user_id", created),
+				zap.Error(execErr),
+			)
+		}
+	}
+
 	// Assign to department group
 	if department != "" {
 		groups, err := k.client.GetGroups(ctx, token, k.realm, gocloak.GetGroupsParams{

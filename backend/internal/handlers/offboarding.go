@@ -54,7 +54,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		// Soft-disable user in local DB
 		if h.db != nil {
 			_, dbErr := h.db.Exec(ctx,
-				`UPDATE users SET updated_at = NOW() WHERE keycloak_user_id = $1`,
+				`UPDATE users SET role = CONCAT(COALESCE(role, ''), ' (DISABLED)'), updated_at = NOW() WHERE keycloak_user_id = $1`,
 				userID,
 			)
 			if dbErr != nil {

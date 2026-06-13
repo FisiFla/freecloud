@@ -12,6 +12,18 @@ type APIResponse struct {
 	Error   string      `json:"error,omitempty"`
 }
 
+// ValidationError represents a single field-level validation error.
+type ValidationError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+// ValidationErrorsResponse is the JSON body for field-level validation failures.
+type ValidationErrorsResponse struct {
+	Success bool              `json:"success"`
+	Errors  []ValidationError `json:"errors"`
+}
+
 // respondJSON sends a success JSON response with the given status code and data.
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
@@ -24,4 +36,14 @@ func respondError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(APIResponse{Success: false, Error: message})
+}
+
+// respondValidationErrors sends a 400 response with field-level validation errors.
+func respondValidationErrors(w http.ResponseWriter, errors []ValidationError) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusBadRequest)
+	json.NewEncoder(w).Encode(ValidationErrorsResponse{
+		Success: false,
+		Errors:  errors,
+	})
 }

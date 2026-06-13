@@ -32,6 +32,7 @@ type SecurityState struct {
 	FirewallEnabled bool     `json:"firewall_enabled"`
 	DiskEncrypted   bool     `json:"disk_encrypted"`
 	Vulnerabilities []string `json:"vulnerabilities"`
+	UnknownVulns    bool     `json:"unknown_vulns"`
 }
 
 // FleetClient communicates with the FleetDM API.
@@ -184,7 +185,9 @@ func (f *FleetClient) GetHostSecurityState(ctx context.Context, hostID string) (
 	}
 
 	softwareList, err := f.GetHostSoftware(ctx, hostID)
+	unknownVulns := false
 	if err != nil {
+		unknownVulns = true
 		zap.L().Warn("failed to fetch host software for vulnerability check",
 			zap.String("host_id", hostID),
 			zap.Error(err),
@@ -202,6 +205,7 @@ func (f *FleetClient) GetHostSecurityState(ctx context.Context, hostID string) (
 		FirewallEnabled: result.Host.Firewall,
 		DiskEncrypted:   result.Host.DiskEncryption,
 		Vulnerabilities: vulns,
+		UnknownVulns:    unknownVulns,
 	}
 
 	return state, nil

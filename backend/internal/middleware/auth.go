@@ -47,6 +47,8 @@ func isManagementEndpoint(path string) bool {
 		"/api/v1/offboard",
 		"/api/v1/apps/create",
 		"/api/v1/apps/",
+		"/api/v1/users/",
+		"/api/v1/audit-logs/",
 	}
 	for _, p := range mgmtPaths {
 		if strings.HasPrefix(path, p) {
