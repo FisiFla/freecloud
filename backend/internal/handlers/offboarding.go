@@ -115,11 +115,11 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Now wipe each device concurrently
-	wipeGroup, wipeCtx := errgroup.WithContext(ctx)
+	wipeGroup := new(errgroup.Group)
 	for _, devID := range deviceIDs {
 		devID := devID // capture
 		wipeGroup.Go(func() error {
-			if err := h.fleet.IssueRemoteWipe(wipeCtx, devID); err != nil {
+			if err := h.fleet.IssueRemoteWipe(ctx, devID); err != nil {
 				logger.Error("failed to wipe device",
 					zap.String("device_id", devID),
 					zap.Error(err),

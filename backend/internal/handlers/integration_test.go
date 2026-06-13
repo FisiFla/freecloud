@@ -242,3 +242,36 @@ func TestOnboardEmailFailure(t *testing.T) {
 		t.Errorf("expected 200 (email fail is non-fatal), got %d", rec.Code)
 	}
 }
+
+func TestOnboardFleetWarning(t *testing.T) {
+	logger := zap.NewNop()
+	kc := &fakeKeycloak{createUserFn: func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
+		uid := "kc-user-789"
+		user := &gocloak.User{ID: &uid, FirstName: &firstName, LastName: &lastName, Email: &email}
+		return &keycloak.CreateUserResult{User: user, PasswordSet: true, ResetEmailSent: true}, nil
+	}}
+	fleet := &fakeFleet{createEnrollmentTokenFn: func(ctx context.Context) (string, error) {
+		return "", fmt.Errorf("fleet unavailable")
+	}}
+	h := NewHandler(nil, kc, fleet, logger)
+	body := map[string]string{"firstName": "Test", "lastName": "User", "email": "test@test.com", "department": "Engineering", "role": "Dev"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.Onboard(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("expected 202 (Fleet failure), got %d", rec.Code)
+	}
+}
+
+func TestOffboardMissingUserID(t *testing.T) {
+	h := setupTestHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/", nil)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.Offboard(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 (missing user ID), got %d", rec.Code)
+	}
+}

@@ -26,6 +26,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [emailError, setEmailError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   // Track dirty state: any form field filled in
   useEffect(() => {
@@ -39,6 +40,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
     e.preventDefault();
     setSubmitting(true);
     setError(null);
+    setFieldErrors({});
 
     try {
       const data = await onboardEmployee({ firstName, lastName, email, department, role });
@@ -51,9 +53,14 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
       setCopied(false);
     } catch (err: unknown) {
       if (err instanceof ApiError && err.fieldErrors && err.fieldErrors.length > 0) {
-        setError(err.fieldErrors.map((e) => e.message).join(", "));
+        const mapped: Record<string, string> = {};
+        for (const fe of err.fieldErrors) {
+          mapped[fe.field] = fe.message;
+        }
+        setFieldErrors(mapped);
       } else {
         const message = err instanceof Error ? err.message : "Something went wrong";
+        setFieldErrors({});
         setError(message);
       }
     } finally {
@@ -158,10 +165,14 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
             type="text"
             required
             value={firstName}
-            onChange={(e) => setFirstName(e.target.value)}
+            onChange={(e) => {
+              setFirstName(e.target.value);
+              if (fieldErrors.firstName) setFieldErrors(prev => ({...prev, firstName: ''}));
+            }}
             className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
             placeholder="Jane"
           />
+          {fieldErrors.firstName && <p className="mt-1 text-xs text-red-500">{fieldErrors.firstName}</p>}
         </div>
         <div>
           <label htmlFor="lastName" className="block text-sm font-medium text-slate-700">
@@ -172,10 +183,14 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
             type="text"
             required
             value={lastName}
-            onChange={(e) => setLastName(e.target.value)}
+            onChange={(e) => {
+              setLastName(e.target.value);
+              if (fieldErrors.lastName) setFieldErrors(prev => ({...prev, lastName: ''}));
+            }}
             className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
             placeholder="Doe"
           />
+          {fieldErrors.lastName && <p className="mt-1 text-xs text-red-500">{fieldErrors.lastName}</p>}
         </div>
       </div>
 
@@ -190,6 +205,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
           value={email}
           onChange={(e) => {
             setEmail(e.target.value);
+            if (fieldErrors.email) setFieldErrors(prev => ({...prev, email: ''}));
             if (e.target.value && !e.target.value.includes('@')) {
               setEmailError('Please enter a valid email address');
             } else {
@@ -200,6 +216,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
           placeholder="jane@example.com"
         />
         {emailError && <p className="mt-1 text-xs text-red-500">{emailError}</p>}
+        {fieldErrors.email && <p className="mt-1 text-xs text-red-500">{fieldErrors.email}</p>}
       </div>
 
       <div>
@@ -209,7 +226,10 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
         <select
           id="department"
           value={department}
-          onChange={(e) => setDepartment(e.target.value)}
+          onChange={(e) => {
+            setDepartment(e.target.value);
+            if (fieldErrors.department) setFieldErrors(prev => ({...prev, department: ''}));
+          }}
           className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
         >
           <option>Engineering</option>
@@ -217,6 +237,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
           <option>Sales</option>
           <option>Operations</option>
         </select>
+        {fieldErrors.department && <p className="mt-1 text-xs text-red-500">{fieldErrors.department}</p>}
       </div>
 
       <div>
@@ -228,10 +249,14 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
           type="text"
           required
           value={role}
-          onChange={(e) => setRole(e.target.value)}
+          onChange={(e) => {
+            setRole(e.target.value);
+            if (fieldErrors.role) setFieldErrors(prev => ({...prev, role: ''}));
+          }}
           className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
           placeholder="e.g. Software Engineer"
         />
+        {fieldErrors.role && <p className="mt-1 text-xs text-red-500">{fieldErrors.role}</p>}
       </div>
 
       {error && (

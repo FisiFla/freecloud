@@ -36,8 +36,8 @@ func ActorIDMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// In non-development environments, reject requests without valid JWT
-		if os.Getenv("APP_ENV") != "" && os.Getenv("APP_ENV") != "development" {
+		// Reject requests without valid JWT unless ALLOW_ACTOR_HEADER is explicitly set
+		if os.Getenv("ALLOW_ACTOR_HEADER") != "true" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"success":false,"error":"unauthorized: valid JWT required"}`))
