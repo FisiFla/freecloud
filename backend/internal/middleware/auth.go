@@ -108,11 +108,15 @@ func (a *AuthMiddleware) fetchKeys() ([]*rsa.PublicKey, error) {
 	}
 
 	url := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", a.keycloakURL, a.realm)
-	resp, err := http.Get(url)
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("fetch jwks: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("jwks fetch returned status %d", resp.StatusCode)
+	}
 
 	var jwks struct {
 		Keys []struct {
@@ -180,6 +184,9 @@ func (a *AuthMiddleware) fetchKeys() ([]*rsa.PublicKey, error) {
 	}
 
 	a.keys = keys
+	if len(keys) == 0 {
+		return nil, fmt.Errorf("no valid keys found in JWKS response")
+	}
 	a.lastFetch = time.Now()
 	return keys, nil
 }

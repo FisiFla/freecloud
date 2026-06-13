@@ -4,15 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/FisiFla/freecloud/backend/internal/fleet"
-	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 	"go.uber.org/zap"
 )
@@ -20,17 +18,9 @@ import (
 func setupTestHandler(t *testing.T) *Handler {
 	t.Helper()
 	logger := zap.NewNop()
-	kcClient := keycloak.NewClient(
-		os.Getenv("KEYCLOAK_URL"),
-		os.Getenv("KEYCLOAK_CLIENT_ID"),
-		os.Getenv("KEYCLOAK_CLIENT_SECRET"),
-		os.Getenv("KEYCLOAK_REALM"),
-	)
-	fleetClient := fleet.NewClient(
-		os.Getenv("FLEET_URL"),
-		os.Getenv("FLEET_API_TOKEN"),
-	)
-	return NewHandler(nil, kcClient, fleetClient, logger)
+	kc := &fakeKeycloak{}
+	fleet := &fakeFleet{}
+	return NewHandler(nil, kc, fleet, logger)
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -121,7 +111,6 @@ func TestDeviceCheckUnauthenticated(t *testing.T) {
 		t.Errorf("expected 401 (no JWT claims), got %d: %s", rec.Code, rec.Body.String())
 	}
 }
-}
 
 func TestOnboardValidation(t *testing.T) {
 	h := setupTestHandler(t)
@@ -147,7 +136,7 @@ func TestOnboardValidation(t *testing.T) {
 				"firstName": "Test", "lastName": "User", "email": "test@example.com",
 				"department": "Engineering", "role": "Developer",
 			},
-			wantStatus: http.StatusInternalServerError, // no real Keycloak in test
+			wantStatus: http.StatusOK, // fakes succeed
 		},
 	}
 
@@ -186,19 +175,42 @@ func TestOffboardEndpoint(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.Offboard(rec, req)
 
-	// No real Keycloak configured in test — expects 500 from login failure
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 (no Keycloak), got %d: %s", rec.Code, rec.Body.String())
+	// Fakes succeed — expects 200
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 (fakes succeed), got %d: %s", rec.Code, rec.Body.String())
 	}
 
 	var resp APIResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("failed to decode response: %v", err)
 	}
-	if resp.Success {
-		t.Errorf("expected success=false on 500, got success=true: data=%v", resp.Data)
+	if !resp.Success {
+		t.Errorf("expected success=true on 200, got success=false: data=%v", resp.Data)
 	}
-	if resp.Error == "" {
-		t.Errorf("expected error message on 500, got empty error")
+}
+
+func TestHealthKeycloakWithFakePingError(t *testing.T) {
+	logger := zap.NewNop()
+	kc := &fakeKeycloak{pingFn: func(ctx context.Context) error { return fmt.Errorf("keycloak down") }}
+	fleet := &fakeFleet{}
+	h := NewHandler(nil, kc, fleet, logger)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/keycloak", nil)
+	rec := httptest.NewRecorder()
+	h.HealthKeycloak(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 (keycloak down), got %d", rec.Code)
+	}
+}
+
+func TestHealthFleetWithFakePingError(t *testing.T) {
+	logger := zap.NewNop()
+	kc := &fakeKeycloak{}
+	fleet := &fakeFleet{pingFn: func(ctx context.Context) error { return fmt.Errorf("fleet down") }}
+	h := NewHandler(nil, kc, fleet, logger)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health/fleetdm", nil)
+	rec := httptest.NewRecorder()
+	h.HealthFleet(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 (fleet down), got %d", rec.Code)
 	}
 }

@@ -154,28 +154,24 @@ func (f *FleetClient) GetHosts(ctx context.Context, query string) ([]Host, error
 }
 
 // GetHostSoftware retrieves software installed on a specific host.
-// Falls back to empty mock data if the FleetDM API is unavailable.
 func (f *FleetClient) GetHostSoftware(ctx context.Context, hostID string) ([]Software, error) {
 	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/software", hostID)
 	body, err := f.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		zap.L().Warn("fleet GetHostSoftware failed, returning empty list", zap.Error(err))
-		return []Software{}, nil
+		return nil, fmt.Errorf("fleet host software: %w", err)
 	}
 
 	var result struct {
 		Software []Software `json:"software"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		zap.L().Warn("fleet GetHostSoftware parse failed, returning empty list", zap.Error(err))
-		return []Software{}, nil
+		return nil, fmt.Errorf("fleet parse software: %w", err)
 	}
 
 	return result.Software, nil
 }
 
 // GetHostSecurityState queries a host's details to determine security state.
-// Falls back to a healthy mock state if the FleetDM API is unavailable.
 func (f *FleetClient) GetHostSecurityState(ctx context.Context, hostID string) (*SecurityState, error) {
 	path := fmt.Sprintf("/api/v1/fleet/hosts/%s", hostID)
 	body, err := f.doRequest(ctx, http.MethodGet, path, nil)

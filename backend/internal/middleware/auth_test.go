@@ -68,6 +68,22 @@ func TestGetClaimsNil(t *testing.T) {
 	}
 }
 
+func TestAuthMiddlewareInvalidToken(t *testing.T) {
+	am := NewAuthMiddleware("http://localhost:8081", "freecloud", "freecloud-dashboard")
+	handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	req.Header.Set("Authorization", "Bearer this-is-not-a-valid-jwt")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 for invalid JWT, got %d", rec.Code)
+	}
+}
+
 // TODO: Add tests for JWT validation that require generating test tokens:
 //   - TestAuthAudienceCheck: verify audience validation (invalid aud → 401)
 //   - TestAuthIssuerCheck: verify issuer validation (wrong iss → 401)
