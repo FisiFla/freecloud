@@ -68,7 +68,6 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
-	logger := h.logger
 
 	// Sequential flow: Keycloak → DB persist → Fleet → audit → devices
 	var createdUser *keycloak.CreateUserResult
@@ -88,6 +87,12 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	createdUser = result
+
+	if result.User == nil || result.User.ID == nil || *result.User.ID == "" {
+		logger.Error("keycloak user creation returned missing user ID")
+		respondError(w, http.StatusInternalServerError, "keycloak user creation returned missing user ID")
+		return
+	}
 
 	// Capture email setup warning
 	if result.SetupWarning != "" {
@@ -143,11 +148,11 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		_, auditErr := h.db.Exec(ctx,
 			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
 			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "onboard", "user", targetID, string(details),
+			actorID, "onboard", "user", targetID, string(auditDetails),
 		)
 		if auditErr != nil {
 			logger.Warn("failed to write audit log", zap.Error(auditErr))
-			dbWarnings = append(dbWarnings, fmt.Sprintf("audit log insert: %v", auditErr))
+			warnings = append(warnings, fmt.Sprintf("audit log insert: %v", auditErr))
 		}
 	}
 
@@ -163,7 +168,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		)
 		if devErr != nil {
 			logger.Warn("failed to insert placeholder device", zap.Error(devErr))
-			dbWarnings = append(dbWarnings, fmt.Sprintf("device insert: %v", devErr))
+			warnings = append(warnings, fmt.Sprintf("device insert: %v", devErr))
 		} else {
 			_, mapErr := h.db.Exec(ctx,
 				`INSERT INTO users_devices_mapping (user_id, device_id)
@@ -173,7 +178,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 			)
 			if mapErr != nil {
 				logger.Warn("failed to insert device mapping", zap.Error(mapErr))
-				dbWarnings = append(dbWarnings, fmt.Sprintf("device mapping insert: %v", mapErr))
+				warnings = append(warnings, fmt.Sprintf("device mapping insert: %v", mapErr))
 			}
 		}
 	}
