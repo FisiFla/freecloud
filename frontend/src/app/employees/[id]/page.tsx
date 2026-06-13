@@ -58,7 +58,7 @@ export default function EmployeeDetailPage() {
 
         // Fetch device check
         try {
-          const deviceData = await checkDevice(userId);
+          const deviceData = await checkDevice();
           if (deviceData.passed && deviceData.failures && deviceData.failures.length > 0) {
             setDevices(deviceData.failures.map((f, i) => ({
               id: `dev-${i}`,

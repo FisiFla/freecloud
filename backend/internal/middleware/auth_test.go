@@ -91,14 +91,6 @@ func TestAuthMiddlewareInvalidToken(t *testing.T) {
 	}
 }
 
-// TODO: Add tests for JWT validation that require generating test tokens:
-//   - TestAuthAudienceCheck: verify audience validation (invalid aud → 401)
-//   - TestAuthIssuerCheck: verify issuer validation (wrong iss → 401)
-//   - TestAuthExpiredToken: verify expired JWT rejection
-//   - TestAuthWrongKey: verify token signed with wrong key is rejected
-//   - TestAuthManagementEndpointRequiresAdmin: verify admin endpoint rejects non-admin tokens
-// These tests require generating RS256 JWTs with known keys or using a test fixture.
-
 // generateTestKeyAndJWKS creates a real RSA key pair and returns the private key,
 // a JWKS JSON payload, and the expected issuer for a test server.
 func generateTestKeyAndJWKS(t *testing.T) (*rsa.PrivateKey, string, string) {

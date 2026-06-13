@@ -179,7 +179,7 @@ export async function offboardUser(userId: string): Promise<OffboardResponse> {
   return request<OffboardResponse>("POST", `/api/v1/offboard/${userId}`);
 }
 
-export async function checkDevice(userId: string): Promise<DeviceCheckResponse> {
+export async function checkDevice(): Promise<DeviceCheckResponse> {
   return request<DeviceCheckResponse>("POST", "/api/v1/auth/device-check", {});
 }
 

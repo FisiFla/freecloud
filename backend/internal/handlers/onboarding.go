@@ -9,7 +9,6 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -68,76 +67,68 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	actorID := middleware.GetActorID(r.Context())
+	ctx := r.Context()
+	logger := h.logger
 
-	// Use errgroup to run Keycloak and Fleet operations concurrently
-	g, ctx := errgroup.WithContext(r.Context())
-
+	// Sequential flow: Keycloak → DB persist → Fleet → audit → devices
 	var createdUser *keycloak.CreateUserResult
 	var enrollmentToken string
-	var fleetErr error
-	var dbWarnings []string
+	var warnings []string
 
-	// Goroutine 1: Create user in Keycloak
-	g.Go(func() error {
-		result, err := h.keycloak.CreateUser(ctx, req.FirstName, req.LastName, req.Email, req.Department)
-		if err != nil {
-			return err
-		}
-		if !result.PasswordSet {
-			return fmt.Errorf("password could not be set for user")
-		}
-		createdUser = result
-		// Insert into local database
-		if h.db != nil {
-			_, dbErr := h.db.Exec(ctx,
-				`INSERT INTO users (keycloak_user_id, email, first_name, last_name, department, role)
-				 VALUES ($1, $2, $3, $4, $5, $6)
-				 ON CONFLICT (keycloak_user_id) DO UPDATE
-				 SET email = $2, first_name = $3, last_name = $4, department = $5, role = $6, updated_at = NOW()`,
-				*result.User.ID, req.Email, req.FirstName, req.LastName, req.Department, req.Role,
-			)
-			if dbErr != nil {
-				logger.Warn("failed to persist user to local DB, continuing",
-					zap.String("user_id", *result.User.ID),
-					zap.Error(dbErr),
-				)
-				dbWarnings = append(dbWarnings, fmt.Sprintf("user DB insert: %v", dbErr))
-			}
-		}
-		return nil
-	})
+	// Step 1: Create user in Keycloak
+	result, err := h.keycloak.CreateUser(ctx, req.FirstName, req.LastName, req.Email, req.Department)
+	if err != nil {
+		logger.Error("keycloak user creation failed", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "keycloak user creation failed: "+err.Error())
+		return
+	}
+	if !result.PasswordSet {
+		logger.Error("password could not be set for user")
+		respondError(w, http.StatusInternalServerError, "password could not be set for user")
+		return
+	}
+	createdUser = result
 
-	// Goroutine 2: Create Fleet enrollment token
-	g.Go(func() error {
-		token, err := h.fleet.CreateEnrollmentToken(ctx)
-		if err != nil {
-			fleetErr = err
-			return err
-		}
-		enrollmentToken = token
-		return nil
-	})
-
-	// Wait for both
-	if err := g.Wait(); err != nil {
-		logger.Error("onboarding operation failed", zap.Error(err))
-
-		// If Keycloak creation failed, return error
-		if createdUser == nil {
-			respondError(w, http.StatusInternalServerError, "keycloak user creation failed: "+err.Error())
-			return
-		}
-		// If only Fleet failed, still return success with warning
+	// Capture email setup warning
+	if result.SetupWarning != "" {
+		warnings = append(warnings, result.SetupWarning)
 	}
 
-	// Determine enrollment URL
+	// Step 2: Insert into local database
+	if h.db != nil {
+		_, dbErr := h.db.Exec(ctx,
+			`INSERT INTO users (keycloak_user_id, email, first_name, last_name, department, role)
+			 VALUES ($1, $2, $3, $4, $5, $6)
+			 ON CONFLICT (keycloak_user_id) DO UPDATE
+			 SET email = $2, first_name = $3, last_name = $4, department = $5, role = $6, updated_at = NOW()`,
+			*result.User.ID, req.Email, req.FirstName, req.LastName, req.Department, req.Role,
+		)
+		if dbErr != nil {
+			logger.Warn("failed to persist user to local DB, continuing",
+				zap.String("user_id", *result.User.ID),
+				zap.Error(dbErr),
+			)
+			warnings = append(warnings, fmt.Sprintf("user DB insert: %v", dbErr))
+		}
+	}
+
+	// Step 3: Create Fleet enrollment token
+	token, fleetErr := h.fleet.CreateEnrollmentToken(ctx)
+	if fleetErr != nil {
+		logger.Warn("fleet enrollment token creation failed, continuing", zap.Error(fleetErr))
+		warnings = append(warnings, "Fleet enrollment failed; manual enrollment required")
+	} else {
+		enrollmentToken = token
+	}
+
+	// Step 4: Determine enrollment URL
 	enrollmentURL := ""
 	if enrollmentToken != "" {
 		enrollmentURL = "/enroll/" + enrollmentToken
 	}
 
-	// Write audit log
-	details, _ := json.Marshal(map[string]interface{}{
+	// Step 5: Write audit log
+	auditDetails, _ := json.Marshal(map[string]interface{}{
 		"email":      req.Email,
 		"department": req.Department,
 		"role":       req.Role,
@@ -199,25 +190,14 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		NextStep:        nextStep,
 	}
 
-	if createdUser != nil && !createdUser.ResetEmailSent {
-		resp.Warning = createdUser.SetupWarning
+	if len(warnings) > 0 {
+		resp.Warning = strings.Join(warnings, "; ")
 	}
 
+	status := http.StatusOK
 	if fleetErr != nil {
-		warning := "User created. Fleet enrollment failed — manual enrollment required."
-		if len(dbWarnings) > 0 {
-			warning += " DB warnings: " + strings.Join(dbWarnings, "; ")
-		}
-		resp.Warning = warning
-		respondJSON(w, http.StatusAccepted, resp)
-		return
+		status = http.StatusAccepted
 	}
 
-	if len(dbWarnings) > 0 {
-		resp.Warning = strings.Join(dbWarnings, "; ")
-		respondJSON(w, http.StatusOK, resp)
-		return
-	}
-
-	respondJSON(w, http.StatusOK, resp)
+	respondJSON(w, status, resp)
 }
