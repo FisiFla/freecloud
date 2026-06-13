@@ -187,7 +187,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		User:            createdUser,
 		EnrollmentToken: enrollmentToken,
 		EnrollmentURL:   enrollmentURL,
-		NextStep:        "User must log in and set password using temporary credentials.",
+		NextStep:        "User must set password on first login.",
 	}
 
 	if fleetErr != nil {

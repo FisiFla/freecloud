@@ -17,11 +17,5 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Install frontend deps
-        run: cd frontend && npm install --no-audit --no-fund
-      - name: Go vet
-        run: cd backend && go vet ./...
-      - name: Go test
-        run: cd backend && go test ./...
-      - name: Frontend build
-        run: cd frontend && npm run build
+      - name: Run make verify
+        run: make verify

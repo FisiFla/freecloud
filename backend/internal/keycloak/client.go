@@ -9,6 +9,18 @@ import (
 	"go.uber.org/zap"
 )
 
+// KeycloakClientInterface defines the operations used by handlers.
+type KeycloakClientInterface interface {
+	CreateUser(ctx context.Context, firstName, lastName, email, department string) (*gocloak.User, error)
+	DisableUser(ctx context.Context, userID string) error
+	LogoutAllSessions(ctx context.Context, userID string) error
+	CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
+	DeleteClient(ctx context.Context, clientID string) error
+	AssignUserToClient(ctx context.Context, userID, clientID string) error
+	GetUserGroups(ctx context.Context, userID string) ([]*gocloak.Group, error)
+	Ping(ctx context.Context) error
+}
+
 // KeycloakClient wraps gocloak.GoCloak for FreeCloud operations.
 type KeycloakClient struct {
 	client     *gocloak.GoCloak

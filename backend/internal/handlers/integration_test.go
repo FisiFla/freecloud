@@ -13,6 +13,7 @@ import (
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 	"go.uber.org/zap"
 )
 
@@ -76,10 +77,11 @@ func TestListUsersNilDB(t *testing.T) {
 func TestDeviceCheckNoDB(t *testing.T) {
 	h := setupTestHandler(t)
 
-	body := map[string]string{"keycloakUserId": "test-user-123"}
+	body := map[string]string{}
 	b, _ := json.Marshal(body)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/device-check", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(middleware.SetClaims(req.Context(), &middleware.JWTClaims{Sub: "test-user-123", IsAdmin: true}))
 	rec := httptest.NewRecorder()
 
 	h.DeviceCheck(rec, req)
@@ -93,17 +95,32 @@ func TestDeviceCheckNoDB(t *testing.T) {
 func TestDeviceCheckMissingUserID(t *testing.T) {
 	h := setupTestHandler(t)
 
-	body := map[string]string{}
-	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/device-check", bytes.NewReader(b))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/device-check", nil)
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(middleware.SetClaims(req.Context(), &middleware.JWTClaims{Sub: "test-user-123", IsAdmin: true}))
+	rec := httptest.NewRecorder()
+
+	h.DeviceCheck(rec, req)
+
+	// With claims but no body needed (ID from claims), should hit nil-DB guard (500)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 (nil DB), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDeviceCheckUnauthenticated(t *testing.T) {
+	h := setupTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/device-check", nil)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
 	h.DeviceCheck(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 (no JWT claims), got %d: %s", rec.Code, rec.Body.String())
 	}
+}
 }
 
 func TestOnboardValidation(t *testing.T) {

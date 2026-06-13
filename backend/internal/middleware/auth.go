@@ -40,17 +40,29 @@ func GetClaims(ctx context.Context) *JWTClaims {
 	return nil
 }
 
+// SetClaims stores JWT claims in the context for testing or manual injection.
+func SetClaims(ctx context.Context, claims *JWTClaims) context.Context {
+	return context.WithValue(ctx, claimsKey, claims)
+}
+
 // isManagementEndpoint returns true if the path is a management API that requires admin access.
 func isManagementEndpoint(path string) bool {
-	mgmtPaths := []string{
+	mgmtExactPaths := map[string]bool{
+		"/api/v1/users":      true,
+		"/api/v1/apps":       true,
+		"/api/v1/audit-logs": true,
+	}
+	if mgmtExactPaths[path] {
+		return true
+	}
+	mgmtPrefixes := []string{
 		"/api/v1/onboard",
 		"/api/v1/offboard",
-		"/api/v1/apps/create",
 		"/api/v1/apps/",
 		"/api/v1/users/",
 		"/api/v1/audit-logs/",
 	}
-	for _, p := range mgmtPaths {
+	for _, p := range mgmtPrefixes {
 		if strings.HasPrefix(path, p) {
 			return true
 		}

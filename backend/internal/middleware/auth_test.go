@@ -16,10 +16,10 @@ func TestIsManagementEndpoint(t *testing.T) {
 		{"/api/v1/apps/create", true},
 		{"/api/v1/apps/some-id/assign", true},
 		{"/api/v1/health", false},
-		{"/api/v1/users", false},
-		{"/api/v1/audit-logs", false},
+		{"/api/v1/users", true},
+		{"/api/v1/audit-logs", true},
 		{"/api/v1/auth/device-check", false},
-		{"/api/v1/apps", false},
+		{"/api/v1/apps", true},
 	}
 
 	for _, tt := range tests {

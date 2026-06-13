@@ -35,6 +35,17 @@ type SecurityState struct {
 	UnknownVulns    bool     `json:"unknown_vulns"`
 }
 
+// FleetClientInterface defines the operations used by handlers.
+type FleetClientInterface interface {
+	CreateEnrollmentToken(ctx context.Context) (string, error)
+	GetHosts(ctx context.Context, query string) ([]Host, error)
+	GetHostSoftware(ctx context.Context, hostID string) ([]Software, error)
+	GetHostSecurityState(ctx context.Context, hostID string) (*SecurityState, error)
+	IssueRemoteLock(ctx context.Context, hostID string) error
+	IssueRemoteWipe(ctx context.Context, hostID string) error
+	Ping(ctx context.Context) error
+}
+
 // FleetClient communicates with the FleetDM API.
 type FleetClient struct {
 	baseURL    string

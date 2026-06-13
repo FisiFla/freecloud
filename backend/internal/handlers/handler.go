@@ -13,13 +13,13 @@ import (
 // Handler holds shared dependencies for all HTTP handlers.
 type Handler struct {
 	db       *pgxpool.Pool
-	keycloak *keycloak.KeycloakClient
-	fleet    *fleet.FleetClient
+	keycloak keycloak.KeycloakClientInterface
+	fleet    fleet.FleetClientInterface
 	logger   *zap.Logger
 }
 
 // NewHandler creates a new Handler.
-func NewHandler(db *pgxpool.Pool, kc *keycloak.KeycloakClient, fc *fleet.FleetClient, logger *zap.Logger) *Handler {
+func NewHandler(db *pgxpool.Pool, kc keycloak.KeycloakClientInterface, fc fleet.FleetClientInterface, logger *zap.Logger) *Handler {
 	return &Handler{
 		db:       db,
 		keycloak: kc,

@@ -110,6 +110,10 @@ func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 			h.logger.Warn("vulnerability data incomplete for device, posture may be inaccurate",
 				zap.String("device_id", devID),
 			)
+			failures = append(failures, Failure{
+				Type:   "vulnerability_data_missing",
+				Detail: "Vulnerability data unavailable for device " + devID,
+			})
 		}
 	}
 
