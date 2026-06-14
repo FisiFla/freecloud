@@ -33,6 +33,6 @@ clean:
 verify:
 	@echo "==> Go vet + test..."
 	cd backend && go vet ./... && go test ./...
-	@echo "==> Frontend build..."
-	cd frontend && npm install --no-audit --no-fund --include=dev && npm run build
+	@echo "==> Frontend type-check + build..."
+	cd frontend && npm install --no-audit --no-fund --include=dev && npm run verify
 	@echo "==> All checks passed."

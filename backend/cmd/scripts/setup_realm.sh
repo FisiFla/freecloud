@@ -2,8 +2,22 @@
 # setup_realm.sh — Idempotent Keycloak realm + groups + client setup
 # Requires: curl, jq
 # Usage: make kc-setup  OR  bash backend/cmd/scripts/setup_realm.sh
+#
+# DEVELOPMENT ONLY. This script creates fixed demo credentials and prints
+# a service-account secret to stdout. It refuses to run outside the
+# development environment unless ALLOW_DEV_SETUP=true is set explicitly.
 
 set -euo pipefail
+
+# Refuse to run in non-development environments. This script creates a demo
+# user with a known password and prints a client secret — neither belongs in
+# staging or production.
+if [ "${APP_ENV:-development}" != "development" ] && [ "${ALLOW_DEV_SETUP:-}" != "true" ]; then
+  echo "ERROR: setup_realm.sh is for development only (APP_ENV=${APP_ENV:-<unset>})." >&2
+  echo "       It creates demo credentials and prints secrets to stdout." >&2
+  echo "       To force-run anyway, set ALLOW_DEV_SETUP=true." >&2
+  exit 1
+fi
 
 KC_URL="${KEYCLOAK_URL:-http://localhost:8081}"
 KC_ADMIN="${KEYCLOAK_ADMIN:-admin}"
@@ -125,8 +139,12 @@ fi
 echo ""
 echo "✓ Keycloak realm '$REALM' is ready."
 echo "  Admin console: $KC_URL/admin/$REALM/console"
-echo "  Demo user: demo@freecloud.local / demo123!"
+echo "  Demo user (DEV ONLY): demo@freecloud.local / demo123!"
 echo ""
+echo "  ┌─ DEV ONLY ────────────────────────────────────────────────────┐"
+echo "  │ The service-account secret is printed below. Never use this  │"
+echo "  │ output in staging/production. Rotate before any real deploy. │"
+echo "  └──────────────────────────────────────────────────────────────┘"
 echo "  Backend service-account client 'freecloud-service' secret:"
 echo "    $SERVICE_CLIENT_SECRET"
 echo "  Set this as KEYCLOAK_CLIENT_SECRET for the Go backend."

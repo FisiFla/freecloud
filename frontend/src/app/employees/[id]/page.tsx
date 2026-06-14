@@ -29,6 +29,7 @@ export default function EmployeeDetailPage() {
   const [deprovisioning, setDeprovisioning] = useState(false);
   const [deprovisioned, setDeprovisioned] = useState(false);
   const [offboardResult, setOffboardResult] = useState<OffboardResponse | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -61,12 +62,13 @@ export default function EmployeeDetailPage() {
 
   const handleDeprovision = async () => {
     setDeprovisioning(true);
+    setActionError(null);
     try {
       const result = await offboardUser(userId);
       setOffboardResult(result);
       setDeprovisioned(true);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to deprovision. Check the backend is running.");
+      setActionError(err instanceof Error ? err.message : "Failed to deprovision. Check the backend is running.");
     } finally {
       setDeprovisioning(false);
     }
@@ -292,6 +294,23 @@ export default function EmployeeDetailPage() {
                   <AlertTriangle className="h-4 w-4" />
                   {deprovisioning ? "Deprovisioning..." : "Deprovision / Nuke Account"}
                 </button>
+
+                {actionError && (
+                  <div className="mt-4 flex items-start gap-3 rounded-lg border border-red-300 bg-white px-4 py-3 text-sm text-red-700">
+                    <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                    <div className="flex-1">
+                      <p className="font-medium">Deprovisioning failed</p>
+                      <p className="text-red-600">{actionError}</p>
+                    </div>
+                    <button
+                      onClick={() => setActionError(null)}
+                      className="text-red-400 hover:text-red-600"
+                      aria-label="Dismiss"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
