@@ -1,6 +1,6 @@
 import NextAuth from "next-auth";
 import KeycloakProvider from "next-auth/providers/keycloak";
-import { requiredProdEnv, requiredEnv } from "@/lib/env";
+import { requiredProdEnv, requiredEnv, rejectInsecureInProd, isProduction } from "@/lib/env";
 
 /**
  * Auth.js v5 configuration.
@@ -18,7 +18,10 @@ import { requiredProdEnv, requiredEnv } from "@/lib/env";
  */
 
 // Validate at runtime — skipped during `next build` via env.isBuildPhase.
-requiredEnv("AUTH_SECRET");
+// Reject the example placeholder so a copied-from-example deploy can't ship
+// with a publicly known session-signing secret.
+const authSecret = requiredEnv("AUTH_SECRET");
+rejectInsecureInProd("AUTH_SECRET", authSecret);
 
 const keycloakClientId = requiredProdEnv("AUTH_KEYCLOAK_ID", "freecloud-dashboard");
 const keycloakClientSecret = requiredProdEnv("AUTH_KEYCLOAK_SECRET", "");
@@ -60,6 +63,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // JWT-backed sessions so the access token can be forwarded to the Go API.
     strategy: "jwt",
   },
+  // In production, force Secure cookies and the __Secure-/__Host- name prefixes
+  // so the session cookie is never sent over plaintext HTTP. Left off in dev so
+  // the cookie still works over http://localhost.
+  useSecureCookies: isProduction(),
   pages: {
     signIn: "/signin",
     error: "/signin?error=auth_failed",
