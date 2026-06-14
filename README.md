@@ -139,6 +139,15 @@ After first boot, run `make kc-setup` against the Keycloak instance to create th
 realm, groups, and the `freecloud-service` confidential client (least-privilege:
 `manage-users` + `manage-clients`).
 
+## Documentation
+
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, environment
+  reference, backup/restore, upgrades, and troubleshooting.
+- [SECURITY.md](SECURITY.md) — security model and how to report vulnerabilities.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — local setup and the checks a PR must pass.
+- [docs/adr/](docs/adr/) — architecture decision records (distributed-state
+  integrity; the Fleet enrollment callback).
+
 ## License
 
 MIT
