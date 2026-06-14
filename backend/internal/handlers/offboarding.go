@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -49,10 +51,14 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 
 	// Sequential best-effort offboarding — each step continues regardless of failures
 
-	// Step 1: Disable user in Keycloak
+	// Step 1: Disable user in Keycloak. This is the critical lock; if it fails
+	// the account is NOT reliably disabled, so the whole offboard reports a
+	// non-2xx status (below) instead of silently returning 200.
+	disableFailed := false
 	if err := h.keycloak.DisableUser(ctx, userID); err != nil {
 		logger.Warn("failed to disable user in Keycloak", zap.String("user_id", userID), zap.Error(err))
 		warnings = append(warnings, "failed to disable user in identity provider")
+		disableFailed = true
 	}
 	// Always best-effort soft-disable in local DB regardless of Keycloak outcome,
 	// so local state reflects the intent even if Keycloak is unreachable.
@@ -126,17 +132,28 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		"device_ids":     deviceIDs,
 	})
 	if h.db != nil {
-		_, auditErr := h.db.Exec(ctx,
+		// Detached context so a client disconnect can't drop the audit record of
+		// this privileged action.
+		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, auditErr := h.db.Exec(auditCtx,
 			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
 			 VALUES ($1, $2, $3, $4, $5)`,
 			actorID, "offboard", "user", userID, details,
 		)
 		if auditErr != nil {
 			logger.Warn("failed to write audit log", zap.Error(auditErr))
+			warnings = append(warnings, "failed to write offboard audit log")
 		}
 	}
 
-	respondJSON(w, http.StatusOK, OffboardResponse{
+	// If the account couldn't be disabled, return a non-2xx so callers and
+	// monitoring escalate rather than treating a half-done panic-button as OK.
+	status := http.StatusOK
+	if disableFailed {
+		status = http.StatusBadGateway
+	}
+	respondJSON(w, status, OffboardResponse{
 		UserID:                  userID,
 		SessionsTerminated:      sessionsTerminated,
 		SessionTerminationError: sessionError,

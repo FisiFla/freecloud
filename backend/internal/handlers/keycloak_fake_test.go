@@ -12,6 +12,7 @@ var _ keycloak.KeycloakClientInterface = (*fakeKeycloak)(nil)
 
 type fakeKeycloak struct {
 	createUserFn          func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error)
+	deleteUserFn          func(ctx context.Context, userID string) error
 	disableUserFn         func(ctx context.Context, userID string) error
 	logoutSessionsFn      func(ctx context.Context, userID string) error
 	getUserSessionsFn     func(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error)
@@ -27,6 +28,11 @@ func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, emai
 	uid := "kc-user-123"
 	user := &gocloak.User{ID: &uid, FirstName: &firstName, LastName: &lastName, Email: &email}
 	return &keycloak.CreateUserResult{User: user, PasswordSet: true, ResetEmailSent: true}, nil
+}
+
+func (f *fakeKeycloak) DeleteUser(ctx context.Context, userID string) error {
+	if f.deleteUserFn != nil { return f.deleteUserFn(ctx, userID) }
+	return nil
 }
 
 func (f *fakeKeycloak) DisableUser(ctx context.Context, userID string) error {
