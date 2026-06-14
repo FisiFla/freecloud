@@ -14,9 +14,19 @@ import (
 // A per-client rate limit protects the sensitive onboarding/offboarding
 // endpoints from abuse.
 func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handler) {
+	// Liveness/readiness probes (k8s-style) and the simple health endpoint.
+	r.Get("/healthz", h.Healthz)
+	r.Get("/readyz", h.Readyz)
 	r.Get("/api/v1/health", h.Health)
-	r.Get("/api/v1/health/keycloak", h.HealthKeycloak)
-	r.Get("/api/v1/health/fleetdm", h.HealthFleet)
+
+	// The dependency health checks ping Keycloak/Fleet, so rate-limit them to
+	// prevent unauthenticated amplification against those upstreams.
+	healthLimiter := middleware.NewRateLimiter(30, time.Minute)
+	r.Group(func(r chi.Router) {
+		r.Use(healthLimiter.Middleware)
+		r.Get("/api/v1/health/keycloak", h.HealthKeycloak)
+		r.Get("/api/v1/health/fleetdm", h.HealthFleet)
+	})
 
 	// FleetDM enrollment callback — called by Fleet (not a browser) and
 	// authenticated by an HMAC signature over the body, so it sits OUTSIDE the

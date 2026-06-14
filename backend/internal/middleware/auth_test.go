@@ -70,6 +70,7 @@ func TestAuthMiddlewareHealthSkips(t *testing.T) {
 }
 
 func TestGetClaimsNil(t *testing.T) {
+	//lint:ignore SA1012 deliberately passing nil to exercise GetClaims' nil-context guard
 	if c := GetClaims(nil); c != nil {
 		t.Error("expected nil claims from nil context")
 	}
