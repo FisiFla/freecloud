@@ -81,7 +81,7 @@ quick while deeper DB-backed tests are available on demand.
 make verify      # Fast no-live gate: go vet + go test + frontend type-check + build
 make test-db     # Ephemeral Postgres (Docker) migration/schema integration tests
 make verify-db   # Fast verify + DB integration tests
-make verify-all  # Fast verify + go test -race across all packages
+make verify-all  # Fast verify + DB integration tests + go test -race across all packages
 ```
 
 `make verify` is the CI-required gate and needs no external services.

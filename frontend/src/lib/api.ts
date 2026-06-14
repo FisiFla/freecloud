@@ -90,6 +90,7 @@ export interface User {
   lastName: string;
   department?: string;
   role?: string;
+  disabled?: boolean;
   createdAt?: string;
   updatedAt?: string;
   devices?: Device[];
