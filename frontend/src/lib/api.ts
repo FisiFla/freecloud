@@ -134,7 +134,17 @@ export class ApiError extends Error {
 }
 
 function getBaseUrl(): string {
-  return process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+  const url = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+  // In production the API must be reached over TLS or bearer tokens travel in
+  // plaintext. Fail closed on the server; loudly warn in the browser (the value
+  // is already baked into the bundle at build time and can't be changed here).
+  if (process.env.NODE_ENV === "production" && url.startsWith("http://")) {
+    const msg = `NEXT_PUBLIC_API_URL must use https:// in production (got: ${url})`;
+    if (typeof window === "undefined") throw new Error(msg);
+    // eslint-disable-next-line no-console
+    console.error(msg);
+  }
+  return url;
 }
 
 async function request<T>(

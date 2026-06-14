@@ -138,16 +138,24 @@ else
   echo "  Already exists (secret synced)."
 fi
 
-# Grant the service account realm-admin role so it can manage users/clients
+# Grant the service account ONLY the realm-management roles it actually needs
+# (manage-users + manage-clients) instead of the realm-admin super-role. Least
+# privilege: a leaked service-account secret then cannot take over the realm.
 SA_USER_ID=$(curl -s "$KC_URL/admin/realms/$REALM/users?username=service-account-$SERVICE_CLIENT_ID" -H "$AUTH" | jq -r '.[0].id')
 if [ -n "$SA_USER_ID" ] && [ "$SA_USER_ID" != "null" ]; then
   REALM_MANAGEMENT_UUID=$(curl -s "$KC_URL/admin/realms/$REALM/clients?clientId=realm-management" -H "$AUTH" | jq -r '.[0].id')
   if [ -n "$REALM_MANAGEMENT_UUID" ] && [ "$REALM_MANAGEMENT_UUID" != "null" ]; then
-    ADMIN_ROLE=$(curl -s "$KC_URL/admin/realms/$REALM/clients/$REALM_MANAGEMENT_UUID/roles/realm-admin" -H "$AUTH" | jq -c '.')
-    if [ -n "$ADMIN_ROLE" ] && [ "$ADMIN_ROLE" != "null" ]; then
+    ROLES_JSON="[]"
+    for role in manage-users manage-clients; do
+      ROLE_OBJ=$(curl -s "$KC_URL/admin/realms/$REALM/clients/$REALM_MANAGEMENT_UUID/roles/$role" -H "$AUTH" | jq -c '.')
+      if [ -n "$ROLE_OBJ" ] && [ "$ROLE_OBJ" != "null" ]; then
+        ROLES_JSON=$(echo "$ROLES_JSON" | jq -c ". + [$ROLE_OBJ]")
+      fi
+    done
+    if [ "$ROLES_JSON" != "[]" ]; then
       curl -s -X POST "$KC_URL/admin/realms/$REALM/users/$SA_USER_ID/role-mappings/clients/$REALM_MANAGEMENT_UUID" \
-        -H "$AUTH" -H "$CT" -d "[$ADMIN_ROLE]" > /dev/null
-      echo "  Granted realm-admin to service account."
+        -H "$AUTH" -H "$CT" -d "$ROLES_JSON" > /dev/null
+      echo "  Granted manage-users + manage-clients to service account."
     fi
   fi
 fi

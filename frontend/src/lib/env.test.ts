@@ -62,6 +62,32 @@ describe("env helpers", () => {
     });
   });
 
+  describe("rejectInsecureInProd", () => {
+    it("throws in production for a known placeholder secret", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      const { rejectInsecureInProd } = await loadEnv();
+      expect(() =>
+        rejectInsecureInProd("AUTH_SECRET", "change-me-to-a-random-string"),
+      ).toThrow("placeholder");
+    });
+
+    it("does not throw in development for a placeholder", async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      const { rejectInsecureInProd } = await loadEnv();
+      expect(() =>
+        rejectInsecureInProd("AUTH_SECRET", "change-me-to-a-random-string"),
+      ).not.toThrow();
+    });
+
+    it("does not throw in production for a real secret", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      const { rejectInsecureInProd } = await loadEnv();
+      expect(() =>
+        rejectInsecureInProd("AUTH_SECRET", "a-genuinely-random-secret-value"),
+      ).not.toThrow();
+    });
+  });
+
   describe("isProduction", () => {
     it("returns false in development", async () => {
       vi.stubEnv("NODE_ENV", "development");

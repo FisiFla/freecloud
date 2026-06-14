@@ -46,6 +46,32 @@ export function requiredProdEnv(name: string, fallback: string): string {
 }
 
 /**
+ * Well-known placeholder secret values shipped in the example env files. They
+ * must never be the live value in production.
+ */
+const INSECURE_PLACEHOLDERS = new Set([
+  "change-me-to-a-random-string",
+  "change-me",
+  "secret",
+]);
+
+/**
+ * rejectInsecureInProd throws (at runtime, in production) if a secret is still
+ * set to a well-known placeholder value. In development it only warns. Skipped
+ * during `next build`.
+ */
+export function rejectInsecureInProd(name: string, value: string): void {
+  if (isBuildPhase || !INSECURE_PLACEHOLDERS.has(value)) return;
+  if (isProd) {
+    throw new Error(
+      `${name} is set to a well-known placeholder; generate a real secret (e.g. \`openssl rand -base64 33\`).`,
+    );
+  }
+  // eslint-disable-next-line no-console
+  console.warn(`[dev] ${name} is the example placeholder — fine locally, NEVER in production.`);
+}
+
+/**
  * isProduction exposes the computed flag for consumers that need to branch.
  */
 export function isProduction(): boolean {

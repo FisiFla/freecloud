@@ -4,11 +4,20 @@ import (
 	"testing"
 )
 
-func TestValidateDevelopment(t *testing.T) {
-	cfg := Load()
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error in dev, got %v", err)
-	}
+// setSecureProdEnv sets a complete, secure production configuration via the
+// environment. Individual tests then override one variable to an insecure
+// value to prove Validate() rejects it.
+func setSecureProdEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("DATABASE_URL", "postgres://app:s3cret@db.internal:5432/freecloud?sslmode=require")
+	t.Setenv("KEYCLOAK_URL", "https://kc.example.com")
+	t.Setenv("KEYCLOAK_CLIENT_ID", "freecloud-service")
+	t.Setenv("KEYCLOAK_CLIENT_SECRET", "kc-secret")
+	t.Setenv("KEYCLOAK_AUDIENCE", "freecloud-dashboard")
+	t.Setenv("FLEET_API_TOKEN", "fleet-token")
+	t.Setenv("FLEET_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("CORS_ORIGIN", "https://dashboard.example.com")
 }
 
 func TestValidateDevelopmentExplicit(t *testing.T) {
@@ -19,10 +28,71 @@ func TestValidateDevelopmentExplicit(t *testing.T) {
 	}
 }
 
+func TestValidateTestEnv(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
+	cfg := Load()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error in test env, got %v", err)
+	}
+}
+
+// Unset APP_ENV must FAIL CLOSED: it is treated as production, so the insecure
+// dev defaults (default DSN, admin-cli, missing secrets) must be rejected.
+func TestValidateUnsetAppEnvFailsClosed(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error when APP_ENV is unset and config is the insecure default, got nil")
+	}
+}
+
+func TestValidateProductionAllSecure(t *testing.T) {
+	setSecureProdEnv(t)
+	cfg := Load()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error with a full secure prod config, got %v", err)
+	}
+}
+
+func TestValidateProductionRejectsDefaultDSN(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("DATABASE_URL", defaultDatabaseURL)
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for the insecure default DATABASE_URL in production, got nil")
+	}
+}
+
+func TestValidateProductionRejectsSSLModeDisable(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://app:s3cret@db.internal:5432/freecloud?sslmode=disable")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for sslmode=disable DATABASE_URL in production, got nil")
+	}
+}
+
+func TestValidateProductionRejectsAdminCliClient(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("KEYCLOAK_CLIENT_ID", "admin-cli")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for default admin-cli KEYCLOAK_CLIENT_ID in production, got nil")
+	}
+}
+
+func TestValidateProductionRejectsLocalhostKeycloak(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("KEYCLOAK_URL", defaultKeycloakURL)
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for localhost-default KEYCLOAK_URL in production, got nil")
+	}
+}
+
 func TestValidateProductionMissingKeycloakSecret(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
+	setSecureProdEnv(t)
 	t.Setenv("KEYCLOAK_CLIENT_SECRET", "")
-	t.Setenv("FLEET_API_TOKEN", "some-token")
 	cfg := Load()
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error for missing KEYCLOAK_CLIENT_SECRET in production, got nil")
@@ -30,8 +100,7 @@ func TestValidateProductionMissingKeycloakSecret(t *testing.T) {
 }
 
 func TestValidateProductionMissingFleetToken(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
-	t.Setenv("KEYCLOAK_CLIENT_SECRET", "some-secret")
+	setSecureProdEnv(t)
 	t.Setenv("FLEET_API_TOKEN", "")
 	cfg := Load()
 	if err := cfg.Validate(); err == nil {
@@ -39,22 +108,18 @@ func TestValidateProductionMissingFleetToken(t *testing.T) {
 	}
 }
 
-func TestValidateProductionAllSet(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
-	t.Setenv("KEYCLOAK_CLIENT_SECRET", "some-secret")
-	t.Setenv("FLEET_API_TOKEN", "some-token")
-	t.Setenv("CORS_ORIGIN", "https://dashboard.example.com")
+func TestValidateProductionMissingWebhookSecret(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("FLEET_WEBHOOK_SECRET", "")
 	cfg := Load()
-	if err := cfg.Validate(); err != nil {
-		t.Errorf("expected no error with all secrets set, got %v", err)
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for missing FLEET_WEBHOOK_SECRET in production, got nil")
 	}
 }
 
 func TestValidateProductionMissingCORSOrigin(t *testing.T) {
-	t.Setenv("APP_ENV", "production")
-	t.Setenv("KEYCLOAK_CLIENT_SECRET", "some-secret")
-	t.Setenv("FLEET_API_TOKEN", "some-token")
-	// CORS_ORIGIN intentionally unset
+	setSecureProdEnv(t)
+	t.Setenv("CORS_ORIGIN", "")
 	cfg := Load()
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error for missing CORS_ORIGIN in production, got nil")

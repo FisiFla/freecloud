@@ -19,8 +19,9 @@ make dev-up
 # Run database migrations
 make db-migrate
 
-# Start backend (in another terminal)
-cd backend && go run cmd/server/main.go
+# Start backend (in another terminal). APP_ENV=development opts into the dev
+# defaults; without it the server fails closed (treats the env as production).
+cd backend && APP_ENV=development go run cmd/server/main.go
 
 # Start frontend (in another terminal)
 cd frontend && npm install && npm run dev

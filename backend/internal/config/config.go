@@ -7,6 +7,20 @@ import (
 	"strings"
 )
 
+// defaultDatabaseURL is the insecure local-dev DSN. Validate() rejects it (and
+// any sslmode=disable DSN) outside development so it can never be the live
+// production database connection.
+const defaultDatabaseURL = "postgres://freecloud:freecloud@localhost:5432/freecloud?sslmode=disable"
+
+// defaultKeycloakClientID is Keycloak's built-in public client. It cannot
+// perform a confidential client-credentials grant with a secret, so Validate()
+// rejects it in production.
+const defaultKeycloakClientID = "admin-cli"
+
+// defaultKeycloakURL is the local-dev Keycloak address; Validate() rejects it
+// outside development so production never points at a localhost identity provider.
+const defaultKeycloakURL = "http://localhost:8081"
+
 // Config holds application configuration loaded from environment variables.
 type Config struct {
 	Port                 string
@@ -18,43 +32,76 @@ type Config struct {
 	KeycloakAudience     string
 	FleetURL             string
 	FleetAPIToken        string
+	FleetWebhookSecret   string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
 func Load() *Config {
 	return &Config{
 		Port:                 getEnv("PORT", "8080"),
-		DatabaseURL:          getEnv("DATABASE_URL", "postgres://freecloud:freecloud@localhost:5432/freecloud?sslmode=disable"),
-		KeycloakURL:          getEnv("KEYCLOAK_URL", "http://localhost:8081"),
+		DatabaseURL:          getEnv("DATABASE_URL", defaultDatabaseURL),
+		KeycloakURL:          getEnv("KEYCLOAK_URL", defaultKeycloakURL),
 		KeycloakRealm:        getEnv("KEYCLOAK_REALM", "freecloud"),
-		KeycloakClientID:     getEnv("KEYCLOAK_CLIENT_ID", "admin-cli"),
+		KeycloakClientID:     getEnv("KEYCLOAK_CLIENT_ID", defaultKeycloakClientID),
 		KeycloakClientSecret: getEnv("KEYCLOAK_CLIENT_SECRET", ""),
 		KeycloakAudience:     getEnv("KEYCLOAK_AUDIENCE", "freecloud-dashboard"),
 		FleetURL:             getEnv("FLEET_URL", "http://localhost:8082"),
 		FleetAPIToken:        getEnv("FLEET_API_TOKEN", ""),
+		FleetWebhookSecret:   getEnv("FLEET_WEBHOOK_SECRET", ""),
 	}
 }
 
-// Validate checks that required configuration is set for non-development environments.
+// Validate enforces that no insecure default reaches a non-development
+// deployment. It is FAIL-CLOSED: only APP_ENV=development (or test) skips the
+// checks. An unset or unrecognized APP_ENV is treated as production, so a
+// deployment that simply forgets to set APP_ENV cannot silently run on the
+// insecure dev defaults (default DB credentials, sslmode=disable, the public
+// admin-cli client, empty audience/issuer, localhost CORS).
 func (c *Config) Validate() error {
 	env := os.Getenv("APP_ENV")
-	if env == "" || env == "development" {
-		return nil // dev defaults are acceptable
+	if env == "development" || env == "test" {
+		return nil // dev/test defaults are acceptable
+	}
+	if env == "" {
+		env = "production (APP_ENV unset)"
 	}
 
+	var problems []string
+	add := func(msg string) { problems = append(problems, msg) }
+
 	if c.KeycloakClientSecret == "" {
-		return fmt.Errorf("KEYCLOAK_CLIENT_SECRET is required in %s environment", env)
+		add("KEYCLOAK_CLIENT_SECRET must be set")
+	}
+	if c.KeycloakClientID == "" || c.KeycloakClientID == defaultKeycloakClientID {
+		add("KEYCLOAK_CLIENT_ID must be a confidential client, not the default \"admin-cli\"")
+	}
+	// An empty URL or audience silently disables the issuer/audience checks in
+	// the auth middleware, so both must be present.
+	if c.KeycloakURL == "" || c.KeycloakURL == defaultKeycloakURL {
+		add("KEYCLOAK_URL must point at your real Keycloak, not empty or the localhost default")
+	}
+	if c.KeycloakAudience == "" {
+		add("KEYCLOAK_AUDIENCE must be set (an empty value disables JWT audience validation)")
 	}
 	if c.FleetAPIToken == "" {
-		return fmt.Errorf("FLEET_API_TOKEN is required in %s environment", env)
+		add("FLEET_API_TOKEN must be set")
 	}
-	if c.DatabaseURL == "" {
-		return fmt.Errorf("DATABASE_URL is required in %s environment", env)
+	if c.FleetWebhookSecret == "" {
+		add("FLEET_WEBHOOK_SECRET must be set (used to authenticate Fleet enrollment callbacks)")
+	}
+	if c.DatabaseURL == "" || c.DatabaseURL == defaultDatabaseURL {
+		add("DATABASE_URL must be set to a real database, not the insecure default")
+	} else if strings.Contains(c.DatabaseURL, "sslmode=disable") {
+		add("DATABASE_URL must not use sslmode=disable; require TLS to the database")
 	}
 	// CORS_ORIGIN must be set explicitly outside dev so credentials are never
 	// silently allowed from the localhost default.
 	if os.Getenv("CORS_ORIGIN") == "" {
-		return fmt.Errorf("CORS_ORIGIN is required in %s environment", env)
+		add("CORS_ORIGIN must be set")
+	}
+
+	if len(problems) > 0 {
+		return fmt.Errorf("insecure configuration for %s environment: %s", env, strings.Join(problems, "; "))
 	}
 	return nil
 }
