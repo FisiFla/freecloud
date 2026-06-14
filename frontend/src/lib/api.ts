@@ -125,19 +125,20 @@ export function getAuthToken(): string | null {
 }
 
 // waitForAuthToken resolves once a non-empty token has been published, or after
-// a short timeout if none ever arrives (e.g. user is unauthenticated). This lets
-// pages block their initial fetch until the auth state is known.
-export function waitForAuthToken(timeoutMs = 2000): Promise<string | null> {
-  if (authToken) return Promise.resolve(authToken);
+// a short timeout if none ever arrives (e.g. user is unauthenticated). Returns
+// a boolean readiness flag (not the token itself) so the token reference stays
+// scoped to this module and callers don't hold a live copy.
+export function waitForAuthToken(timeoutMs = 2000): Promise<boolean> {
+  if (authToken) return Promise.resolve(true);
   return new Promise((resolve) => {
     const start = Date.now();
     const interval = setInterval(() => {
       if (authToken) {
         clearInterval(interval);
-        resolve(authToken);
+        resolve(true);
       } else if (Date.now() - start >= timeoutMs) {
         clearInterval(interval);
-        resolve(null);
+        resolve(false);
       }
     }, 50);
   });

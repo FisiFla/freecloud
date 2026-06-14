@@ -5,6 +5,9 @@ import Link from "next/link";
 import { Search, UserPlus, Trash2, AlertCircle, AlertTriangle, Users } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
 import ConfirmDialog from "@/components/ConfirmDialog";
+import ErrorBanner from "@/components/ErrorBanner";
+import EmptyState from "@/components/EmptyState";
+import LoadingRows from "@/components/LoadingRows";
 import OnboardForm from "./onboard/OnboardForm";
 import { offboardUser, listUsers, waitForAuthToken } from "@/lib/api";
 import type { User } from "@/lib/api";
@@ -126,9 +129,8 @@ export default function EmployeesPage() {
 
         {/* Error banner */}
         {error && (
-          <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            <AlertCircle className="h-5 w-5 shrink-0" />
-            <span>{error}</span>
+          <div className="mt-4">
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
           </div>
         )}
 
@@ -186,23 +188,19 @@ export default function EmployeesPage() {
 
         {/* Loading skeleton */}
         {loading ? (
-          <div className="mt-6 space-y-3">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-16 animate-pulse rounded-xl bg-slate-200" />
-            ))}
-          </div>
+          <LoadingRows count={3} className="h-16" />
         ) : filtered.length === 0 && employees.length === 0 ? (
-          <div className="mt-8 text-center rounded-xl border border-dashed border-slate-200 bg-white p-12">
-            <Users className="mx-auto h-8 w-8 text-slate-300" />
-            <h3 className="mt-3 text-sm font-medium text-slate-600">No employees found</h3>
-            <p className="mt-1 text-sm text-slate-400">Onboard your first employee to get started.</p>
-          </div>
+          <EmptyState
+            icon={Users}
+            title="No employees found"
+            description="Onboard your first employee to get started."
+          />
         ) : filtered.length === 0 && employees.length > 0 ? (
-          <div className="mt-8 text-center rounded-xl border border-dashed border-slate-200 bg-white p-12">
-            <Search className="mx-auto h-8 w-8 text-slate-300" />
-            <h3 className="mt-3 text-sm font-medium text-slate-600">No employees match your search</h3>
-            <p className="mt-1 text-sm text-slate-400">Try a different search term.</p>
-          </div>
+          <EmptyState
+            icon={Search}
+            title="No employees match your search"
+            description="Try a different search term."
+          />
         ) : (
           /* Table */
           <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">

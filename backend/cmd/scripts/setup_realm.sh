@@ -26,6 +26,12 @@ REALM="${KEYCLOAK_REALM:-freecloud}"
 # Secret for the backend service-account client. Must match KEYCLOAK_CLIENT_SECRET
 # used by the Go backend. Generate with: openssl rand -hex 32
 SERVICE_CLIENT_SECRET="${KEYCLOAK_CLIENT_SECRET:-dev-only-secret-change-me}"
+# Demo user password. Override with DEMO_PASSWORD for non-default dev setups.
+DEMO_PASSWORD="${DEMO_PASSWORD:-demo123!}"
+DEMO_PASSWORD_IS_DEFAULT=false
+if [ -z "${DEMO_PASSWORD:-}" ] || [ "${DEMO_PASSWORD}" = "demo123!" ]; then
+  DEMO_PASSWORD_IS_DEFAULT=true
+fi
 
 # Get admin token
 echo "→ Authenticating as admin..."
@@ -129,9 +135,9 @@ if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
     \"firstName\": \"Demo\",
     \"lastName\": \"User\",
     \"enabled\": true,
-    \"credentials\": [{\"type\": \"password\", \"value\": \"demo123!\", \"temporary\": false}]
+    \"credentials\": [{\"type\": \"password\", \"value\": \"$DEMO_PASSWORD\", \"temporary\": false}]
   }" > /dev/null
-  echo "  Created (password: demo123!)."
+  echo "  Created (password set via DEMO_PASSWORD)."
 else
   echo "  Already exists."
 fi
@@ -139,7 +145,11 @@ fi
 echo ""
 echo "✓ Keycloak realm '$REALM' is ready."
 echo "  Admin console: $KC_URL/admin/$REALM/console"
-echo "  Demo user (DEV ONLY): demo@freecloud.local / demo123!"
+echo "  Demo user (DEV ONLY): demo@freecloud.local / $DEMO_PASSWORD"
+if [ "$DEMO_PASSWORD_IS_DEFAULT" = "true" ]; then
+  echo ""
+  echo "  ⚠ WARNING: using the default demo password. Override with DEMO_PASSWORD."
+fi
 echo ""
 echo "  ┌─ DEV ONLY ────────────────────────────────────────────────────┐"
 echo "  │ The service-account secret is printed below. Never use this  │"

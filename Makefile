@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-setup build-backend build-frontend clean verify
+.PHONY: dev-up dev-down db-migrate kc-setup build-backend build-frontend clean verify verify-db verify-all test-db
 
 dev-up:
 	docker compose -f docker/docker-compose.yml up -d
@@ -30,9 +30,45 @@ clean:
 	rm -rf bin/
 	docker compose -f docker/docker-compose.yml down -v
 
+# Fast no-live gate: vet, unit tests, frontend type-check + build.
 verify:
 	@echo "==> Go vet + test..."
 	cd backend && go vet ./... && go test ./...
 	@echo "==> Frontend type-check + build..."
 	cd frontend && npm install --no-audit --no-fund --include=dev && npm run verify
 	@echo "==> All checks passed."
+
+# DB-backed integration tests against TEST_DATABASE_URL (or a spun-up Postgres).
+# These are NOT part of the fast `verify` gate.
+test-db:
+	@if [ -z "$TEST_DATABASE_URL" ]; then \
+		echo "TEST_DATABASE_URL not set. Starting an ephemeral Postgres via docker..."; \
+		docker run --rm -d --name freecloud-test-pg \
+			-e POSTGRES_USER=freecloud \
+			-e POSTGRES_PASSWORD=freecloud \
+			-e POSTGRES_DB=freecloud_test \
+			-p 55432:5432 \
+			postgres:16-alpine >/dev/null; \
+		echo "Waiting for Postgres to be ready..."; \
+		for i in 1 2 3 4 5 6 7 8 9 10; do \
+			pg_isready -h localhost -p 55432 -U freecloud >/dev/null 2>&1 && break; \
+			sleep 1; \
+		done; \
+		cd backend && TEST_DATABASE_URL="postgres://freecloud:freecloud@localhost:55432/freecloud_test?sslmode=disable" \
+			go test -tags=integration -race ./internal/db/ -v; \
+		ret=$?; \
+		docker stop freecloud-test-pg >/dev/null 2>&1; \
+		exit $ret; \
+	else \
+		cd backend && go test -tags=integration -race ./internal/db/ -v; \
+	fi
+
+# DB gate: fast verify + the DB integration tests.
+verify-db: verify test-db
+	@echo "==> DB-backed checks passed."
+
+# Everything: fast verify + DB tests + race across all test packages.
+verify-all: verify
+	@echo "==> Go race tests (all packages)..."
+	cd backend && go test -race ./...
+	@echo "==> All checks (fast + race) passed."

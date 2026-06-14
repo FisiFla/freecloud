@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { Plus, Globe, AlertCircle, UserPlus } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
+import ErrorBanner from "@/components/ErrorBanner";
+import EmptyState from "@/components/EmptyState";
 import { listApps, createApp, listUsers, assignAppToUser, waitForAuthToken } from "@/lib/api";
 import type { App, User } from "@/lib/api";
 
@@ -112,9 +114,8 @@ export default function AppsPage() {
 
         {/* Error banner */}
         {error && (
-          <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-            <AlertCircle className="h-5 w-5 shrink-0" />
-            <span>{error}</span>
+          <div className="mt-4">
+            <ErrorBanner message={error} onDismiss={() => setError(null)} />
           </div>
         )}
 
@@ -174,10 +175,12 @@ export default function AppsPage() {
               </div>
             ))}
             {apps.length === 0 && (
-              <div className="col-span-full mt-8 text-center rounded-xl border border-dashed border-slate-200 bg-white p-12">
-                <Globe className="mx-auto h-8 w-8 text-slate-300" />
-                <h3 className="mt-3 text-sm font-medium text-slate-600">No applications configured yet</h3>
-                <p className="mt-1 text-sm text-slate-400">Add your first SSO application to get started.</p>
+              <div className="col-span-full">
+                <EmptyState
+                  icon={Globe}
+                  title="No applications configured yet"
+                  description="Add your first SSO application to get started."
+                />
               </div>
             )}
           </div>

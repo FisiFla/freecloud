@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Search, Filter, AlertCircle } from "lucide-react";
+import { Search, Filter } from "lucide-react";
 import { listAuditLogs, waitForAuthToken } from "@/lib/api";
 import type { AuditLogEntry } from "@/lib/api";
+import ErrorBanner from "@/components/ErrorBanner";
+import EmptyState from "@/components/EmptyState";
+import LoadingRows from "@/components/LoadingRows";
 
 const actionOptions = [
   "All Actions",
@@ -77,9 +80,8 @@ export default function AuditLogPage() {
 
       {/* Error banner */}
       {error && (
-        <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          <AlertCircle className="h-5 w-5 shrink-0" />
-          <span>{error}</span>
+        <div className="mt-4">
+          <ErrorBanner message={error} onDismiss={() => setError(null)} />
         </div>
       )}
 
@@ -148,17 +150,13 @@ export default function AuditLogPage() {
 
       {/* Loading skeleton */}
       {loading ? (
-        <div className="mt-4 space-y-2">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-12 animate-pulse rounded-xl bg-slate-200" />
-          ))}
-        </div>
+        <LoadingRows count={4} className="h-12" />
       ) : logs.length === 0 ? (
-        <div className="mt-8 text-center rounded-xl border border-dashed border-slate-200 bg-white p-12">
-          <Search className="mx-auto h-8 w-8 text-slate-300" />
-          <h3 className="mt-3 text-sm font-medium text-slate-600">No audit events found</h3>
-          <p className="mt-1 text-sm text-slate-400">Actions will appear here as you onboard employees and manage apps.</p>
-        </div>
+        <EmptyState
+          icon={Search}
+          title="No audit events found"
+          description="Actions will appear here as you onboard employees and manage apps."
+        />
       ) : (
         <>
           {/* Table */}
