@@ -76,14 +76,14 @@ test-db:
 		fi; \
 		trap 'docker stop freecloud-test-pg >/dev/null 2>&1 || true' EXIT; \
 		cd backend && TEST_DATABASE_URL="postgres://freecloud:freecloud@localhost:55432/freecloud_test?sslmode=disable" \
-			go test -tags=integration -race ./internal/db/ -v; \
+			go test -tags=integration -race -p 1 ./internal/db/ ./internal/handlers/ -v; \
 		ret=$$?; \
 		docker stop freecloud-test-pg >/dev/null 2>&1 || true; \
 		exit $$ret; \
 	else \
 		echo "Using TEST_DATABASE_URL from environment."; \
 		cd backend && TEST_DATABASE_URL="$$TEST_DATABASE_URL" \
-			go test -tags=integration -race ./internal/db/ -v; \
+			go test -tags=integration -race -p 1 ./internal/db/ ./internal/handlers/ -v; \
 	fi
 
 # DB gate: fast verify + the DB integration tests.
