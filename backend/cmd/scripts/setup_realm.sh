@@ -23,14 +23,41 @@ KC_URL="${KEYCLOAK_URL:-http://localhost:8081}"
 KC_ADMIN="${KEYCLOAK_ADMIN:-admin}"
 KC_ADMIN_PASS="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
 REALM="${KEYCLOAK_REALM:-freecloud}"
-# Secret for the backend service-account client. Must match KEYCLOAK_CLIENT_SECRET
-# used by the Go backend. Generate with: openssl rand -hex 32
-SERVICE_CLIENT_SECRET="${KEYCLOAK_CLIENT_SECRET:-dev-only-secret-change-me}"
-# Demo user password. Override with DEMO_PASSWORD for non-default dev setups.
-DEMO_PASSWORD="${DEMO_PASSWORD:-demo123!}"
-DEMO_PASSWORD_IS_DEFAULT=false
-if [ -z "${DEMO_PASSWORD:-}" ] || [ "${DEMO_PASSWORD}" = "demo123!" ]; then
-  DEMO_PASSWORD_IS_DEFAULT=true
+
+# Generate a random secret if KEYCLOAK_CLIENT_SECRET is unset, so dev setups
+# don't share a well-known value. Requires openssl (or /dev/urandom fallback).
+gen_random_hex() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32
+  elif [ -r /dev/urandom ]; then
+    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+  else
+    echo "" # caller handles the empty case
+  fi
+}
+
+SERVICE_SECRET_PROVIDED=true
+if [ -z "${KEYCLOAK_CLIENT_SECRET:-}" ]; then
+  SERVICE_SECRET_PROVIDED=false
+  SERVICE_CLIENT_SECRET="$(gen_random_hex)"
+  if [ -z "$SERVICE_CLIENT_SECRET" ]; then
+    echo "ERROR: KEYCLOAK_CLIENT_SECRET is unset and neither openssl nor /dev/urandom is available to generate one." >&2
+    exit 1
+  fi
+else
+  SERVICE_CLIENT_SECRET="$KEYCLOAK_CLIENT_SECRET"
+fi
+
+# Demo user toggle. Set CREATE_DEMO_USER=false to skip creating the demo user.
+CREATE_DEMO_USER="${CREATE_DEMO_USER:-true}"
+# Demo user password. Override with DEMO_PASSWORD; generated if unset.
+DEMO_PASSWORD_PROVIDED=true
+if [ -z "${DEMO_PASSWORD:-}" ]; then
+  DEMO_PASSWORD_PROVIDED=false
+  DEMO_PASSWORD="$(gen_random_hex | cut -c1-16)"
+  if [ -z "$DEMO_PASSWORD" ]; then
+    DEMO_PASSWORD="change-me-$(date +%s)"
+  fi
 fi
 
 # Get admin token
@@ -125,36 +152,50 @@ if [ -n "$SA_USER_ID" ] && [ "$SA_USER_ID" != "null" ]; then
   fi
 fi
 
-# Create a demo user for testing
-echo "→ Ensuring demo user 'demo@freecloud.local'..."
-USER_ID=$(curl -s "$KC_URL/admin/realms/$REALM/users?username=demo" -H "$AUTH" | jq -r '.[0].id')
-if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
-  curl -s -X POST "$KC_URL/admin/realms/$REALM/users" -H "$AUTH" -H "$CT" -d "{
-    \"username\": \"demo\",
-    \"email\": \"demo@freecloud.local\",
-    \"firstName\": \"Demo\",
-    \"lastName\": \"User\",
-    \"enabled\": true,
-    \"credentials\": [{\"type\": \"password\", \"value\": \"$DEMO_PASSWORD\", \"temporary\": false}]
-  }" > /dev/null
-  echo "  Created (password set via DEMO_PASSWORD)."
-else
-  echo "  Already exists."
+# Create a demo user for testing (skip with CREATE_DEMO_USER=false)
+if [ "$CREATE_DEMO_USER" = "true" ]; then
+  echo "→ Ensuring demo user 'demo@freecloud.local'..."
+  USER_ID=$(curl -s "$KC_URL/admin/realms/$REALM/users?username=demo" -H "$AUTH" | jq -r '.[0].id')
+  if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+    curl -s -X POST "$KC_URL/admin/realms/$REALM/users" -H "$AUTH" -H "$CT" -d "{
+      \"username\": \"demo\",
+      \"email\": \"demo@freecloud.local\",
+      \"firstName\": \"Demo\",
+      \"lastName\": \"User\",
+      \"enabled\": true,
+      \"credentials\": [{\"type\": \"password\", \"value\": \"$DEMO_PASSWORD\", \"temporary\": false}]
+    }" > /dev/null
+    echo "  Created."
+  else
+    echo "  Already exists."
+  fi
 fi
 
 echo ""
 echo "✓ Keycloak realm '$REALM' is ready."
 echo "  Admin console: $KC_URL/admin/$REALM/console"
-echo "  Demo user (DEV ONLY): demo@freecloud.local / $DEMO_PASSWORD"
-if [ "$DEMO_PASSWORD_IS_DEFAULT" = "true" ]; then
-  echo ""
-  echo "  ⚠ WARNING: using the default demo password. Override with DEMO_PASSWORD."
+
+if [ "$CREATE_DEMO_USER" = "true" ]; then
+  if [ "$DEMO_PASSWORD_PROVIDED" = "true" ]; then
+    echo "  Demo user: demo@freecloud.local (password: set via DEMO_PASSWORD)"
+  else
+    # Password was generated this run — print it once so the dev can log in.
+    echo "  Demo user: demo@freecloud.local / $DEMO_PASSWORD  (auto-generated; set DEMO_PASSWORD to override)"
+  fi
+else
+  echo "  Demo user: skipped (CREATE_DEMO_USER=false)"
 fi
+
 echo ""
 echo "  ┌─ DEV ONLY ────────────────────────────────────────────────────┐"
 echo "  │ The service-account secret is printed below. Never use this  │"
 echo "  │ output in staging/production. Rotate before any real deploy. │"
 echo "  └──────────────────────────────────────────────────────────────┘"
-echo "  Backend service-account client 'freecloud-service' secret:"
-echo "    $SERVICE_CLIENT_SECRET"
+if [ "$SERVICE_SECRET_PROVIDED" = "true" ]; then
+  echo "  Backend service-account client 'freecloud-service' secret:"
+  echo "    (provided via KEYCLOAK_CLIENT_SECRET — not reprinted here)"
+else
+  echo "  Backend service-account client 'freecloud-service' secret (auto-generated):"
+  echo "    $SERVICE_CLIENT_SECRET"
+fi
 echo "  Set this as KEYCLOAK_CLIENT_SECRET for the Go backend."

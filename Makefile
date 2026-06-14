@@ -40,27 +40,45 @@ verify:
 
 # DB-backed integration tests against TEST_DATABASE_URL (or a spun-up Postgres).
 # These are NOT part of the fast `verify` gate.
-# NOTE: every shell variable reference in a Make recipe must use $ (Make
+# NOTE: every shell variable reference in a Make recipe must use $$ (Make
 # consumes a single $ as its own variable syntax). Omitting the second $
 # silently rewrites the variable name and causes the test suite to skip.
 test-db:
 	@if [ -z "$$TEST_DATABASE_URL" ]; then \
-		echo "TEST_DATABASE_URL not set. Starting an ephemeral Postgres via docker..."; \
-		docker run --rm -d --name freecloud-test-pg \
+		echo "TEST_DATABASE_URL not set. Checking for Docker..."; \
+		if ! command -v docker >/dev/null 2>&1; then \
+			echo ""; \
+			echo "ERROR: Docker is not installed and TEST_DATABASE_URL is not set."; \
+			echo "       Either install Docker, or run against an existing Postgres:"; \
+			echo "         TEST_DATABASE_URL=postgres://user:pass@host:5432/dbname?sslmode=disable make test-db"; \
+			echo ""; \
+			exit 1; \
+		fi; \
+		echo "Starting an ephemeral Postgres 16 via docker..."; \
+		if ! docker run --rm -d --name freecloud-test-pg \
 			-e POSTGRES_USER=freecloud \
 			-e POSTGRES_PASSWORD=freecloud \
 			-e POSTGRES_DB=freecloud_test \
 			-p 55432:5432 \
-			postgres:16-alpine >/dev/null; \
-		echo "Waiting for Postgres to be ready..."; \
-		for i in 1 2 3 4 5 6 7 8 9 10; do \
-			pg_isready -h localhost -p 55432 -U freecloud >/dev/null 2>&1 && break; \
-			sleep 1; \
-		done; \
+			postgres:16-alpine >/dev/null; then \
+			echo "ERROR: failed to start the Postgres container. Is the Docker daemon running?"; \
+			exit 1; \
+		fi; \
+		if ! command -v pg_isready >/dev/null 2>&1; then \
+			echo "pg_isready not found; falling back to a fixed 5s wait for Postgres..."; \
+			sleep 5; \
+		else \
+			echo "Waiting for Postgres to accept connections..."; \
+			for i in 1 2 3 4 5 6 7 8 9 10; do \
+				pg_isready -h localhost -p 55432 -U freecloud >/dev/null 2>&1 && break; \
+				sleep 1; \
+			done; \
+		fi; \
+		trap 'docker stop freecloud-test-pg >/dev/null 2>&1 || true' EXIT; \
 		cd backend && TEST_DATABASE_URL="postgres://freecloud:freecloud@localhost:55432/freecloud_test?sslmode=disable" \
 			go test -tags=integration -race ./internal/db/ -v; \
 		ret=$$?; \
-		docker stop freecloud-test-pg >/dev/null 2>&1; \
+		docker stop freecloud-test-pg >/dev/null 2>&1 || true; \
 		exit $$ret; \
 	else \
 		echo "Using TEST_DATABASE_URL from environment."; \
@@ -72,8 +90,8 @@ test-db:
 verify-db: verify test-db
 	@echo "==> DB-backed checks passed."
 
-# Everything: fast verify + DB tests + race across all test packages.
-verify-all: verify
+# Everything: fast verify + DB integration tests + race across all packages.
+verify-all: verify-db
 	@echo "==> Go race tests (all packages)..."
 	cd backend && go test -race ./...
-	@echo "==> All checks (fast + race) passed."
+	@echo "==> All checks (fast + DB + race) passed."
