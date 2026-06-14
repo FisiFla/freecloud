@@ -9,6 +9,9 @@ KC_URL="${KEYCLOAK_URL:-http://localhost:8081}"
 KC_ADMIN="${KEYCLOAK_ADMIN:-admin}"
 KC_ADMIN_PASS="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
 REALM="${KEYCLOAK_REALM:-freecloud}"
+# Secret for the backend service-account client. Must match KEYCLOAK_CLIENT_SECRET
+# used by the Go backend. Generate with: openssl rand -hex 32
+SERVICE_CLIENT_SECRET="${KEYCLOAK_CLIENT_SECRET:-dev-only-secret-change-me}"
 
 # Get admin token
 echo "→ Authenticating as admin..."
@@ -59,23 +62,47 @@ for group in "${GROUPS[@]}"; do
   fi
 done
 
-# Create admin-cli client with client credentials (for backend-to-KC communication)
-echo "→ Ensuring 'admin-cli' client..."
-CLIENT_ID=$(curl -s "$KC_URL/admin/realms/$REALM/clients?clientId=admin-cli" -H "$AUTH" | jq -r '.[0].id')
-if [ -z "$CLIENT_ID" ] || [ "$CLIENT_ID" = "null" ]; then
+# Create a confidential client for backend-to-KC communication.
+# We deliberately use a custom clientId ("freecloud-service") instead of
+# reusing Keycloak's reserved "admin-cli" name to avoid confusion with the
+# built-in public client.
+SERVICE_CLIENT_ID="freecloud-service"
+echo "→ Ensuring '$SERVICE_CLIENT_ID' client with a service account..."
+CLIENT_UUID=$(curl -s "$KC_URL/admin/realms/$REALM/clients?clientId=$SERVICE_CLIENT_ID" -H "$AUTH" | jq -r '.[0].id')
+if [ -z "$CLIENT_UUID" ] || [ "$CLIENT_UUID" = "null" ]; then
   curl -s -X POST "$KC_URL/admin/realms/$REALM/clients" -H "$AUTH" -H "$CT" -d "{
-    \"clientId\": \"admin-cli\",
-    \"name\": \"FreeCloud Admin CLI\",
+    \"clientId\": \"$SERVICE_CLIENT_ID\",
+    \"name\": \"FreeCloud Backend Service\",
     \"enabled\": true,
     \"publicClient\": false,
     \"serviceAccountsEnabled\": true,
     \"authorizationServicesEnabled\": false,
     \"standardFlowEnabled\": false,
-    \"directAccessGrantsEnabled\": false
+    \"directAccessGrantsEnabled\": false,
+    \"secret\": \"$SERVICE_CLIENT_SECRET\"
   }" > /dev/null
+  # Re-fetch the generated UUID now that it exists
+  CLIENT_UUID=$(curl -s "$KC_URL/admin/realms/$REALM/clients?clientId=$SERVICE_CLIENT_ID" -H "$AUTH" | jq -r '.[0].id')
   echo "  Created."
 else
-  echo "  Already exists."
+  # Ensure the secret matches what we want (idempotent update)
+  curl -s -X PUT "$KC_URL/admin/realms/$REALM/clients/$CLIENT_UUID" -H "$AUTH" -H "$CT" \
+    -d "{\"secret\": \"$SERVICE_CLIENT_SECRET\"}" > /dev/null
+  echo "  Already exists (secret synced)."
+fi
+
+# Grant the service account realm-admin role so it can manage users/clients
+SA_USER_ID=$(curl -s "$KC_URL/admin/realms/$REALM/users?username=service-account-$SERVICE_CLIENT_ID" -H "$AUTH" | jq -r '.[0].id')
+if [ -n "$SA_USER_ID" ] && [ "$SA_USER_ID" != "null" ]; then
+  REALM_MANAGEMENT_UUID=$(curl -s "$KC_URL/admin/realms/$REALM/clients?clientId=realm-management" -H "$AUTH" | jq -r '.[0].id')
+  if [ -n "$REALM_MANAGEMENT_UUID" ] && [ "$REALM_MANAGEMENT_UUID" != "null" ]; then
+    ADMIN_ROLE=$(curl -s "$KC_URL/admin/realms/$REALM/clients/$REALM_MANAGEMENT_UUID/roles/realm-admin" -H "$AUTH" | jq -c '.')
+    if [ -n "$ADMIN_ROLE" ] && [ "$ADMIN_ROLE" != "null" ]; then
+      curl -s -X POST "$KC_URL/admin/realms/$REALM/users/$SA_USER_ID/role-mappings/clients/$REALM_MANAGEMENT_UUID" \
+        -H "$AUTH" -H "$CT" -d "[$ADMIN_ROLE]" > /dev/null
+      echo "  Granted realm-admin to service account."
+    fi
+  fi
 fi
 
 # Create a demo user for testing
@@ -99,3 +126,7 @@ echo ""
 echo "✓ Keycloak realm '$REALM' is ready."
 echo "  Admin console: $KC_URL/admin/$REALM/console"
 echo "  Demo user: demo@freecloud.local / demo123!"
+echo ""
+echo "  Backend service-account client 'freecloud-service' secret:"
+echo "    $SERVICE_CLIENT_SECRET"
+echo "  Set this as KEYCLOAK_CLIENT_SECRET for the Go backend."

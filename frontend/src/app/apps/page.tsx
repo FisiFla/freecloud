@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Plus, Globe, AlertCircle, UserPlus } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
-import { listApps, createApp, listUsers, assignAppToUser } from "@/lib/api";
+import { listApps, createApp, listUsers, assignAppToUser, waitForAuthToken } from "@/lib/api";
 import type { App, User } from "@/lib/api";
 
 export default function AppsPage() {
@@ -30,6 +30,7 @@ export default function AppsPage() {
       try {
         setLoading(true);
         setError(null);
+        await waitForAuthToken();
         const data = await listApps();
         setApps(data);
       } catch (err: unknown) {
@@ -44,6 +45,7 @@ export default function AppsPage() {
   useEffect(() => {
     const fetchUsers = async () => {
       try {
+        await waitForAuthToken();
         const data = await listUsers();
         setUsers(Array.isArray(data) ? data : []);
       } catch {
@@ -138,7 +140,7 @@ export default function AppsPage() {
                 </div>
 
                 <h3 className="mt-4 font-semibold text-slate-800">{app.name}</h3>
-                <p className="mt-1 text-xs text-slate-500 truncate">{app.baseURL}</p>
+                <p className="mt-1 text-xs text-slate-500 truncate">{app.baseUrl}</p>
 
                 <div className="mt-4 flex items-center gap-2">
                   <span

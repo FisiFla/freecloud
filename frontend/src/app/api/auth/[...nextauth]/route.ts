@@ -1,6 +1,9 @@
 import NextAuth from "next-auth";
 import KeycloakProvider from "next-auth/providers/keycloak";
 
+// Mark this route as dynamic — it must never be statically prerendered.
+export const dynamic = "force-dynamic";
+
 const handler = NextAuth({
   providers: [
     KeycloakProvider({

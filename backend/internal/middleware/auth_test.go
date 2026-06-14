@@ -92,17 +92,18 @@ func TestAuthMiddlewareInvalidToken(t *testing.T) {
 }
 
 // generateTestKeyAndJWKS creates a real RSA key pair and returns the private key,
-// a JWKS JSON payload, and the expected issuer for a test server.
-func generateTestKeyAndJWKS(t *testing.T) (*rsa.PrivateKey, string, string) {
+// a JWKS JSON payload (including a kid), the kid, and the expected issuer.
+func generateTestKeyAndJWKS(t *testing.T) (*rsa.PrivateKey, string, string, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("failed to generate RSA key: %v", err)
 	}
+	kid := "test-key-1"
 	n := base64.RawURLEncoding.EncodeToString(key.N.Bytes())
 	e := base64.RawURLEncoding.EncodeToString([]byte{0x01, 0x00, 0x01})
-	jwksPayload := fmt.Sprintf(`{"keys":[{"kty":"RSA","n":"%s","e":"%s","alg":"RS256"}]}`, n, e)
-	return key, jwksPayload, ""
+	jwksPayload := fmt.Sprintf(`{"keys":[{"kty":"RSA","kid":"%s","use":"sig","alg":"RS256","n":"%s","e":"%s"}]}`, kid, n, e)
+	return key, jwksPayload, kid, ""
 }
 
 // startJWKSServer starts an httptest.Server serving the given JWKS payload
@@ -117,10 +118,13 @@ func startJWKSServer(t *testing.T, jwksPayload string) *httptest.Server {
 	return srv
 }
 
-// signedToken creates a signed JWT with the given claims, signed by privKey.
-func signedToken(t *testing.T, privKey *rsa.PrivateKey, claims jwt.MapClaims) string {
+// signedToken creates a signed JWT with the given claims and kid, signed by privKey.
+func signedToken(t *testing.T, privKey *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
 	t.Helper()
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	if kid != "" {
+		tok.Header["kid"] = kid
+	}
 	s, err := tok.SignedString(privKey)
 	if err != nil {
 		t.Fatalf("failed to sign token: %v", err)
@@ -130,14 +134,14 @@ func signedToken(t *testing.T, privKey *rsa.PrivateKey, claims jwt.MapClaims) st
 
 // TestAuthMiddlewareAdminBoundary verifies an admin token reaches /api/v1/users.
 func TestAuthMiddlewareAdminBoundary(t *testing.T) {
-	privKey, jwksPayload, _ := generateTestKeyAndJWKS(t)
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
 	jwksSrv := startJWKSServer(t, jwksPayload)
 
 	issuer := jwksSrv.URL + "/realms/freecloud"
 	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
 
 	now := time.Now()
-	tokenStr := signedToken(t, privKey, jwt.MapClaims{
+	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
 		"sub":               "admin-user",
 		"iss":               issuer,
 		"aud":               "freecloud-dashboard",
@@ -173,14 +177,14 @@ func TestAuthMiddlewareAdminBoundary(t *testing.T) {
 
 // TestAuthMiddlewareNonAdminBlocked verifies a non-admin token gets 403 on /api/v1/users.
 func TestAuthMiddlewareNonAdminBlocked(t *testing.T) {
-	privKey, jwksPayload, _ := generateTestKeyAndJWKS(t)
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
 	jwksSrv := startJWKSServer(t, jwksPayload)
 
 	issuer := jwksSrv.URL + "/realms/freecloud"
 	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
 
 	now := time.Now()
-	tokenStr := signedToken(t, privKey, jwt.MapClaims{
+	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
 		"sub":               "regular-user",
 		"iss":               issuer,
 		"aud":               "freecloud-dashboard",
@@ -210,14 +214,14 @@ func TestAuthMiddlewareNonAdminBlocked(t *testing.T) {
 
 // TestAuthMiddlewareWrongAudience verifies a token with the wrong audience gets 401.
 func TestAuthMiddlewareWrongAudience(t *testing.T) {
-	privKey, jwksPayload, _ := generateTestKeyAndJWKS(t)
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
 	jwksSrv := startJWKSServer(t, jwksPayload)
 
 	issuer := jwksSrv.URL + "/realms/freecloud"
 	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
 
 	now := time.Now()
-	tokenStr := signedToken(t, privKey, jwt.MapClaims{
+	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
 		"sub":               "user",
 		"iss":               issuer,
 		"aud":               "wrong-audience",
@@ -247,7 +251,7 @@ func TestAuthMiddlewareWrongAudience(t *testing.T) {
 
 // TestAuthMiddlewareWrongIssuer verifies a token with the wrong issuer gets 401.
 func TestAuthMiddlewareWrongIssuer(t *testing.T) {
-	privKey, jwksPayload, _ := generateTestKeyAndJWKS(t)
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
 	jwksSrv := startJWKSServer(t, jwksPayload)
 
 	// Create middleware but manually override expectedIssuer to cause mismatch
@@ -256,7 +260,7 @@ func TestAuthMiddlewareWrongIssuer(t *testing.T) {
 	wrongIssuer := "http://evil.example.com/realms/freecloud"
 
 	now := time.Now()
-	tokenStr := signedToken(t, privKey, jwt.MapClaims{
+	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
 		"sub":               "user",
 		"iss":               wrongIssuer,
 		"aud":               "freecloud-dashboard",
@@ -286,14 +290,14 @@ func TestAuthMiddlewareWrongIssuer(t *testing.T) {
 
 // TestAuthMiddlewareExpiredToken verifies an expired token is rejected.
 func TestAuthMiddlewareExpiredToken(t *testing.T) {
-	privKey, jwksPayload, _ := generateTestKeyAndJWKS(t)
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
 	jwksSrv := startJWKSServer(t, jwksPayload)
 
 	issuer := jwksSrv.URL + "/realms/freecloud"
 	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
 
 	now := time.Now()
-	tokenStr := signedToken(t, privKey, jwt.MapClaims{
+	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
 		"sub":               "user",
 		"iss":               issuer,
 		"aud":               "freecloud-dashboard",
@@ -324,7 +328,7 @@ func TestAuthMiddlewareExpiredToken(t *testing.T) {
 // TestAuthMiddlewareWrongKey verifies a token signed with an unknown key is rejected.
 func TestAuthMiddlewareWrongKey(t *testing.T) {
 	// Generate two different key pairs
-	_, jwksPayload, _ := generateTestKeyAndJWKS(t) // first key — the JWKS server serves this one
+	_, jwksPayload, _, _ := generateTestKeyAndJWKS(t) // first key — the JWKS server serves this one
 	wrongKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("failed to generate wrong key: %v", err)
@@ -337,8 +341,9 @@ func TestAuthMiddlewareWrongKey(t *testing.T) {
 	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
 
 	now := time.Now()
-	// Sign with the wrong (unknown) private key
-	tokenStr := signedToken(t, wrongKey, jwt.MapClaims{
+	// Sign with the wrong (unknown) private key. Use a kid that won't match
+	// anything in the JWKS, forcing a refresh and then a "no key for kid" failure.
+	tokenStr := signedToken(t, wrongKey, "unknown-kid", jwt.MapClaims{
 		"sub":               "user",
 		"iss":               issuer,
 		"aud":               "freecloud-dashboard",

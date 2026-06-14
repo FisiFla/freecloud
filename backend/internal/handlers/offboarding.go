@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"sync/atomic"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -38,8 +37,8 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		zap.String("actor_id", actorID),
 	)
 
-	var devicesWiped int64
-	var devicesFailed int64
+	var devicesWiped int
+	var devicesFailed int
 	var sessionsTerminated bool
 	var sessionError string
 	var warnings []string
@@ -101,16 +100,16 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Step 4: Wipe each device best-effort (no context cancellation across wipes)
+	// Step 4: Wipe each device best-effort (sequential, no shared mutation)
 	for _, devID := range deviceIDs {
 		if err := h.fleet.IssueRemoteWipe(ctx, devID); err != nil {
 			logger.Error("failed to wipe device",
 				zap.String("device_id", devID),
 				zap.Error(err),
 			)
-			atomic.AddInt64(&devicesFailed, 1)
+			devicesFailed++
 		} else {
-			atomic.AddInt64(&devicesWiped, 1)
+			devicesWiped++
 		}
 	}
 
