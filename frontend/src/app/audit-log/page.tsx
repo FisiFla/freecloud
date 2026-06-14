@@ -23,6 +23,13 @@ export default function AuditLogPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  // Debounce the actor filter so we don't fire a request per keystroke.
+  const [debouncedActor, setDebouncedActor] = useState("");
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedActor(actorFilter), 300);
+    return () => clearTimeout(t);
+  }, [actorFilter]);
+
   useEffect(() => {
     const fetchLogs = async () => {
       try {
@@ -30,8 +37,9 @@ export default function AuditLogPage() {
         setError(null);
         await waitForAuthToken();
         const data = await listAuditLogs({
-          actor: actorFilter || undefined,
+          actor: debouncedActor || undefined,
           action: actionFilter !== "All Actions" ? actionFilter : undefined,
+          limit: 100,
         });
         setLogs(data);
       } catch (err: unknown) {
@@ -41,7 +49,7 @@ export default function AuditLogPage() {
       }
     };
     fetchLogs();
-  }, [actorFilter, actionFilter]);
+  }, [debouncedActor, actionFilter]);
 
   // Actor and action filters are applied server-side via listAuditLogs().
   // Only the date-range filter is applied client-side here (not yet supported

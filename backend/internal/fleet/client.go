@@ -8,10 +8,15 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"time"
 
 	"go.uber.org/zap"
 )
+
+// hostIDPattern restricts host IDs to a safe charset so they cannot be used
+// for path traversal or query injection against the FleetDM API.
+var hostIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 // Host represents a FleetDM host/device.
 type Host struct {
@@ -154,8 +159,23 @@ func (f *FleetClient) GetHosts(ctx context.Context, query string) ([]Host, error
 	return result.Hosts, nil
 }
 
+// validateHostID rejects host IDs that could traverse or inject into the URL
+// path segment. FleetDM host IDs are opaque tokens (UUIDs or numeric IDs).
+func validateHostID(hostID string) error {
+	if hostID == "" {
+		return fmt.Errorf("hostID is empty")
+	}
+	if !hostIDPattern.MatchString(hostID) {
+		return fmt.Errorf("invalid hostID format")
+	}
+	return nil
+}
+
 // GetHostSoftware retrieves software installed on a specific host.
 func (f *FleetClient) GetHostSoftware(ctx context.Context, hostID string) ([]Software, error) {
+	if err := validateHostID(hostID); err != nil {
+		return nil, err
+	}
 	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/software", hostID)
 	body, err := f.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
@@ -174,6 +194,9 @@ func (f *FleetClient) GetHostSoftware(ctx context.Context, hostID string) ([]Sof
 
 // GetHostSecurityState queries a host's details to determine security state.
 func (f *FleetClient) GetHostSecurityState(ctx context.Context, hostID string) (*SecurityState, error) {
+	if err := validateHostID(hostID); err != nil {
+		return nil, err
+	}
 	path := fmt.Sprintf("/api/v1/fleet/hosts/%s", hostID)
 	body, err := f.doRequest(ctx, http.MethodGet, path, nil)
 	if err != nil {
@@ -227,6 +250,9 @@ func (f *FleetClient) Ping(ctx context.Context) error {
 
 // IssueRemoteLock issues a remote lock command to a host.
 func (f *FleetClient) IssueRemoteLock(ctx context.Context, hostID string) error {
+	if err := validateHostID(hostID); err != nil {
+		return err
+	}
 	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/lock", hostID)
 	_, err := f.doRequest(ctx, http.MethodPost, path, nil)
 	if err != nil {
@@ -243,6 +269,9 @@ func (f *FleetClient) IssueRemoteLock(ctx context.Context, hostID string) error 
 
 // IssueRemoteWipe issues a remote wipe command to a host.
 func (f *FleetClient) IssueRemoteWipe(ctx context.Context, hostID string) error {
+	if err := validateHostID(hostID); err != nil {
+		return err
+	}
 	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/wipe", hostID)
 	_, err := f.doRequest(ctx, http.MethodPost, path, nil)
 	if err != nil {

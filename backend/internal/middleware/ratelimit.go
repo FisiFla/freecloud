@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"sync"
@@ -9,8 +10,8 @@ import (
 
 // rateLimitEntry tracks request timestamps for a single client key.
 type rateLimitEntry struct {
-	mu       sync.Mutex
-	times    []time.Time
+	mu    sync.Mutex
+	times []time.Time
 }
 
 // RateLimiter is a simple in-memory, per-client sliding-window rate limiter.
@@ -21,31 +22,39 @@ type RateLimiter struct {
 	entries map[string]*rateLimitEntry
 	limit   int
 	window  time.Duration
+	cancel  context.CancelFunc
 }
 
 // NewRateLimiter creates a RateLimiter allowing at most `limit` requests per
-// `window` per client (identified by remote address).
+// `window` per client. The background GC goroutine is tied to the returned
+// cancel func via Stop().
 func NewRateLimiter(limit int, window time.Duration) *RateLimiter {
+	ctx, cancel := context.WithCancel(context.Background())
 	rl := &RateLimiter{
 		entries: make(map[string]*rateLimitEntry),
 		limit:   limit,
 		window:  window,
+		cancel:  cancel,
 	}
-	// Periodically prune stale entries so the map doesn't grow unbounded.
-	go rl.gc()
+	go rl.gc(ctx)
 	return rl
 }
 
+// Stop halts the background GC goroutine. Safe to call multiple times.
+func (rl *RateLimiter) Stop() {
+	rl.cancel()
+}
+
 // Middleware returns an HTTP middleware that enforces the rate limit.
+//
+// The client is identified by r.RemoteAddr only. X-Forwarded-For is NOT
+// trusted because it is trivially spoofable by the client and would allow
+// bypassing the limit by rotating the header value per request. If you run
+// behind a trusted proxy, configure chi's RealIP middleware with an explicit
+// proxy allowlist instead.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Use the forwarded-for or remote addr as the client key.
-		key := r.RemoteAddr
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			key = xff
-		}
-
-		if !rl.allow(key) {
+		if !rl.allow(r.RemoteAddr) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", strconv.Itoa(int(rl.window.Seconds())))
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -91,19 +100,24 @@ func (rl *RateLimiter) allow(key string) bool {
 }
 
 // gc periodically removes entries that haven't been touched within the window.
-func (rl *RateLimiter) gc() {
+func (rl *RateLimiter) gc(ctx context.Context) {
 	ticker := time.NewTicker(rl.window)
 	defer ticker.Stop()
-	for range ticker.C {
-		rl.mu.Lock()
-		cutoff := time.Now().Add(-rl.window)
-		for k, entry := range rl.entries {
-			entry.mu.Lock()
-			if len(entry.times) == 0 || !entry.times[len(entry.times)-1].After(cutoff) {
-				delete(rl.entries, k)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rl.mu.Lock()
+			cutoff := time.Now().Add(-rl.window)
+			for k, entry := range rl.entries {
+				entry.mu.Lock()
+				if len(entry.times) == 0 || !entry.times[len(entry.times)-1].After(cutoff) {
+					delete(rl.entries, k)
+				}
+				entry.mu.Unlock()
 			}
-			entry.mu.Unlock()
+			rl.mu.Unlock()
 		}
-		rl.mu.Unlock()
 	}
 }

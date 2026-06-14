@@ -27,6 +27,10 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "userId is required")
 		return
 	}
+	if !isValidUUID(userID) {
+		respondError(w, http.StatusBadRequest, "userId must be a valid UUID")
+		return
+	}
 
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
@@ -47,28 +51,30 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 
 	// Step 1: Disable user in Keycloak
 	if err := h.keycloak.DisableUser(ctx, userID); err != nil {
-		warnings = append(warnings, "disable user: "+err.Error())
-	} else {
-		// Soft-disable user in local DB
-		if h.db != nil {
-			_, dbErr := h.db.Exec(ctx,
-				`UPDATE users SET role = CONCAT(COALESCE(role, ''), ' (DISABLED)'), updated_at = NOW() WHERE keycloak_user_id = $1`,
-				userID,
+		logger.Warn("failed to disable user in Keycloak", zap.String("user_id", userID), zap.Error(err))
+		warnings = append(warnings, "failed to disable user in identity provider")
+	}
+	// Always best-effort soft-disable in local DB regardless of Keycloak outcome,
+	// so local state reflects the intent even if Keycloak is unreachable.
+	if h.db != nil {
+		_, dbErr := h.db.Exec(ctx,
+			`UPDATE users SET role = CONCAT(COALESCE(role, ''), ' (DISABLED)'), updated_at = NOW() WHERE keycloak_user_id = $1`,
+			userID,
+		)
+		if dbErr != nil {
+			logger.Warn("failed to soft-disable user in local DB",
+				zap.String("user_id", userID),
+				zap.Error(dbErr),
 			)
-			if dbErr != nil {
-				logger.Warn("failed to soft-disable user in local DB",
-					zap.String("user_id", userID),
-					zap.Error(dbErr),
-				)
-				warnings = append(warnings, "local DB disable: "+dbErr.Error())
-			}
+			warnings = append(warnings, "failed to mark user disabled locally")
 		}
 	}
 
 	// Step 2: Logout all sessions
 	if err := h.keycloak.LogoutAllSessions(ctx, userID); err != nil {
-		sessionError = err.Error()
-		warnings = append(warnings, "logout sessions: "+sessionError)
+		logger.Warn("failed to logout sessions", zap.String("user_id", userID), zap.Error(err))
+		sessionError = "session termination failed"
+		warnings = append(warnings, "failed to terminate user sessions")
 	} else {
 		sessionsTerminated = true
 	}
@@ -82,7 +88,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		)
 		if err != nil {
 			logger.Error("failed to query device mapping", zap.Error(err))
-			warnings = append(warnings, "device lookup: "+err.Error())
+			warnings = append(warnings, "failed to look up user devices")
 		} else {
 			for rows.Next() {
 				var devID string
@@ -94,7 +100,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := rows.Err(); err != nil {
 				logger.Error("error iterating device rows", zap.Error(err))
-				warnings = append(warnings, "device iterator: "+err.Error())
+				warnings = append(warnings, "failed to read user devices")
 			}
 			rows.Close()
 		}

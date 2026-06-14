@@ -70,9 +70,14 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
 
   // If we have a result, show credentials panel
   if (result) {
-    const copyToClipboard = (text: string) => {
-      navigator.clipboard.writeText(text);
-      setCopied(true);
+    const copyToClipboard = async (text: string) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch {
+        setError("Could not copy to clipboard — check browser permissions.");
+      }
     };
 
     return (
@@ -144,7 +149,16 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
 
         <button
           type="button"
-          onClick={onSuccess}
+          onClick={() => {
+            // Reset form state so a reopened panel shows a blank form.
+            setResult(null);
+            setFirstName("");
+            setLastName("");
+            setEmail("");
+            setRole("");
+            setCopied(false);
+            onSuccess?.();
+          }}
           className="mt-6 w-full rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200"
         >
           Close

@@ -12,6 +12,27 @@ import KeycloakProvider from "next-auth/providers/keycloak";
  *   AUTH_URL                  — app base URL (was NEXTAUTH_URL); optional in prod
  */
 
+// Augment the Session type so the access token and refresh-error flag are
+// visible to client/server consumers without `as any` casts.
+declare module "next-auth" {
+  interface Session {
+    accessToken?: string;
+    idToken?: string;
+    error?: "RefreshAccessTokenError";
+  }
+}
+
+// The JWT type from @auth/core extends Record<string, unknown>, so our custom
+// fields are accepted but typed as `unknown`. This alias narrows them at the
+// read sites inside the callbacks below.
+type TokenWithAccess = {
+  accessToken?: string;
+  idToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  error?: "RefreshAccessTokenError";
+};
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     KeycloakProvider({
@@ -30,14 +51,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   },
   callbacks: {
     async jwt({ token, account }) {
-      type AugmentedToken = typeof token & {
-        accessToken?: string;
-        idToken?: string;
-        refreshToken?: string;
-        expiresAt?: number;
-        error?: "RefreshAccessTokenError";
-      };
-      const t = token as AugmentedToken;
+      const t = token as typeof token & TokenWithAccess;
 
       // Initial sign-in: persist the OIDC tokens on the JWT.
       if (account) {
@@ -90,15 +104,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return t;
     },
     async session({ session, token }) {
-      type AugmentedToken = typeof token & {
-        accessToken?: string;
-        idToken?: string;
-        error?: "RefreshAccessTokenError";
-      };
-      const t = token as AugmentedToken;
-      // Surface the access token and any refresh error on the session object.
+      const t = token as typeof token & TokenWithAccess;
       session.accessToken = t.accessToken;
-      (session as typeof session & { idToken?: string }).idToken = t.idToken;
+      session.idToken = t.idToken;
       session.error = t.error;
       return session;
     },
@@ -110,10 +118,3 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
   },
 });
-
-declare module "next-auth" {
-  interface Session {
-    accessToken?: string;
-    error?: "RefreshAccessTokenError";
-  }
-}

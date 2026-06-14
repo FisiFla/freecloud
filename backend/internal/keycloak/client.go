@@ -244,10 +244,9 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 		return "", err
 	}
 
-	clientID := uuid.New().String()
-
+	// Let Keycloak assign the client's internal ID; we only need the
+	// clientId (human name) and returned createdID.
 	client := gocloak.Client{
-		ID:                        &clientID,
 		ClientID:                  &name,
 		Name:                      &name,
 		Protocol:                  &protocol,

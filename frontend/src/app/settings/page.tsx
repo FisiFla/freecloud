@@ -48,8 +48,8 @@ export default function SettingsPage() {
       let connected = false;
       const endpoint = services[index].endpoint;
       if (endpoint === "/api/v1/health") {
-        await healthCheck();
-        connected = true;
+        const result = await healthCheck();
+        connected = result.status === "ok";
       } else if (endpoint === "/api/v1/health/keycloak") {
         const result = await healthKeycloak();
         connected = result.status === "ok";

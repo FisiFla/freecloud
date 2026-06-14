@@ -67,6 +67,12 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	} else if !strings.Contains(req.Email, "@") {
 		valErrors = append(valErrors, ValidationError{Field: "email", Message: "email must contain @"})
 	}
+	if len(req.Department) > 100 {
+		valErrors = append(valErrors, ValidationError{Field: "department", Message: "department must be ≤ 100 characters"})
+	}
+	if len(req.Role) > 100 {
+		valErrors = append(valErrors, ValidationError{Field: "role", Message: "role must be ≤ 100 characters"})
+	}
 	if len(valErrors) > 0 {
 		respondValidationErrors(w, valErrors)
 		return
@@ -84,7 +90,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	result, err := h.keycloak.CreateUser(ctx, req.FirstName, req.LastName, req.Email, req.Department)
 	if err != nil {
 		logger.Error("keycloak user creation failed", zap.Error(err))
-		respondError(w, http.StatusInternalServerError, "keycloak user creation failed: "+err.Error())
+		respondError(w, http.StatusInternalServerError, "failed to create user in identity provider")
 		return
 	}
 	if !result.PasswordSet {
