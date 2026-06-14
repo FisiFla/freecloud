@@ -4,8 +4,9 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { offboardUser, getUser, waitForAuthToken } from "@/lib/api";
+import { offboardUser, getUser } from "@/lib/api";
 import type { OffboardResponse, Device } from "@/lib/api";
+import { useApiReady } from "../../providers";
 
 interface EmployeeDetail {
   id: string;
@@ -19,6 +20,7 @@ interface EmployeeDetail {
 export default function EmployeeDetailPage() {
   const params = useParams();
   const userId = (params?.id as string) ?? "";
+  const apiReady = useApiReady();
 
   const [employee, setEmployee] = useState<EmployeeDetail | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
@@ -32,12 +34,12 @@ export default function EmployeeDetailPage() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!apiReady) return;
     const fetchData = async () => {
       try {
         setLoading(true);
         setError(null);
 
-        await waitForAuthToken();
         const userData = await getUser(userId);
         setEmployee({
           id: String(userData.id || ""),
@@ -58,7 +60,7 @@ export default function EmployeeDetailPage() {
       }
     };
     fetchData();
-  }, [userId]);
+  }, [userId, apiReady]);
 
   const handleDeprovision = async () => {
     setDeprovisioning(true);

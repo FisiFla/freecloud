@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Users, AppWindow, Monitor, ShieldCheck, AlertCircle } from "lucide-react";
-import { listUsers, listApps, listAuditLogs, waitForAuthToken } from "@/lib/api";
+import { listUsers, listApps, listAuditLogs } from "@/lib/api";
+import { useApiReady } from "./providers";
 
 interface StatData {
   label: string;
@@ -12,6 +13,7 @@ interface StatData {
 }
 
 export default function DashboardPage() {
+  const apiReady = useApiReady();
   const [totalEmployees, setTotalEmployees] = useState<number | null>(null);
   const [connectedApps, setConnectedApps] = useState<number | null>(null);
   const [devicesManaged, setDevicesManaged] = useState<number | null>(null);
@@ -20,13 +22,11 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (!apiReady) return;
     const fetchStats = async () => {
       try {
         setLoading(true);
         setError(null);
-        // Block until the access token is available so the first fetch is
-        // authenticated (avoids the useEffect race with SessionProvider).
-        await waitForAuthToken();
         const [users, apps, auditLogs] = await Promise.all([
           listUsers(),
           listApps(),
@@ -48,7 +48,7 @@ export default function DashboardPage() {
       }
     };
     fetchStats();
-  }, []);
+  }, [apiReady]);
 
   const stats: StatData[] = [
     { label: "Total Employees", value: totalEmployees?.toLocaleString() ?? "—", icon: Users, color: "bg-indigo-500" },
