@@ -50,7 +50,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	poolCfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+	if err != nil {
+		logger.Fatal("failed to parse database URL", zap.Error(err))
+	}
+	// Bound every query server-side so a slow or stuck query can't hold a pooled
+	// connection indefinitely (otherwise the HTTP write timeout drops the client
+	// while the query keeps running and leaks the connection).
+	poolCfg.ConnConfig.RuntimeParams["statement_timeout"] = "15000"
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		logger.Fatal("failed to create database pool", zap.Error(err))
 	}

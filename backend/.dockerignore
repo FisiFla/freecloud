@@ -1,0 +1,8 @@
+.git
+*.md
+bin/
+freecloud-server
+server
+*_test.go
+.env
+.env.*
