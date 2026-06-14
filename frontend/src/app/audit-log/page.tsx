@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Search, Filter, AlertCircle } from "lucide-react";
-import { listAuditLogs } from "@/lib/api";
+import { listAuditLogs, waitForAuthToken } from "@/lib/api";
 import type { AuditLogEntry } from "@/lib/api";
 
 const actionOptions = [
@@ -28,6 +28,7 @@ export default function AuditLogPage() {
       try {
         setLoading(true);
         setError(null);
+        await waitForAuthToken();
         const data = await listAuditLogs({
           actor: actorFilter || undefined,
           action: actionFilter !== "All Actions" ? actionFilter : undefined,
@@ -42,9 +43,10 @@ export default function AuditLogPage() {
     fetchLogs();
   }, [actorFilter, actionFilter]);
 
+  // Actor and action filters are applied server-side via listAuditLogs().
+  // Only the date-range filter is applied client-side here (not yet supported
+  // by the backend API). This avoids filtering the same dimension twice.
   const filtered = logs.filter((log) => {
-    if (actorFilter && !log.actorId.toLowerCase().includes(actorFilter.toLowerCase())) return false;
-    if (actionFilter !== "All Actions" && log.action !== actionFilter) return false;
     if (dateFrom && new Date(log.createdAt) < new Date(dateFrom)) return false;
     if (dateTo && new Date(log.createdAt) > new Date(dateTo + "T23:59:59Z")) return false;
     return true;
@@ -179,7 +181,11 @@ export default function AuditLogPage() {
                       </td>
                       <td className="px-6 py-4 text-slate-600 capitalize">{log.targetType}</td>
                       <td className="px-6 py-4 font-mono text-xs text-slate-500">{log.targetId}</td>
-                      <td className="px-6 py-4 text-slate-600 max-w-xs truncate">{log.details}</td>
+                      <td className="px-6 py-4 text-slate-600 max-w-xs truncate">
+                        {typeof log.details === "string"
+                          ? log.details
+                          : JSON.stringify(log.details)}
+                      </td>
                     </tr>
                   ))}
                   {filtered.length === 0 && (

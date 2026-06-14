@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/Nerzal/gocloak/v13"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
@@ -163,32 +162,10 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Wire devices: create placeholder device and mapping when we have a user and enrollment token
-	if createdUser != nil && createdUser.User != nil && createdUser.User.ID != nil && enrollmentToken != "" && h.db != nil {
-		deviceID := uuid.New().String()
-		hostname := "pending-" + enrollmentToken[:8]
-		_, devErr := h.db.Exec(ctx,
-			`INSERT INTO devices (fleet_host_id, hostname, os_version)
-			 VALUES ($1, $2, $3)
-			 ON CONFLICT (fleet_host_id) DO NOTHING`,
-			deviceID, hostname, "pending",
-		)
-		if devErr != nil {
-			logger.Warn("failed to insert placeholder device", zap.Error(devErr))
-			warnings = append(warnings, fmt.Sprintf("device insert: %v", devErr))
-		} else {
-			_, mapErr := h.db.Exec(ctx,
-				`INSERT INTO users_devices_mapping (user_id, device_id)
-				 VALUES ($1, $2)
-				 ON CONFLICT (user_id, device_id) DO NOTHING`,
-				*createdUser.User.ID, deviceID,
-			)
-			if mapErr != nil {
-				logger.Warn("failed to insert device mapping", zap.Error(mapErr))
-				warnings = append(warnings, fmt.Sprintf("device mapping insert: %v", mapErr))
-			}
-		}
-	}
+	// Note: we intentionally do NOT create placeholder device rows here.
+	// Devices are created on a FleetDM enrollment callback/webhook once a real
+	// host checks in with the enrollment token. Pre-populating with random UUIDs
+	// that don't exist in FleetDM would make subsequent device-check calls fail.
 
 	nextStep := "User created. Admin must provide login credentials to the user."
 	if createdUser != nil && createdUser.ResetEmailSent {

@@ -8,7 +8,27 @@ import (
 	"go.uber.org/zap"
 )
 
-// Migration001 is the SQL schema migration for the FreeCloud database.
+// migration is a single ordered, idempotent SQL migration.
+type migration struct {
+	id      int
+	name    string
+	statement string
+}
+
+// migrations is the ordered list of applied migrations. To add a new
+// migration, append a new entry here with an incrementing id — the
+// schema_migrations table ensures each runs exactly once.
+var migrations = []migration{
+	{
+		id:        1,
+		name:      "initial_schema",
+		statement: Migration001,
+	},
+}
+
+// Migration001 is the SQL for the initial schema migration, kept as a constant
+// for backwards compatibility with any external callers that referenced it
+// directly. New code should append to the migrations slice instead.
 const Migration001 = `
 CREATE TABLE IF NOT EXISTS users (
     keycloak_user_id UUID PRIMARY KEY,
@@ -69,16 +89,70 @@ CREATE INDEX IF NOT EXISTS idx_devices_hostname ON devices(hostname);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_action_created ON audit_logs(actor_id, action, created_at);
 `
 
-// RunMigrations executes the database schema migration.
+// RunMigrations applies any pending migrations in order, recording each in
+// the schema_migrations table so it runs exactly once per database.
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	logger := zap.L()
-	logger.Info("running database migrations...")
 
-	_, err := pool.Exec(ctx, Migration001)
-	if err != nil {
-		return fmt.Errorf("failed to run migrations: %w", err)
+	// Ensure the migrations bookkeeping table exists.
+	if _, err := pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);`); err != nil {
+		return fmt.Errorf("create schema_migrations table: %w", err)
 	}
 
-	logger.Info("database migrations completed successfully")
+	// Determine which migrations have already been applied.
+	rows, err := pool.Query(ctx, `SELECT id FROM schema_migrations`)
+	if err != nil {
+		return fmt.Errorf("query applied migrations: %w", err)
+	}
+	applied := make(map[int]bool)
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan migration id: %w", err)
+		}
+		applied[id] = true
+	}
+	rows.Close()
+
+	pending := 0
+	for _, m := range migrations {
+		if applied[m.id] {
+			continue
+		}
+		logger.Info("applying migration",
+			zap.Int("id", m.id),
+			zap.String("name", m.name),
+		)
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin tx for migration %d: %w", m.id, err)
+		}
+		if _, err := tx.Exec(ctx, m.statement); err != nil {
+			tx.Rollback(ctx)
+			return fmt.Errorf("migration %d (%s) failed: %w", m.id, m.name, err)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO schema_migrations (id, name) VALUES ($1, $2)`,
+			m.id, m.name,
+		); err != nil {
+			tx.Rollback(ctx)
+			return fmt.Errorf("record migration %d: %w", m.id, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit migration %d: %w", m.id, err)
+		}
+		pending++
+	}
+
+	logger.Info("database migrations completed",
+		zap.Int("applied_now", pending),
+		zap.Int("total", len(migrations)),
+	)
 	return nil
 }

@@ -33,6 +33,9 @@ type Device struct {
 }
 
 // ListUsers returns all users with their associated devices.
+//
+// Devices are fetched in the same query via a LEFT JOIN to avoid an N+1
+// pattern (previously one extra query per user).
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -44,9 +47,16 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.db.Query(ctx,
 		`SELECT u.keycloak_user_id, u.email, u.first_name, u.last_name,
 		        COALESCE(u.department, ''), COALESCE(u.role, ''),
-		        u.created_at, u.updated_at
+		        u.created_at, u.updated_at,
+		        COALESCE(d.fleet_host_id::TEXT, ''),
+		        COALESCE(d.hostname, ''),
+		        COALESCE(d.os_version, ''),
+		        COALESCE(d.last_seen_at::TEXT, ''),
+		        COALESCE(d.created_at::TEXT, '')
 		 FROM users u
-		 ORDER BY u.created_at DESC`,
+		 LEFT JOIN users_devices_mapping m ON m.user_id = u.keycloak_user_id
+		 LEFT JOIN devices d ON d.fleet_host_id = m.device_id
+		 ORDER BY u.created_at DESC, d.hostname`,
 	)
 	if err != nil {
 		h.logger.Error("failed to query users", zap.Error(err))
@@ -55,26 +65,51 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type userRow struct {
-		KeycloakUserID string
-		Email          string
-		FirstName      string
-		LastName       string
-		Department     string
-		Role           string
-		CreatedAt      time.Time
-		UpdatedAt      time.Time
-	}
+	// Preserve insertion order while collapsing duplicate user rows.
+	order := make([]string, 0, 16)
+	usersByID := make(map[string]*User)
 
-	var users []userRow
 	for rows.Next() {
-		var u userRow
-		if err := rows.Scan(&u.KeycloakUserID, &u.Email, &u.FirstName, &u.LastName,
-			&u.Department, &u.Role, &u.CreatedAt, &u.UpdatedAt); err != nil {
-			h.logger.Error("failed to scan user", zap.Error(err))
+		var (
+			keycloakUserID, email, firstName, lastName, dept, role string
+			createdAt, updatedAt                                   time.Time
+			deviceID, hostname, osVersion, lastSeen, devCreated    string
+		)
+		if err := rows.Scan(&keycloakUserID, &email, &firstName, &lastName,
+			&dept, &role, &createdAt, &updatedAt,
+			&deviceID, &hostname, &osVersion, &lastSeen, &devCreated,
+		); err != nil {
+			h.logger.Error("failed to scan user row", zap.Error(err))
 			continue
 		}
-		users = append(users, u)
+
+		u, ok := usersByID[keycloakUserID]
+		if !ok {
+			u = &User{
+				ID:             keycloakUserID,
+				KeycloakUserID: keycloakUserID,
+				Email:          email,
+				FirstName:      firstName,
+				LastName:       lastName,
+				Department:     dept,
+				Role:           role,
+				CreatedAt:      createdAt.Format(time.RFC3339),
+				UpdatedAt:      updatedAt.Format(time.RFC3339),
+				Devices:        []Device{},
+			}
+			usersByID[keycloakUserID] = u
+			order = append(order, keycloakUserID)
+		}
+
+		if deviceID != "" {
+			u.Devices = append(u.Devices, Device{
+				FleetHostID: deviceID,
+				Hostname:    hostname,
+				OsVersion:   osVersion,
+				LastSeenAt:  lastSeen,
+				CreatedAt:   devCreated,
+			})
+		}
 	}
 
 	if err := rows.Err(); err != nil {
@@ -83,44 +118,9 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result := make([]User, 0, len(users))
-	for _, u := range users {
-		// Fetch devices for each user via LEFT JOIN
-		deviceRows, err := h.db.Query(ctx,
-			`SELECT d.fleet_host_id, COALESCE(d.hostname, ''), COALESCE(d.os_version, ''),
-			        COALESCE(d.last_seen_at::TEXT, ''), COALESCE(d.created_at::TEXT, '')
-			 FROM devices d
-			 INNER JOIN users_devices_mapping m ON d.fleet_host_id = m.device_id
-			 WHERE m.user_id = $1`,
-			u.KeycloakUserID,
-		)
-		devices := []Device{}
-		if err == nil {
-			for deviceRows.Next() {
-				var d Device
-				if err := deviceRows.Scan(&d.FleetHostID, &d.Hostname, &d.OsVersion, &d.LastSeenAt, &d.CreatedAt); err != nil {
-					h.logger.Warn("failed to scan device", zap.Error(err))
-					continue
-				}
-				devices = append(devices, d)
-			}
-			deviceRows.Close()
-		} else {
-			h.logger.Warn("failed to query devices for user", zap.String("user_id", u.KeycloakUserID), zap.Error(err))
-		}
-
-		result = append(result, User{
-			ID:             u.KeycloakUserID,
-			KeycloakUserID: u.KeycloakUserID,
-			Email:          u.Email,
-			FirstName:      u.FirstName,
-			LastName:       u.LastName,
-			Department:     u.Department,
-			Role:           u.Role,
-			CreatedAt:      u.CreatedAt.Format(time.RFC3339),
-			UpdatedAt:      u.UpdatedAt.Format(time.RFC3339),
-			Devices:        devices,
-		})
+	result := make([]User, 0, len(order))
+	for _, id := range order {
+		result = append(result, *usersByID[id])
 	}
 
 	respondJSON(w, http.StatusOK, result)

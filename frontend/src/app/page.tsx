@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Users, AppWindow, Monitor, ShieldCheck } from "lucide-react";
-import { listUsers, listApps, listAuditLogs } from "@/lib/api";
+import { listUsers, listApps, listAuditLogs, waitForAuthToken } from "@/lib/api";
 
 interface StatData {
   label: string;
@@ -22,6 +22,9 @@ export default function DashboardPage() {
     const fetchStats = async () => {
       try {
         setLoading(true);
+        // Block until the access token is available so the first fetch is
+        // authenticated (avoids the useEffect race with SessionProvider).
+        await waitForAuthToken();
         const [users, apps, auditLogs] = await Promise.all([
           listUsers(),
           listApps(),
@@ -32,7 +35,7 @@ export default function DashboardPage() {
 
         // Count unique devices from all users
         const deviceCount = users.reduce((count, u) => {
-          return count + ((u as any).devices?.length || 0);
+          return count + (u.devices?.length || 0);
         }, 0);
         setDevicesManaged(deviceCount);
         setRecentAuditEvents(auditLogs.length);

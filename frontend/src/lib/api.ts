@@ -15,10 +15,11 @@ export interface OnboardRequest {
 export interface OnboardResponse {
   user: {
     id: string;
-    username: string;
-    email: string;
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    username?: string;
   };
-  tempPassword?: string;
   enrollmentToken: string;
   enrollmentURL: string;
   warning?: string;
@@ -45,15 +46,14 @@ export interface CreateAppRequest {
   redirectURIs: string[];
   baseURL: string;
 }
-
 export interface App {
   id: string;
   keycloakClientId: string;
   name: string;
   protocol: string;
-  baseURL: string;
+  baseUrl?: string;
   enabled: boolean;
-  createdAt: string;
+  createdAt?: string;
 }
 
 export interface AuditLogFilters {
@@ -68,15 +68,18 @@ export interface AuditLogEntry {
   action: string;
   targetType: string;
   targetId: string;
-  details: string;
+  // The backend returns details as a JSONB object; serialized to a string here
+  // for display. Typed as unknown so callers can parse if needed.
+  details: Record<string, unknown> | string;
   createdAt: string;
 }
 
 export interface Device {
-  id: string;
-  name: string;
-  type: string;
-  os: string;
+  fleetHostId: string;
+  hostname?: string;
+  osVersion?: string;
+  lastSeenAt?: string;
+  createdAt?: string;
 }
 
 export interface User {
@@ -85,9 +88,10 @@ export interface User {
   email: string;
   firstName: string;
   lastName: string;
-  department: string;
-  role: string;
-  status?: string;
+  department?: string;
+  role?: string;
+  createdAt?: string;
+  updatedAt?: string;
   devices?: Device[];
 }
 
@@ -104,11 +108,39 @@ interface ApiEnvelope<T> {
 }
 
 // ---- Auth token store ----
+//
+// The access token is populated asynchronously by the SessionProvider once the
+// session loads. To avoid the first client-side fetch racing ahead of that
+// population (and therefore going out unauthenticated), callers may await
+// `waitForAuthToken()` before issuing requests.
 
 let authToken: string | null = null;
 
 export function setAuthToken(token: string | null) {
   authToken = token;
+}
+
+export function getAuthToken(): string | null {
+  return authToken;
+}
+
+// waitForAuthToken resolves once a non-empty token has been published, or after
+// a short timeout if none ever arrives (e.g. user is unauthenticated). This lets
+// pages block their initial fetch until the auth state is known.
+export function waitForAuthToken(timeoutMs = 2000): Promise<string | null> {
+  if (authToken) return Promise.resolve(authToken);
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const interval = setInterval(() => {
+      if (authToken) {
+        clearInterval(interval);
+        resolve(authToken);
+      } else if (Date.now() - start >= timeoutMs) {
+        clearInterval(interval);
+        resolve(null);
+      }
+    }, 50);
+  });
 }
 
 // ---- Helpers ----
