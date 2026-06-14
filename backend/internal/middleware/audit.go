@@ -36,8 +36,15 @@ func ActorIDMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		// Reject requests without valid JWT unless ALLOW_ACTOR_HEADER is explicitly set
-		if os.Getenv("ALLOW_ACTOR_HEADER") != "true" {
+		// Reject requests without valid JWT unless the explicit dev/test escape
+		// hatch is enabled. This requires BOTH:
+		//   - ALLOW_ACTOR_HEADER=true
+		//   - APP_ENV being unset, "development", or "test"
+		// The X-Actor-ID header is spoofable and must never be trusted in
+		// staging/production environments.
+		env := os.Getenv("APP_ENV")
+		allowHeader := env == "" || env == "development" || env == "test"
+		if os.Getenv("ALLOW_ACTOR_HEADER") != "true" || !allowHeader {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"success":false,"error":"unauthorized: valid JWT required"}`))

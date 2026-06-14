@@ -3,6 +3,7 @@ package keycloak
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ type KeycloakClientInterface interface {
 	CreateUser(ctx context.Context, firstName, lastName, email, department string) (*CreateUserResult, error)
 	DisableUser(ctx context.Context, userID string) error
 	LogoutAllSessions(ctx context.Context, userID string) error
+	GetUserSessions(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error)
 	CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
 	DeleteClient(ctx context.Context, clientID string) error
 	AssignUserToClient(ctx context.Context, userID, clientID string) error
@@ -179,6 +181,10 @@ func (k *KeycloakClient) DisableUser(ctx context.Context, userID string) error {
 }
 
 // LogoutAllSessions logs out all active sessions for a user.
+//
+// Keycloak's LogoutUserSession takes a *session* ID, not a user ID, so we first
+// enumerate the user's active sessions via GetUserSessions and log each one out
+// individually. Returns nil if there are no active sessions.
 func (k *KeycloakClient) LogoutAllSessions(ctx context.Context, userID string) error {
 	logger := zap.L()
 	token, err := k.login(ctx)
@@ -186,13 +192,48 @@ func (k *KeycloakClient) LogoutAllSessions(ctx context.Context, userID string) e
 		return err
 	}
 
-	err = k.client.LogoutUserSession(ctx, token, k.realm, userID)
+	sessions, err := k.client.GetUserSessions(ctx, token, k.realm, userID)
 	if err != nil {
-		return fmt.Errorf("logout sessions for user %s: %w", userID, err)
+		return fmt.Errorf("get sessions for user %s: %w", userID, err)
 	}
 
-	logger.Info("logged out all sessions for user", zap.String("user_id", userID))
+	var lastErr error
+	loggedOut := 0
+	for _, s := range sessions {
+		if s.ID == nil || *s.ID == "" {
+			continue
+		}
+		if err := k.client.LogoutUserSession(ctx, token, k.realm, *s.ID); err != nil {
+			logger.Warn("failed to logout session, continuing",
+				zap.String("user_id", userID),
+				zap.String("session_id", *s.ID),
+				zap.Error(err),
+			)
+			lastErr = err
+			continue
+		}
+		loggedOut++
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("logged out %d/%d sessions for user %s, last error: %w",
+			loggedOut, len(sessions), userID, lastErr)
+	}
+
+	logger.Info("logged out all sessions for user",
+		zap.String("user_id", userID),
+		zap.Int("sessions", loggedOut),
+	)
 	return nil
+}
+
+// GetUserSessions returns the active sessions for a user.
+func (k *KeycloakClient) GetUserSessions(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return k.client.GetUserSessions(ctx, token, k.realm, userID)
 }
 
 // CreateClient creates an OIDC or SAML client in Keycloak and returns the client ID.
@@ -243,18 +284,19 @@ func (k *KeycloakClient) AssignUserToClient(ctx context.Context, userID, clientI
 		return err
 	}
 
-	// Create a client role for mapping
+	// Create a client role for mapping (idempotent — ignore "already exists").
 	roleName := "user"
 	role := gocloak.Role{
 		Name: &roleName,
 	}
 
-	_, err = k.client.CreateClientRole(ctx, token, k.realm, clientID, role)
-	if err != nil {
-		// Role may already exist, continue
-		logger.Debug("client role may already exist, continuing",
+	if _, err := k.client.CreateClientRole(ctx, token, k.realm, clientID, role); err != nil {
+		// A 409 means the role already exists, which is fine. Any other error is a real failure.
+		if !isConflictErr(err) {
+			return fmt.Errorf("create client role %q for client %s: %w", roleName, clientID, err)
+		}
+		logger.Debug("client role already exists, continuing",
 			zap.String("client_id", clientID),
-			zap.Error(err),
 		)
 	}
 
@@ -275,6 +317,17 @@ func (k *KeycloakClient) AssignUserToClient(ctx context.Context, userID, clientI
 		zap.String("client_id", clientID),
 	)
 	return nil
+}
+
+// isConflictErr reports whether the given gocloak error represents a 409 Conflict,
+// which we treat as "already exists" for idempotent create operations.
+func isConflictErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// gocloak wraps HTTP errors with the status code in the message.
+	return strings.Contains(msg, "409") || strings.Contains(strings.ToLower(msg), "conflict")
 }
 
 // DeleteClient deletes a client from Keycloak by its client ID.

@@ -6,7 +6,7 @@ import { Search, UserPlus, Trash2, AlertCircle, AlertTriangle, Users } from "luc
 import SlideOver from "@/components/SlideOver";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import OnboardForm from "./onboard/OnboardForm";
-import { offboardUser, listUsers } from "@/lib/api";
+import { offboardUser, listUsers, waitForAuthToken } from "@/lib/api";
 import type { User } from "@/lib/api";
 
 interface Employee {
@@ -34,6 +34,7 @@ export default function EmployeesPage() {
     try {
       setLoading(true);
       setError(null);
+      await waitForAuthToken();
       const data = await listUsers();
       const mapped = (Array.isArray(data) ? data : []).map((u: User) => ({
         id: String(u.keycloakUserId || ""),
@@ -42,7 +43,8 @@ export default function EmployeesPage() {
         email: String(u.email || ""),
         department: String(u.department || ""),
         role: String(u.role || ""),
-        status: String(u.status || "Active"),
+        // The backend soft-disables users by suffixing their role with "(DISABLED)".
+        status: String(u.role || "").includes("(DISABLED)") ? "Disabled" : "Active",
       }));
       setEmployees(mapped);
     } catch (err: unknown) {

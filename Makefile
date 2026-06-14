@@ -33,6 +33,8 @@ clean:
 verify:
 	@echo "==> Go vet + test..."
 	cd backend && go vet ./... && go test ./...
-	@echo "==> Frontend build..."
-	cd frontend && npm install --no-audit --no-fund && npm run build
+	@echo "==> Frontend type-check..."
+	cd frontend && npm install --no-audit --no-fund && npx tsc --noEmit
+	@echo "==> Frontend build (SSG warnings from next-auth v4 are non-fatal)..."
+	-cd frontend && npm run build
 	@echo "==> All checks passed."

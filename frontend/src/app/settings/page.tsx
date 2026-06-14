@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { CheckCircle, XCircle, RefreshCw, AlertCircle } from "lucide-react";
-import { healthCheck, healthKeycloak, healthFleet } from "@/lib/api";
+import { healthCheck, healthKeycloak, healthFleet, waitForAuthToken } from "@/lib/api";
 
 interface ConnectionStatus {
   label: string;
@@ -27,6 +27,7 @@ export default function SettingsPage() {
       try {
         setHealthLoading(true);
         setHealthError(null);
+        await waitForAuthToken();
         const result = await healthCheck();
         setHealthStatus(result.status);
       } catch (err: unknown) {

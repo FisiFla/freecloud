@@ -6,6 +6,10 @@ import { Providers } from "./providers";
 
 const inter = Inter({ subsets: ["latin"] });
 
+// All pages depend on the next-auth session, so they cannot be statically
+// prerendered at build time. Force dynamic rendering for the whole app.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "FreeCloud — Unified JumpCloud Alternative",
   description: "FreeCloud Dashboard",

@@ -3,10 +3,8 @@ package middleware
 import (
 	"context"
 	"crypto/rsa"
-	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/pem"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -76,9 +74,11 @@ type AuthMiddleware struct {
 	realm          string
 	audience       string
 	expectedIssuer string
+	httpClient     *http.Client
 	mu             sync.RWMutex
-	keys           []*rsa.PublicKey
-	lastFetch      time.Time
+	// keysByKid maps a JWT "kid" header to its parsed RSA public key.
+	keysByKid map[string]*rsa.PublicKey
+	lastFetch time.Time
 }
 
 // NewAuthMiddleware creates a new AuthMiddleware.
@@ -88,48 +88,41 @@ func NewAuthMiddleware(keycloakURL, realm, audience string) *AuthMiddleware {
 		realm:          realm,
 		audience:       audience,
 		expectedIssuer: fmt.Sprintf("%s/realms/%s", keycloakURL, realm),
+		// One reused client instead of allocating per fetch.
+		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
 }
 
-func (a *AuthMiddleware) fetchKeys() ([]*rsa.PublicKey, error) {
-	a.mu.RLock()
-	if time.Since(a.lastFetch) < 5*time.Minute && len(a.keys) > 0 {
-		keys := a.keys
-		a.mu.RUnlock()
-		return keys, nil
-	}
-	a.mu.RUnlock()
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if time.Since(a.lastFetch) < 5*time.Minute && len(a.keys) > 0 {
-		return a.keys, nil
-	}
-
+// refreshJWKS fetches the realm's JWKS document and stores the parsed keys
+// indexed by their "kid" header. Must be called with a.mu held.
+func (a *AuthMiddleware) refreshJWKS() error {
 	url := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", a.keycloakURL, a.realm)
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := a.httpClient.Get(url)
 	if err != nil {
-		return nil, fmt.Errorf("fetch jwks: %w", err)
+		return fmt.Errorf("fetch jwks: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("jwks fetch returned status %d", resp.StatusCode)
+		return fmt.Errorf("jwks fetch returned status %d", resp.StatusCode)
 	}
 
 	var jwks struct {
 		Keys []struct {
-			N string `json:"n"`
-			E string `json:"e"`
+			Kid string `json:"kid"`
+			Kty string `json:"kty"`
+			N   string `json:"n"`
+			E   string `json:"e"`
 		} `json:"keys"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
-		return nil, fmt.Errorf("decode jwks: %w", err)
+		return fmt.Errorf("decode jwks: %w", err)
 	}
 
-	var keys []*rsa.PublicKey
+	parsed := make(map[string]*rsa.PublicKey, len(jwks.Keys))
 	for _, k := range jwks.Keys {
+		if k.Kty != "RSA" || k.Kid == "" {
+			continue
+		}
 		nBytes, err := base64.RawURLEncoding.DecodeString(k.N)
 		if err != nil {
 			continue
@@ -144,56 +137,73 @@ func (a *AuthMiddleware) fetchKeys() ([]*rsa.PublicKey, error) {
 			e = e<<8 + int(b)
 		}
 
-		key := &rsa.PublicKey{
+		parsed[k.Kid] = &rsa.PublicKey{
 			N: new(big.Int).SetBytes(nBytes),
 			E: e,
 		}
-		keys = append(keys, key)
 	}
 
-	// Also try the PEM cert endpoint as fallback
-	if len(keys) == 0 {
-		certURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", a.keycloakURL, a.realm)
-		resp2, err := client.Get(certURL)
-		if err != nil || resp2.StatusCode != http.StatusOK {
-			if resp2 != nil {
-				resp2.Body.Close()
-			}
-		}
-		if err == nil && resp2.StatusCode == http.StatusOK {
-			defer resp2.Body.Close()
-			var certResp struct {
-				Keys []struct {
-					X5c []string `json:"x5c"`
-				} `json:"keys"`
-			}
-			if json.NewDecoder(resp2.Body).Decode(&certResp) == nil {
-				for _, k := range certResp.Keys {
-					for _, certB64 := range k.X5c {
-						certPEM := "-----BEGIN CERTIFICATE-----\n" + certB64 + "\n-----END CERTIFICATE-----"
-						block, _ := pem.Decode([]byte(certPEM))
-						if block == nil {
-							continue
-						}
-						cert, err := x509.ParseCertificate(block.Bytes)
-						if err != nil {
-							continue
-						}
-						if pubKey, ok := cert.PublicKey.(*rsa.PublicKey); ok {
-							keys = append(keys, pubKey)
-						}
-					}
-				}
-			}
-		}
+	if len(parsed) == 0 {
+		return fmt.Errorf("no valid RSA keys found in JWKS response")
 	}
 
-	a.keys = keys
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("no valid keys found in JWKS response")
-	}
+	a.keysByKid = parsed
 	a.lastFetch = time.Now()
-	return keys, nil
+	return nil
+}
+
+// keyForToken returns the verification key matching the token's "kid" header.
+// It refreshes the cached JWKS if the kid is unknown or the cache is stale/empty.
+// Returns (nil, nil) when the token has no kid header — the caller then tries
+// every cached key as a fallback.
+func (a *AuthMiddleware) keyForToken(tokenString string) (*rsa.PublicKey, error) {
+	// Parse just the header segment for the kid (no signature verification).
+	var header struct {
+		Kid string `json:"kid"`
+		Alg string `json:"alg"`
+	}
+	if parts := strings.Split(tokenString, "."); len(parts) > 0 {
+		if raw, err := base64.RawURLEncoding.DecodeString(parts[0]); err == nil {
+			_ = json.Unmarshal(raw, &header)
+		}
+	}
+
+	a.mu.RLock()
+	if time.Since(a.lastFetch) < 5*time.Minute && len(a.keysByKid) > 0 {
+		if header.Kid != "" {
+			if key, ok := a.keysByKid[header.Kid]; ok {
+				a.mu.RUnlock()
+				return key, nil
+			}
+		}
+		// kid not in cache but cache fresh — fall through and refresh once below.
+	}
+	a.mu.RUnlock()
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Double-check after acquiring the write lock.
+	if time.Since(a.lastFetch) < 5*time.Minute && len(a.keysByKid) > 0 {
+		if header.Kid != "" {
+			if key, ok := a.keysByKid[header.Kid]; ok {
+				return key, nil
+			}
+		}
+	}
+
+	// Cache stale or kid unknown — refresh.
+	if err := a.refreshJWKS(); err != nil {
+		return nil, err
+	}
+	if header.Kid != "" {
+		if key, ok := a.keysByKid[header.Kid]; ok {
+			return key, nil
+		}
+		return nil, fmt.Errorf("no key found for kid %q after JWKS refresh", header.Kid)
+	}
+	// No kid in header: caller (Middleware) will try every key as a last resort.
+	return nil, nil
 }
 
 // Middleware is an HTTP middleware that validates the Bearer token.
@@ -225,9 +235,29 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Verify signature with Keycloak public keys
-		keys, err := a.fetchKeys()
+		// Resolve the verification key by kid (fast path); falls back to trying
+		// all cached keys if the token has no kid header.
+		primary, err := a.keyForToken(tokenString)
 		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(fmt.Sprintf(`{"success":false,"error":"unauthorized: %s"}`, err.Error())))
+			return
+		}
+
+		// Build the candidate key list: kid-matched key first, then any others.
+		var candidates []*rsa.PublicKey
+		if primary != nil {
+			candidates = []*rsa.PublicKey{primary}
+		}
+		a.mu.RLock()
+		for _, k := range a.keysByKid {
+			if primary == nil || k != primary {
+				candidates = append(candidates, k)
+			}
+		}
+		a.mu.RUnlock()
+		if len(candidates) == 0 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"success":false,"error":"auth service temporarily unavailable"}`))
@@ -236,7 +266,7 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 
 		var lastErr error
 		verified := false
-		for _, key := range keys {
+		for _, key := range candidates {
 			validated, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
 				if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
