@@ -15,6 +15,7 @@ interface EmployeeDetail {
   email: string;
   department: string;
   role: string;
+  disabled: boolean;
 }
 
 export default function EmployeeDetailPage() {
@@ -48,6 +49,7 @@ export default function EmployeeDetailPage() {
           email: String(userData.email || ""),
           department: String(userData.department || ""),
           role: String(userData.role || ""),
+          disabled: Boolean(userData.disabled),
         });
         // Read the viewed user's real devices from the user record, rather
         // than calling checkDevice() (which checks the *current* logged-in
@@ -240,12 +242,12 @@ export default function EmployeeDetailPage() {
                 </div>
                 <span
                   className={`mt-3 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                    employee.role.includes("(DISABLED)")
+                    employee.disabled || employee.role.includes("(DISABLED)")
                       ? "bg-amber-50 text-amber-700"
                       : "bg-emerald-50 text-emerald-700"
                   }`}
                 >
-                  {employee.role.includes("(DISABLED)") ? "Disabled" : "Active"}
+                  {employee.disabled || employee.role.includes("(DISABLED)") ? "Disabled" : "Active"}
                 </span>
               </div>
             </div>

@@ -13,11 +13,11 @@ import (
 // OffboardResponse is the JSON response for the offboard endpoint.
 type OffboardResponse struct {
 	UserID                  string   `json:"userId"`
-	SessionsTerminated       bool     `json:"sessionsTerminated"`
-	SessionTerminationError  string   `json:"sessionTerminationError,omitempty"`
-	DevicesWiped             int      `json:"devicesWiped"`
-	DevicesFailed            int      `json:"devicesFailed"`
-	Warnings                 []string `json:"warnings,omitempty"`
+	SessionsTerminated      bool     `json:"sessionsTerminated"`
+	SessionTerminationError string   `json:"sessionTerminationError,omitempty"`
+	DevicesWiped            int      `json:"devicesWiped"`
+	DevicesFailed           int      `json:"devicesFailed"`
+	Warnings                []string `json:"warnings,omitempty"`
 }
 
 // Offboard handles user offboarding (panic button).
@@ -58,7 +58,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	// so local state reflects the intent even if Keycloak is unreachable.
 	if h.db != nil {
 		_, dbErr := h.db.Exec(ctx,
-			`UPDATE users SET role = CONCAT(COALESCE(role, ''), ' (DISABLED)'), updated_at = NOW() WHERE keycloak_user_id = $1`,
+			`UPDATE users SET disabled = true, updated_at = NOW() WHERE keycloak_user_id = $1`,
 			userID,
 		)
 		if dbErr != nil {
@@ -138,10 +138,10 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, OffboardResponse{
 		UserID:                  userID,
-		SessionsTerminated:       sessionsTerminated,
-		SessionTerminationError:  sessionError,
-		DevicesWiped:             int(devicesWiped),
-		DevicesFailed:            int(devicesFailed),
-		Warnings:                 warnings,
+		SessionsTerminated:      sessionsTerminated,
+		SessionTerminationError: sessionError,
+		DevicesWiped:            int(devicesWiped),
+		DevicesFailed:           int(devicesFailed),
+		Warnings:                warnings,
 	})
 }

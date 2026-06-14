@@ -18,6 +18,7 @@ type User struct {
 	LastName       string   `json:"lastName"`
 	Department     string   `json:"department,omitempty"`
 	Role           string   `json:"role,omitempty"`
+	Disabled       bool     `json:"disabled"`
 	CreatedAt      string   `json:"createdAt,omitempty"`
 	UpdatedAt      string   `json:"updatedAt,omitempty"`
 	Devices        []Device `json:"devices,omitempty"`
@@ -46,7 +47,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.db.Query(ctx,
 		`SELECT u.keycloak_user_id, u.email, u.first_name, u.last_name,
-		        COALESCE(u.department, ''), COALESCE(u.role, ''),
+		        COALESCE(u.department, ''), COALESCE(u.role, ''), COALESCE(u.disabled, false),
 		        u.created_at, u.updated_at,
 		        COALESCE(d.fleet_host_id::TEXT, ''),
 		        COALESCE(d.hostname, ''),
@@ -72,11 +73,12 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var (
 			keycloakUserID, email, firstName, lastName, dept, role string
+			disabled                                               bool
 			createdAt, updatedAt                                   time.Time
 			deviceID, hostname, osVersion, lastSeen, devCreated    string
 		)
 		if err := rows.Scan(&keycloakUserID, &email, &firstName, &lastName,
-			&dept, &role, &createdAt, &updatedAt,
+			&dept, &role, &disabled, &createdAt, &updatedAt,
 			&deviceID, &hostname, &osVersion, &lastSeen, &devCreated,
 		); err != nil {
 			h.logger.Error("failed to scan user row", zap.Error(err))
@@ -93,6 +95,7 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 				LastName:       lastName,
 				Department:     dept,
 				Role:           role,
+				Disabled:       disabled,
 				CreatedAt:      createdAt.Format(time.RFC3339),
 				UpdatedAt:      updatedAt.Format(time.RFC3339),
 				Devices:        []Device{},
@@ -145,11 +148,11 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	var createdAt, updatedAt time.Time
 	err := h.db.QueryRow(ctx,
 		`SELECT keycloak_user_id, email, first_name, last_name,
-		        COALESCE(department, ''), COALESCE(role, ''), created_at, updated_at
-		 FROM users WHERE keycloak_user_id = $1`,
+		        COALESCE(department, ''), COALESCE(role, ''), COALESCE(disabled, false), created_at, updated_at
+	 FROM users WHERE keycloak_user_id = $1`,
 		userID,
 	).Scan(&u.KeycloakUserID, &u.Email, &u.FirstName, &u.LastName,
-		&u.Department, &u.Role, &createdAt, &updatedAt)
+		&u.Department, &u.Role, &u.Disabled, &createdAt, &updatedAt)
 
 	if err != nil {
 		if err == pgx.ErrNoRows {

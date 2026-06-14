@@ -4,7 +4,6 @@ package db
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -299,8 +298,9 @@ func TestUserDeviceMapping(t *testing.T) {
 	}
 }
 
-// TestSoftDisableRoleConcat confirms the offboarding soft-disable SQL works.
-func TestSoftDisableRoleConcat(t *testing.T) {
+// TestSoftDisableUsesDisabledFlag confirms the offboarding soft-disable SQL is
+// idempotent and does not mutate the user's display role.
+func TestSoftDisableUsesDisabledFlag(t *testing.T) {
 	pool, cleanup := testPool(t)
 	defer cleanup()
 
@@ -315,25 +315,28 @@ func TestSoftDisableRoleConcat(t *testing.T) {
 		t.Fatalf("insert user: %v", err)
 	}
 
-	// Mirror the offboarding handler's soft-disable.
-	_, err = pool.Exec(ctx,
-		`UPDATE users SET role = CONCAT(COALESCE(role, ''), ' (DISABLED)'), updated_at = NOW() WHERE keycloak_user_id = $1`,
-		uid)
-	if err != nil {
-		t.Fatalf("soft-disable: %v", err)
+	for i := 0; i < 2; i++ {
+		// Mirror the offboarding handler's soft-disable. Running it repeatedly
+		// should leave the role untouched and keep disabled=true.
+		_, err = pool.Exec(ctx,
+			`UPDATE users SET disabled = true, updated_at = NOW() WHERE keycloak_user_id = $1`,
+			uid)
+		if err != nil {
+			t.Fatalf("soft-disable run %d: %v", i+1, err)
+		}
 	}
 
 	var role string
-	err = pool.QueryRow(ctx, `SELECT role FROM users WHERE keycloak_user_id = $1`, uid).Scan(&role)
+	var disabled bool
+	err = pool.QueryRow(ctx, `SELECT role, disabled FROM users WHERE keycloak_user_id = $1`, uid).Scan(&role, &disabled)
 	if err != nil {
-		t.Fatalf("lookup role: %v", err)
+		t.Fatalf("lookup user: %v", err)
 	}
-	expected := "Admin (DISABLED)"
-	if role != expected {
-		t.Errorf("expected role %q, got %q", expected, role)
+	if role != "Admin" {
+		t.Errorf("expected role to remain %q, got %q", "Admin", role)
 	}
-	if !contains(role, "(DISABLED)") {
-		t.Errorf("role should contain (DISABLED): %q", role)
+	if !disabled {
+		t.Error("expected disabled=true")
 	}
 }
 
@@ -374,20 +377,3 @@ func TestMigrationRecordsApplied(t *testing.T) {
 		t.Error("expected at least one recorded migration")
 	}
 }
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || (len(substr) > 0 && stringContains(s, substr)))
-}
-
-// stringContains avoids importing strings in the test file.
-func stringContains(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-// fmt import is used in error formatting; keep the linter happy.
-var _ = fmt.Sprintf

@@ -49,8 +49,7 @@ export default function EmployeesPage() {
         email: String(u.email || ""),
         department: String(u.department || ""),
         role: String(u.role || ""),
-        // The backend soft-disables users by suffixing their role with "(DISABLED)".
-        status: String(u.role || "").includes("(DISABLED)") ? "Disabled" : "Active",
+        status: u.disabled || String(u.role || "").includes("(DISABLED)") ? "Disabled" : "Active",
       }));
       setEmployees(mapped);
     } catch (err: unknown) {

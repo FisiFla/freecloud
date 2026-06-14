@@ -10,8 +10,8 @@ import (
 
 // migration is a single ordered, idempotent SQL migration.
 type migration struct {
-	id      int
-	name    string
+	id        int
+	name      string
 	statement string
 }
 
@@ -23,6 +23,11 @@ var migrations = []migration{
 		id:        1,
 		name:      "initial_schema",
 		statement: Migration001,
+	},
+	{
+		id:        2,
+		name:      "user_disabled_flag",
+		statement: Migration002,
 	},
 }
 
@@ -87,6 +92,18 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_devices_hostname ON devices(hostname);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_action_created ON audit_logs(actor_id, action, created_at);
+`
+
+// Migration002 adds an explicit disabled state for users. Older local data may
+// have encoded disabled state by appending " (DISABLED)" to role, so this
+// migration backfills the flag and cleans the display role.
+const Migration002 = `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT false;
+
+UPDATE users
+SET disabled = true,
+    role = NULLIF(TRIM(REGEXP_REPLACE(COALESCE(role, ''), '([[:space:]]*\(DISABLED\))+[[:space:]]*$', '')), '')
+WHERE COALESCE(role, '') LIKE '%(DISABLED)%';
 `
 
 // RunMigrations applies any pending migrations in order, recording each in
