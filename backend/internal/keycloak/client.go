@@ -344,7 +344,7 @@ func (k *KeycloakClient) AssignUserToClient(ctx context.Context, userID, clientI
 	}
 
 	// Assign role to user
-	err = k.client.AddClientRoleToUser(ctx, token, k.realm, clientID, userID, []gocloak.Role{*clientRole})
+	err = k.client.AddClientRolesToUser(ctx, token, k.realm, clientID, userID, []gocloak.Role{*clientRole})
 	if err != nil {
 		return fmt.Errorf("assign user %s to client %s: %w", userID, clientID, err)
 	}
