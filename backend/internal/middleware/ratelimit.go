@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -47,14 +48,18 @@ func (rl *RateLimiter) Stop() {
 
 // Middleware returns an HTTP middleware that enforces the rate limit.
 //
-// The client is identified by r.RemoteAddr only. X-Forwarded-For is NOT
-// trusted because it is trivially spoofable by the client and would allow
-// bypassing the limit by rotating the header value per request. If you run
-// behind a trusted proxy, configure chi's RealIP middleware with an explicit
-// proxy allowlist instead.
+// The client is identified by the host portion of r.RemoteAddr only (the port
+// is stripped, since a single client reconnects with a new source port each
+// time). X-Forwarded-For / X-Real-IP are NOT trusted because they are
+// trivially spoofable by the client and would allow bypassing the limit by
+// rotating the header value per request.
+//
+// NOTE: this assumes RealIP-style middleware is NOT installed globally. If you
+// later add a trusted-proxy layer, key derivation must move behind it.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !rl.allow(r.RemoteAddr) {
+		key := clientIP(r)
+		if !rl.allow(key) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", strconv.Itoa(int(rl.window.Seconds())))
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -63,6 +68,17 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// clientIP extracts the host portion of r.RemoteAddr, dropping the source port
+// so that reconnects from the same client collapse to one key.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// No port present (e.g. a unix socket or already-host-only value).
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // allow reports whether a request from the given key is permitted, recording
