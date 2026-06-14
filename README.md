@@ -69,9 +69,26 @@ freecloud/
 | POST | /api/v1/auth/device-check | Device posture assessment |
 | POST | /api/v1/apps/create | Register SSO application |
 | POST | /api/v1/apps/{appId}/assign | Assign user to app |
+| POST | /api/v1/fleet/enrollment-callback | FleetDM enrollment webhook (HMAC-authenticated) |
 | GET | /api/v1/apps | List connected apps |
 | GET | /api/v1/audit-logs | View audit trail |
 | GET | /api/v1/health | Health check |
+
+### FleetDM enrollment callback
+
+When a host enrolls, FleetDM must `POST /api/v1/fleet/enrollment-callback` so the
+device is linked to the user its enrollment token was issued for — that mapping
+is what lets offboarding actually lock/wipe the user's devices.
+
+- **Auth:** the request is signed, not JWT-authenticated (Fleet, not a browser,
+  calls it). Send `X-Fleet-Signature: sha256=<hex HMAC-SHA256 of the raw body>`
+  keyed by `FLEET_WEBHOOK_SECRET`. An unset secret rejects all callbacks.
+- **Body:** `{"enrollment_token","host_id","hostname","os_version"}`.
+- For local end-to-end testing the `fleetdm-mock` auto-fires this callback when
+  `BACKEND_URL` and `FLEET_WEBHOOK_SECRET` are set in its environment.
+
+> Note: SAML app creation is currently a stub (the Keycloak client is created
+> without SAML-specific attributes); OIDC apps are fully functional.
 
 ## Development & Testing
 

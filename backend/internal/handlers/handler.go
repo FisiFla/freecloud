@@ -30,6 +30,16 @@ type Handler struct {
 	keycloak keycloak.KeycloakClientInterface
 	fleet    fleet.FleetClientInterface
 	logger   *zap.Logger
+
+	// fleetWebhookSecret authenticates Fleet enrollment callbacks (HMAC-SHA256).
+	// Empty means the callback rejects everything (fail closed).
+	fleetWebhookSecret string
+}
+
+// SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment
+// callback signatures. Called once at startup from main.
+func (h *Handler) SetFleetWebhookSecret(secret string) {
+	h.fleetWebhookSecret = secret
 }
 
 // NewHandler creates a new Handler.

@@ -168,7 +168,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		})
 		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, string(auditDetails)); persistErr != nil {
+		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, string(auditDetails), enrollmentToken); persistErr != nil {
 			logger.Error("failed to persist onboarded user; rolling back Keycloak user",
 				zap.String("kc_user_id", kcUserID), zap.Error(persistErr))
 			respondError(w, http.StatusInternalServerError, "failed to persist user")
@@ -177,13 +177,10 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	}
 	persisted = true
 
-	// Devices are linked on a FleetDM enrollment callback (see the enrollment
-	// handler), not pre-populated here.
-
+	// Devices are linked when a host enrolls and FleetDM calls our enrollment
+	// callback with this token (see handlers/enrollment.go), not pre-populated
+	// here. The token is what the admin/Fleet uses; there is no user-facing URL.
 	enrollmentURL := ""
-	if enrollmentToken != "" {
-		enrollmentURL = "/enroll/" + enrollmentToken
-	}
 
 	nextStep := "User created. Admin must provide login credentials to the user."
 	if createdUser.ResetEmailSent {
@@ -207,9 +204,11 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, status, resp)
 }
 
-// persistOnboard writes the user row and its audit-log entry in a single
-// transaction, so a persisted onboarding always has a matching audit record.
-func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req OnboardRequest, actorID, auditDetails string) error {
+// persistOnboard writes the user row, its audit-log entry, and (when a Fleet
+// enrollment token was issued) the token→user mapping, all in a single
+// transaction — so a persisted onboarding always has a matching audit record,
+// and a device that later enrolls with that token can be linked to its owner.
+func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req OnboardRequest, actorID, auditDetails, enrollmentToken string) error {
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -229,6 +228,15 @@ func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req Onboa
 		actorID, "onboard", "user", kcUserID, auditDetails,
 	); err != nil {
 		return fmt.Errorf("insert audit log: %w", err)
+	}
+	if enrollmentToken != "" {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO enrollment_tokens (token, user_id, expires_at)
+			 VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
+			enrollmentToken, kcUserID,
+		); err != nil {
+			return fmt.Errorf("insert enrollment token: %w", err)
+		}
 	}
 	return tx.Commit(ctx)
 }
