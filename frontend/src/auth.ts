@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import KeycloakProvider from "next-auth/providers/keycloak";
+import { requiredProdEnv, requiredEnv } from "@/lib/env";
 
 /**
  * Auth.js v5 configuration.
@@ -10,7 +11,21 @@ import KeycloakProvider from "next-auth/providers/keycloak";
  *   AUTH_KEYCLOAK_ISSUER      — e.g. http://localhost:8081/realms/freecloud
  *   AUTH_SECRET               — used to sign the session cookie (was NEXTAUTH_SECRET)
  *   AUTH_URL                  — app base URL (was NEXTAUTH_URL); optional in prod
+ *
+ * The Keycloak vars fall back to dev defaults but throw in production if unset.
+ * AUTH_SECRET is validated at runtime (skipped during `next build`) because
+ * Auth.js uses it to sign the session cookie.
  */
+
+// Validate at runtime — skipped during `next build` via env.isBuildPhase.
+requiredEnv("AUTH_SECRET");
+
+const keycloakClientId = requiredProdEnv("AUTH_KEYCLOAK_ID", "freecloud-dashboard");
+const keycloakClientSecret = requiredProdEnv("AUTH_KEYCLOAK_SECRET", "");
+const keycloakIssuer = requiredProdEnv(
+  "AUTH_KEYCLOAK_ISSUER",
+  "http://localhost:8081/realms/freecloud",
+);
 
 // Augment the Session type so the access token and refresh-error flag are
 // visible to client/server consumers without `as any` casts.
@@ -36,9 +51,9 @@ type TokenWithAccess = {
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     KeycloakProvider({
-      clientId: process.env.AUTH_KEYCLOAK_ID || "freecloud-dashboard",
-      clientSecret: process.env.AUTH_KEYCLOAK_SECRET || "",
-      issuer: process.env.AUTH_KEYCLOAK_ISSUER || "http://localhost:8081/realms/freecloud",
+      clientId: keycloakClientId,
+      clientSecret: keycloakClientSecret,
+      issuer: keycloakIssuer,
     }),
   ],
   session: {
@@ -68,15 +83,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       }
 
       // About to expire — refresh via Keycloak's token endpoint.
-      const issuer =
-        process.env.AUTH_KEYCLOAK_ISSUER || "http://localhost:8081/realms/freecloud";
       try {
-        const res = await fetch(`${issuer}/protocol/openid-connect/token`, {
+        const res = await fetch(`${keycloakIssuer}/protocol/openid-connect/token`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
-            client_id: process.env.AUTH_KEYCLOAK_ID || "freecloud-dashboard",
-            client_secret: process.env.AUTH_KEYCLOAK_SECRET || "",
+            client_id: keycloakClientId,
+            client_secret: keycloakClientSecret,
             grant_type: "refresh_token",
             refresh_token: t.refreshToken ?? "",
           }),
