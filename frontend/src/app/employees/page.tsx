@@ -29,6 +29,8 @@ export default function EmployeesPage() {
   const [confirmClose, setConfirmClose] = useState(false);
 
   const [deprovisionTarget, setDeprovisionTarget] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionWarnings, setActionWarnings] = useState<string[] | null>(null);
 
   const fetchEmployees = useCallback(async () => {
     try {
@@ -60,11 +62,21 @@ export default function EmployeesPage() {
 
   const handleDeprovision = async () => {
     if (!deprovisionTarget) return;
+    setActionError(null);
+    setActionWarnings(null);
     try {
-      await offboardUser(deprovisionTarget);
-      setEmployees((prev) => prev.filter((e) => e.id !== deprovisionTarget));
+      const result = await offboardUser(deprovisionTarget);
+      if (result.warnings && result.warnings.length > 0) {
+        // Offboarding partially succeeded — surface the warnings and refresh
+        // so the (likely-disabled) user's new status is shown.
+        setActionWarnings(result.warnings);
+        fetchEmployees();
+      } else {
+        // Clean success: remove the row immediately.
+        setEmployees((prev) => prev.filter((e) => e.id !== deprovisionTarget));
+      }
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to deprovision");
+      setActionError(err instanceof Error ? err.message : "Failed to deprovision");
     } finally {
       setDeprovisionTarget(null);
     }
@@ -117,6 +129,46 @@ export default function EmployeesPage() {
           <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             <AlertCircle className="h-5 w-5 shrink-0" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {/* Deprovision action error */}
+        {actionError && (
+          <div className="mt-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+            <div className="flex-1">
+              <p className="font-medium">Deprovisioning failed</p>
+              <p className="text-red-600">{actionError}</p>
+            </div>
+            <button
+              onClick={() => setActionError(null)}
+              className="text-red-400 hover:text-red-600"
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
+        {/* Deprovision partial-success warnings */}
+        {actionWarnings && actionWarnings.length > 0 && (
+          <div className="mt-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+            <div className="flex-1">
+              <p className="font-medium">Employee offboarded with warnings</p>
+              <ul className="mt-1 list-inside list-disc text-amber-700">
+                {actionWarnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            </div>
+            <button
+              onClick={() => setActionWarnings(null)}
+              className="text-amber-400 hover:text-amber-600"
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
           </div>
         )}
 
