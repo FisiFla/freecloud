@@ -60,6 +60,7 @@ export interface AuditLogFilters {
   actor?: string;
   action?: string;
   limit?: number;
+  offset?: number;
 }
 
 export interface AuditLogEntry {
@@ -118,6 +119,10 @@ interface ApiEnvelope<T> {
 let authToken: string | null = null;
 
 export function setAuthToken(token: string | null) {
+  // Only ever store the token in the browser. This module has no "use client"
+  // directive, so guard against a future server-side import accumulating a
+  // process-wide token that would leak across concurrent requests.
+  if (typeof window === "undefined") return;
   authToken = token;
 }
 
@@ -229,6 +234,7 @@ export async function listAuditLogs(filters?: AuditLogFilters): Promise<AuditLog
   if (filters?.actor) params.set("actor", filters.actor);
   if (filters?.action) params.set("action", filters.action);
   if (filters?.limit) params.set("limit", String(filters.limit));
+  if (filters?.offset) params.set("offset", String(filters.offset));
   const qs = params.toString();
   return request<AuditLogEntry[]>("GET", `/api/v1/audit-logs${qs ? `?${qs}` : ""}`);
 }

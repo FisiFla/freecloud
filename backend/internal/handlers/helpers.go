@@ -14,6 +14,16 @@ func isValidUUID(s string) bool {
 	return uuidPattern.MatchString(s)
 }
 
+// emailPattern is a pragmatic email check: a local part, an @, a domain, and a
+// dotted TLD, with no whitespace. It deliberately rejects "@", "a@", "@x" that a
+// bare strings.Contains("@") would let through to Keycloak as a confusing error.
+var emailPattern = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
+
+// isValidEmail reports whether s is a plausibly-valid email address.
+func isValidEmail(s string) bool {
+	return len(s) <= 254 && emailPattern.MatchString(s)
+}
+
 // APIResponse is the standard JSON response envelope for all API endpoints.
 type APIResponse struct {
 	Success bool        `json:"success"`

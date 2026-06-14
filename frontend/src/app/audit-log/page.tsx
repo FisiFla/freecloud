@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Search, Filter } from "lucide-react";
 import { listAuditLogs } from "@/lib/api";
 import type { AuditLogEntry } from "@/lib/api";
@@ -17,10 +17,14 @@ const actionOptions = [
   "app_assign",
 ];
 
+const PAGE_SIZE = 100;
+
 export default function AuditLogPage() {
   const apiReady = useApiReady();
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [actorFilter, setActorFilter] = useState("");
@@ -35,26 +39,53 @@ export default function AuditLogPage() {
     return () => clearTimeout(t);
   }, [actorFilter]);
 
+  const fetchPage = useCallback(
+    (offset: number) =>
+      listAuditLogs({
+        actor: debouncedActor || undefined,
+        action: actionFilter !== "All Actions" ? actionFilter : undefined,
+        limit: PAGE_SIZE,
+        offset,
+      }),
+    [debouncedActor, actionFilter],
+  );
+
+  // Reload the first page whenever the filters change.
   useEffect(() => {
     if (!apiReady) return;
-    const fetchLogs = async () => {
+    let cancelled = false;
+    (async () => {
       try {
         setLoading(true);
         setError(null);
-        const data = await listAuditLogs({
-          actor: debouncedActor || undefined,
-          action: actionFilter !== "All Actions" ? actionFilter : undefined,
-          limit: 100,
-        });
+        const data = await fetchPage(0);
+        if (cancelled) return;
         setLogs(data);
+        setHasMore(data.length === PAGE_SIZE);
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to load audit logs");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load audit logs");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
+    })();
+    return () => {
+      cancelled = true;
     };
-    fetchLogs();
-  }, [debouncedActor, actionFilter, apiReady]);
+  }, [fetchPage, apiReady]);
+
+  const loadMore = async () => {
+    try {
+      setLoadingMore(true);
+      setError(null);
+      const data = await fetchPage(logs.length);
+      setLogs((prev) => [...prev, ...data]);
+      setHasMore(data.length === PAGE_SIZE);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to load more audit logs");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   // Actor and action filters are applied server-side via listAuditLogs().
   // Only the date-range filter is applied client-side here (not yet supported
@@ -208,9 +239,20 @@ export default function AuditLogPage() {
             </div>
           </div>
 
-          <p className="mt-4 text-xs text-slate-400">
-            Showing {filtered.length} of {logs.length} events
-          </p>
+          <div className="mt-4 flex items-center justify-between">
+            <p className="text-xs text-slate-400">
+              Showing {filtered.length} of {logs.length} loaded event{logs.length === 1 ? "" : "s"}
+            </p>
+            {hasMore && (
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+              >
+                {loadingMore ? "Loading…" : "Load more"}
+              </button>
+            )}
+          </div>
         </>
       )}
     </div>
