@@ -5,23 +5,35 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 )
 
+// DBPool is the subset of *pgxpool.Pool the handlers use. Depending on an
+// interface (rather than the concrete pool) lets unit tests inject a fake
+// database to exercise the persistence and rollback paths. *pgxpool.Pool
+// satisfies it.
+type DBPool interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 // Handler holds shared dependencies for all HTTP handlers.
 type Handler struct {
-	db       *pgxpool.Pool
+	db       DBPool
 	keycloak keycloak.KeycloakClientInterface
 	fleet    fleet.FleetClientInterface
 	logger   *zap.Logger
 }
 
 // NewHandler creates a new Handler.
-func NewHandler(db *pgxpool.Pool, kc keycloak.KeycloakClientInterface, fc fleet.FleetClientInterface, logger *zap.Logger) *Handler {
+func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetClientInterface, logger *zap.Logger) *Handler {
 	return &Handler{
 		db:       db,
 		keycloak: kc,

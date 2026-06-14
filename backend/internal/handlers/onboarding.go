@@ -1,15 +1,18 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Nerzal/gocloak/v13"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
-	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
@@ -81,12 +84,29 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
-	// Sequential flow: Keycloak → DB persist → Fleet → audit → devices
-	var createdUser *keycloak.CreateUserResult
-	var enrollmentToken string
 	var warnings []string
 
-	// Step 1: Create user in Keycloak
+	// Idempotency: if this email already maps to a Keycloak user locally, do not
+	// create a second Keycloak user — report the existing mapping as a conflict.
+	if h.db != nil {
+		var existingID string
+		lookupErr := h.db.QueryRow(ctx,
+			`SELECT keycloak_user_id FROM users WHERE email = $1`, req.Email,
+		).Scan(&existingID)
+		switch {
+		case lookupErr == nil:
+			respondError(w, http.StatusConflict, "a user with this email already exists")
+			return
+		case errors.Is(lookupErr, pgx.ErrNoRows):
+			// No existing user — proceed.
+		default:
+			logger.Error("onboard idempotency lookup failed", zap.Error(lookupErr))
+			respondError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	}
+
+	// Step 1: Create the user in Keycloak.
 	result, err := h.keycloak.CreateUser(ctx, req.FirstName, req.LastName, req.Email, req.Department)
 	if err != nil {
 		logger.Error("keycloak user creation failed", zap.Error(err))
@@ -98,38 +118,37 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "password could not be set for user")
 		return
 	}
-	createdUser = result
-
 	if result.User == nil || result.User.ID == nil || *result.User.ID == "" {
 		logger.Error("keycloak user creation returned missing user ID")
 		respondError(w, http.StatusInternalServerError, "keycloak user creation returned missing user ID")
 		return
 	}
+	createdUser := result
+	kcUserID := *result.User.ID
 
-	// Capture email setup warning
+	// Compensation: if the Keycloak user was created but local persistence fails,
+	// delete the orphaned Keycloak user (mirrors CreateApp in apps.go). A fresh
+	// context is used so cleanup still runs if the client disconnected.
+	persisted := false
+	defer func() {
+		if persisted {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		logger.Warn("rolling back orphaned Keycloak user", zap.String("kc_user_id", kcUserID))
+		if delErr := h.keycloak.DeleteUser(cleanupCtx, kcUserID); delErr != nil {
+			logger.Error("failed to roll back orphaned Keycloak user",
+				zap.String("kc_user_id", kcUserID), zap.Error(delErr))
+		}
+	}()
+
 	if result.SetupWarning != "" {
 		warnings = append(warnings, result.SetupWarning)
 	}
 
-	// Step 2: Insert into local database
-	if h.db != nil {
-		_, dbErr := h.db.Exec(ctx,
-			`INSERT INTO users (keycloak_user_id, email, first_name, last_name, department, role)
-			 VALUES ($1, $2, $3, $4, $5, $6)
-			 ON CONFLICT (keycloak_user_id) DO UPDATE
-			 SET email = $2, first_name = $3, last_name = $4, department = $5, role = $6, updated_at = NOW()`,
-			*result.User.ID, req.Email, req.FirstName, req.LastName, req.Department, req.Role,
-		)
-		if dbErr != nil {
-			logger.Warn("failed to persist user to local DB, continuing",
-				zap.String("user_id", *result.User.ID),
-				zap.Error(dbErr),
-			)
-			warnings = append(warnings, fmt.Sprintf("user DB insert: %v", dbErr))
-		}
-	}
-
-	// Step 3: Create Fleet enrollment token
+	// Step 2: Create the Fleet enrollment token (best-effort; non-blocking).
+	var enrollmentToken string
 	token, fleetErr := h.fleet.CreateEnrollmentToken(ctx)
 	if fleetErr != nil {
 		logger.Warn("fleet enrollment token creation failed, continuing", zap.Error(fleetErr))
@@ -138,43 +157,36 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		enrollmentToken = token
 	}
 
-	// Step 4: Determine enrollment URL
+	// Step 3: Persist the user row and its audit-log entry atomically. A detached
+	// context ensures a client disconnect can't leave the user half-persisted,
+	// and binding the audit insert into the same transaction means a successful
+	// onboarding can never lack an audit record. Failure here triggers the
+	// Keycloak rollback via the deferred compensation above.
+	if h.db != nil {
+		auditDetails, _ := json.Marshal(map[string]interface{}{
+			"email": req.Email, "department": req.Department, "role": req.Role,
+		})
+		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, string(auditDetails)); persistErr != nil {
+			logger.Error("failed to persist onboarded user; rolling back Keycloak user",
+				zap.String("kc_user_id", kcUserID), zap.Error(persistErr))
+			respondError(w, http.StatusInternalServerError, "failed to persist user")
+			return
+		}
+	}
+	persisted = true
+
+	// Devices are linked on a FleetDM enrollment callback (see the enrollment
+	// handler), not pre-populated here.
+
 	enrollmentURL := ""
 	if enrollmentToken != "" {
 		enrollmentURL = "/enroll/" + enrollmentToken
 	}
 
-	// Step 5: Write audit log
-	auditDetails, _ := json.Marshal(map[string]interface{}{
-		"email":      req.Email,
-		"department": req.Department,
-		"role":       req.Role,
-	})
-	var targetID string
-	if createdUser != nil && createdUser.User != nil && createdUser.User.ID != nil {
-		targetID = *createdUser.User.ID
-	} else {
-		targetID = req.Email
-	}
-	if h.db != nil {
-		_, auditErr := h.db.Exec(ctx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "onboard", "user", targetID, string(auditDetails),
-		)
-		if auditErr != nil {
-			logger.Warn("failed to write audit log", zap.Error(auditErr))
-			warnings = append(warnings, fmt.Sprintf("audit log insert: %v", auditErr))
-		}
-	}
-
-	// Note: we intentionally do NOT create placeholder device rows here.
-	// Devices are created on a FleetDM enrollment callback/webhook once a real
-	// host checks in with the enrollment token. Pre-populating with random UUIDs
-	// that don't exist in FleetDM would make subsequent device-check calls fail.
-
 	nextStep := "User created. Admin must provide login credentials to the user."
-	if createdUser != nil && createdUser.ResetEmailSent {
+	if createdUser.ResetEmailSent {
 		nextStep = "Password reset email sent to user."
 	}
 
@@ -184,7 +196,6 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		EnrollmentURL:   enrollmentURL,
 		NextStep:        nextStep,
 	}
-
 	if len(warnings) > 0 {
 		resp.Warning = strings.Join(warnings, "; ")
 	}
@@ -193,6 +204,31 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	if fleetErr != nil {
 		status = http.StatusAccepted
 	}
-
 	respondJSON(w, status, resp)
+}
+
+// persistOnboard writes the user row and its audit-log entry in a single
+// transaction, so a persisted onboarding always has a matching audit record.
+func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req OnboardRequest, actorID, auditDetails string) error {
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO users (keycloak_user_id, email, first_name, last_name, department, role)
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		kcUserID, req.Email, req.FirstName, req.LastName, req.Department, req.Role,
+	); err != nil {
+		return fmt.Errorf("insert user: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		actorID, "onboard", "user", kcUserID, auditDetails,
+	); err != nil {
+		return fmt.Errorf("insert audit log: %w", err)
+	}
+	return tx.Commit(ctx)
 }
