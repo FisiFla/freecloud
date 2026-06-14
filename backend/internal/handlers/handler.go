@@ -57,6 +57,45 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// Healthz is a liveness probe: 200 as long as the process is serving.
+func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// Readyz is a readiness probe: 200 only when the database and Keycloak are
+// reachable, so an orchestrator stops routing to an instance that can't serve
+// real traffic. Returns 503 with per-dependency status otherwise.
+func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	checks := map[string]string{}
+	ready := true
+
+	if h.db == nil {
+		checks["database"] = "not configured"
+		ready = false
+	} else if err := h.db.QueryRow(ctx, "SELECT 1").Scan(new(int)); err != nil {
+		checks["database"] = "unreachable"
+		ready = false
+	} else {
+		checks["database"] = "ok"
+	}
+
+	if err := h.keycloak.Ping(ctx); err != nil {
+		checks["keycloak"] = "unreachable"
+		ready = false
+	} else {
+		checks["keycloak"] = "ok"
+	}
+
+	status := http.StatusOK
+	if !ready {
+		status = http.StatusServiceUnavailable
+	}
+	respondJSON(w, status, checks)
+}
+
 // HealthKeycloak checks connectivity to the Keycloak server.
 func (h *Handler) HealthKeycloak(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)

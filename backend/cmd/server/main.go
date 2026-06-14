@@ -12,6 +12,7 @@ import (
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/config"
@@ -107,6 +108,7 @@ func main() {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RequestID)
+	r.Use(middleware.Metrics)
 	// Baseline security response headers on every response. The frontend sets a
 	// richer set (including a Content-Security-Policy) in next.config.js; this
 	// covers the JSON API surface.
@@ -117,6 +119,9 @@ func main() {
 			h.Set("X-Frame-Options", "DENY")
 			h.Set("Referrer-Policy", "no-referrer")
 			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			if rid := chimiddleware.GetReqID(req.Context()); rid != "" {
+				h.Set("X-Request-Id", rid)
+			}
 			next.ServeHTTP(w, req)
 		})
 	})
@@ -140,6 +145,10 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           300,
 	}))
+
+	// Prometheus metrics scrape target. Unauthenticated by design; restrict it
+	// at the reverse proxy / network layer if the API is publicly exposed.
+	r.Handle("/metrics", promhttp.Handler())
 
 	// Register routes (auth + actor middleware applied inside)
 	handlers.SetupRoutes(r, handler, authMW.Middleware)
