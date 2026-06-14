@@ -97,7 +97,11 @@ func main() {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RequestID)
-	r.Use(chimiddleware.RealIP)
+	// NOTE: chi RealIP is intentionally NOT installed. It rewrites RemoteAddr
+	// from X-Forwarded-For/X-Real-IP headers, which are client-spoofable and
+	// would let attackers bypass the rate limiter by rotating the header.
+	// If a trusted reverse proxy is added in front, install RealIP with an
+	// explicit trusted-proxy allowlist at that point.
 	// Bound request bodies (1 MiB) to prevent memory exhaustion via large POSTs.
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
