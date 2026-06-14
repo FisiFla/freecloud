@@ -46,7 +46,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
       const data = await onboardEmployee({ firstName, lastName, email, department, role });
       setResult({
         enrollmentToken: data.enrollmentToken || "",
-        enrollmentUrl: data.enrollmentURL || "http://localhost:8080/enroll",
+        enrollmentUrl: data.enrollmentURL || "",
         warning: data.warning,
         nextStep: data.nextStep,
       });
@@ -127,22 +127,24 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
             </div>
           </div>
 
-          {/* Enrollment URL */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700">Enrollment URL</label>
-            <div className="mt-1 flex items-center gap-2">
-              <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800 break-all">
-                {result.enrollmentUrl}
-              </code>
-              <button
-                onClick={() => copyToClipboard(result.enrollmentUrl)}
-                className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
-                title="Copy URL"
-              >
-                <Copy className="h-4 w-4" />
-              </button>
+          {/* Enrollment URL — only shown when the backend supplies one. */}
+          {result.enrollmentUrl && (
+            <div>
+              <label className="block text-sm font-medium text-slate-700">Enrollment URL</label>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800 break-all">
+                  {result.enrollmentUrl}
+                </code>
+                <button
+                  onClick={() => copyToClipboard(result.enrollmentUrl)}
+                  className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
+                  title="Copy URL"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           {copied && <p className="text-sm text-emerald-600">Copied to clipboard!</p>}
         </div>

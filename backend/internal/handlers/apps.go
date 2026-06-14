@@ -330,6 +330,13 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	offset := 0
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if v, err := strconv.Atoi(offsetStr); err == nil && v >= 0 {
+			offset = v
+		}
+	}
+
 	query := `SELECT id, actor_id, action, COALESCE(target_type, ''), COALESCE(target_id, ''), details, created_at
 		 FROM audit_logs WHERE 1=1`
 	args := []interface{}{}
@@ -348,6 +355,9 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 
 	query += ` ORDER BY created_at DESC LIMIT $` + strconv.Itoa(argIdx)
 	args = append(args, limit)
+	argIdx++
+	query += ` OFFSET $` + strconv.Itoa(argIdx)
+	args = append(args, offset)
 
 	rows, err := h.db.Query(ctx, query, args...)
 	if err != nil {

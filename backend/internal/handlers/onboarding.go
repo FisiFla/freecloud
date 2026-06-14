@@ -67,8 +67,8 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		valErrors = append(valErrors, ValidationError{Field: "email", Message: "email is required"})
 	} else if len(req.Email) > 254 {
 		valErrors = append(valErrors, ValidationError{Field: "email", Message: "email must be ≤ 254 characters"})
-	} else if !strings.Contains(req.Email, "@") {
-		valErrors = append(valErrors, ValidationError{Field: "email", Message: "email must contain @"})
+	} else if !isValidEmail(req.Email) {
+		valErrors = append(valErrors, ValidationError{Field: "email", Message: "email must be a valid address"})
 	}
 	if len(req.Department) > 100 {
 		valErrors = append(valErrors, ValidationError{Field: "department", Message: "department must be ≤ 100 characters"})
