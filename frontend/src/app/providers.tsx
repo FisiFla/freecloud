@@ -7,7 +7,7 @@ import { useEffect } from "react";
 function AuthTokenSync({ children }: { children: React.ReactNode }) {
   const { data: session } = useSession();
   useEffect(() => {
-    setAuthToken((session as any)?.accessToken || null);
+    setAuthToken(session?.accessToken || null);
   }, [session]);
   return <>{children}</>;
 }
