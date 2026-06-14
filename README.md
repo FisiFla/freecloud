@@ -72,6 +72,29 @@ freecloud/
 | GET | /api/v1/audit-logs | View audit trail |
 | GET | /api/v1/health | Health check |
 
+## Development & Testing
+
+The project ships with a tiered Makefile gate so the fast no-live check stays
+quick while deeper DB-backed tests are available on demand.
+
+```bash
+make verify      # Fast no-live gate: go vet + go test + frontend type-check + build
+make test-db     # Ephemeral Postgres (Docker) migration/schema integration tests
+make verify-db   # Fast verify + DB integration tests
+make verify-all  # Fast verify + go test -race across all packages
+```
+
+`make verify` is the CI-required gate and needs no external services.
+`make test-db` starts a throwaway Postgres 16 container (or uses
+`TEST_DATABASE_URL` if set), runs the migration suite, and exercises the
+schema/user/app/audit/device-mapping queries with the `-race` detector.
+
+Run the backend race tests directly:
+
+```bash
+cd backend && go test -race ./internal/handlers ./internal/middleware ./internal/config ./internal/fleet
+```
+
 ## License
 
 MIT

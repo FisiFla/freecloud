@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { Search, Filter } from "lucide-react";
-import { listAuditLogs, waitForAuthToken } from "@/lib/api";
+import { listAuditLogs } from "@/lib/api";
 import type { AuditLogEntry } from "@/lib/api";
 import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
 import LoadingRows from "@/components/LoadingRows";
+import { useApiReady } from "../providers";
 
 const actionOptions = [
   "All Actions",
@@ -17,6 +18,7 @@ const actionOptions = [
 ];
 
 export default function AuditLogPage() {
+  const apiReady = useApiReady();
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -34,11 +36,11 @@ export default function AuditLogPage() {
   }, [actorFilter]);
 
   useEffect(() => {
+    if (!apiReady) return;
     const fetchLogs = async () => {
       try {
         setLoading(true);
         setError(null);
-        await waitForAuthToken();
         const data = await listAuditLogs({
           actor: debouncedActor || undefined,
           action: actionFilter !== "All Actions" ? actionFilter : undefined,
@@ -52,7 +54,7 @@ export default function AuditLogPage() {
       }
     };
     fetchLogs();
-  }, [debouncedActor, actionFilter]);
+  }, [debouncedActor, actionFilter, apiReady]);
 
   // Actor and action filters are applied server-side via listAuditLogs().
   // Only the date-range filter is applied client-side here (not yet supported

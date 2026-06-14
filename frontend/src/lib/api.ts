@@ -109,39 +109,15 @@ interface ApiEnvelope<T> {
 
 // ---- Auth token store ----
 //
-// The access token is populated asynchronously by the SessionProvider once the
-// session loads. To avoid the first client-side fetch racing ahead of that
-// population (and therefore going out unauthenticated), callers may await
-// `waitForAuthToken()` before issuing requests.
+// The access token is published here by the SessionProvider (via setAuthToken)
+// and attached to outgoing requests by the request() helper below. Components
+// should gate fetches on the `useApiReady()` hook from app/providers rather
+// than polling this store directly.
 
 let authToken: string | null = null;
 
 export function setAuthToken(token: string | null) {
   authToken = token;
-}
-
-export function getAuthToken(): string | null {
-  return authToken;
-}
-
-// waitForAuthToken resolves once a non-empty token has been published, or after
-// a short timeout if none ever arrives (e.g. user is unauthenticated). Returns
-// a boolean readiness flag (not the token itself) so the token reference stays
-// scoped to this module and callers don't hold a live copy.
-export function waitForAuthToken(timeoutMs = 2000): Promise<boolean> {
-  if (authToken) return Promise.resolve(true);
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const interval = setInterval(() => {
-      if (authToken) {
-        clearInterval(interval);
-        resolve(true);
-      } else if (Date.now() - start >= timeoutMs) {
-        clearInterval(interval);
-        resolve(false);
-      }
-    }, 50);
-  });
 }
 
 // ---- Helpers ----

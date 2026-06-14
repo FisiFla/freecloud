@@ -5,10 +5,12 @@ import { Plus, Globe, AlertCircle, UserPlus } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
 import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
-import { listApps, createApp, listUsers, assignAppToUser, waitForAuthToken } from "@/lib/api";
+import { listApps, createApp, listUsers, assignAppToUser } from "@/lib/api";
 import type { App, User } from "@/lib/api";
+import { useApiReady } from "../providers";
 
 export default function AppsPage() {
+  const apiReady = useApiReady();
   const [apps, setApps] = useState<App[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,11 +30,11 @@ export default function AppsPage() {
   const [assignMessage, setAssignMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
+    if (!apiReady) return;
     const fetchApps = async () => {
       try {
         setLoading(true);
         setError(null);
-        await waitForAuthToken();
         const data = await listApps();
         setApps(data);
       } catch (err: unknown) {
@@ -42,12 +44,12 @@ export default function AppsPage() {
       }
     };
     fetchApps();
-  }, []);
+  }, [apiReady]);
 
   useEffect(() => {
+    if (!apiReady) return;
     const fetchUsers = async () => {
       try {
-        await waitForAuthToken();
         const data = await listUsers();
         setUsers(Array.isArray(data) ? data : []);
       } catch {
@@ -55,7 +57,7 @@ export default function AppsPage() {
       }
     };
     fetchUsers();
-  }, []);
+  }, [apiReady]);
 
   const handleAddApp = async (e: React.FormEvent) => {
     e.preventDefault();

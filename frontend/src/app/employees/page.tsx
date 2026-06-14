@@ -9,8 +9,9 @@ import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
 import LoadingRows from "@/components/LoadingRows";
 import OnboardForm from "./onboard/OnboardForm";
-import { offboardUser, listUsers, waitForAuthToken } from "@/lib/api";
+import { offboardUser, listUsers } from "@/lib/api";
 import type { User } from "@/lib/api";
+import { useApiReady } from "../providers";
 
 interface Employee {
   id: string;
@@ -23,6 +24,7 @@ interface Employee {
 }
 
 export default function EmployeesPage() {
+  const apiReady = useApiReady();
   const [search, setSearch] = useState("");
   const [showOnboard, setShowOnboard] = useState(false);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -39,7 +41,6 @@ export default function EmployeesPage() {
     try {
       setLoading(true);
       setError(null);
-      await waitForAuthToken();
       const data = await listUsers();
       const mapped = (Array.isArray(data) ? data : []).map((u: User) => ({
         id: String(u.keycloakUserId || ""),
@@ -60,8 +61,9 @@ export default function EmployeesPage() {
   }, []);
 
   useEffect(() => {
+    if (!apiReady) return;
     fetchEmployees();
-  }, [fetchEmployees]);
+  }, [fetchEmployees, apiReady]);
 
   const handleDeprovision = async () => {
     if (!deprovisionTarget) return;

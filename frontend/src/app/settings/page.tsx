@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { CheckCircle, XCircle, RefreshCw, AlertCircle } from "lucide-react";
-import { healthCheck, healthKeycloak, healthFleet, waitForAuthToken } from "@/lib/api";
+import { healthCheck, healthKeycloak, healthFleet } from "@/lib/api";
+import { useApiReady } from "../providers";
 
 interface ConnectionStatus {
   label: string;
@@ -12,6 +13,7 @@ interface ConnectionStatus {
 }
 
 export default function SettingsPage() {
+  const apiReady = useApiReady();
   const [healthStatus, setHealthStatus] = useState<string | null>(null);
   const [healthLoading, setHealthLoading] = useState(true);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -23,11 +25,11 @@ export default function SettingsPage() {
   ]);
 
   useEffect(() => {
+    if (!apiReady) return;
     const fetchHealth = async () => {
       try {
         setHealthLoading(true);
         setHealthError(null);
-        await waitForAuthToken();
         const result = await healthCheck();
         setHealthStatus(result.status);
       } catch (err: unknown) {
@@ -37,7 +39,7 @@ export default function SettingsPage() {
       }
     };
     fetchHealth();
-  }, []);
+  }, [apiReady]);
 
   const testConnection = async (index: number) => {
     setServices((prev) =>

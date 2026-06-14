@@ -40,8 +40,11 @@ verify:
 
 # DB-backed integration tests against TEST_DATABASE_URL (or a spun-up Postgres).
 # These are NOT part of the fast `verify` gate.
+# NOTE: every shell variable reference in a Make recipe must use $ (Make
+# consumes a single $ as its own variable syntax). Omitting the second $
+# silently rewrites the variable name and causes the test suite to skip.
 test-db:
-	@if [ -z "$TEST_DATABASE_URL" ]; then \
+	@if [ -z "$$TEST_DATABASE_URL" ]; then \
 		echo "TEST_DATABASE_URL not set. Starting an ephemeral Postgres via docker..."; \
 		docker run --rm -d --name freecloud-test-pg \
 			-e POSTGRES_USER=freecloud \
@@ -56,11 +59,13 @@ test-db:
 		done; \
 		cd backend && TEST_DATABASE_URL="postgres://freecloud:freecloud@localhost:55432/freecloud_test?sslmode=disable" \
 			go test -tags=integration -race ./internal/db/ -v; \
-		ret=$?; \
+		ret=$$?; \
 		docker stop freecloud-test-pg >/dev/null 2>&1; \
-		exit $ret; \
+		exit $$ret; \
 	else \
-		cd backend && go test -tags=integration -race ./internal/db/ -v; \
+		echo "Using TEST_DATABASE_URL from environment."; \
+		cd backend && TEST_DATABASE_URL="$$TEST_DATABASE_URL" \
+			go test -tags=integration -race ./internal/db/ -v; \
 	fi
 
 # DB gate: fast verify + the DB integration tests.
