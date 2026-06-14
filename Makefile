@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-setup build-backend build-frontend clean verify verify-db verify-all test-db
+.PHONY: dev-up dev-down db-migrate kc-setup build-backend build-frontend clean verify verify-db verify-all test-db prod-build prod-up prod-down
 
 dev-up:
 	docker compose -f docker/docker-compose.yml up -d
@@ -25,6 +25,18 @@ build-backend:
 
 build-frontend:
 	cd frontend && npm install && npm run build
+
+# Production stack (docker/docker-compose.prod.yml). Requires a populated
+# .env.prod (copy from .env.prod.example). The backend serves on the internal
+# network; Caddy terminates TLS for the public hostnames.
+prod-build:
+	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod build
+
+prod-up:
+	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod up -d --build
+
+prod-down:
+	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod down
 
 clean:
 	rm -rf bin/

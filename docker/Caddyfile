@@ -1,0 +1,14 @@
+# Caddy auto-provisions and renews TLS certificates for each public hostname.
+# The hostnames are injected from the compose environment.
+
+{$DASHBOARD_DOMAIN} {
+	reverse_proxy frontend:3000
+}
+
+{$API_DOMAIN} {
+	reverse_proxy backend:8080
+}
+
+{$KC_DOMAIN} {
+	reverse_proxy keycloak:8080
+}
