@@ -43,7 +43,7 @@ func main() {
 
 	logger.Info("starting freecloud backend",
 		zap.String("port", cfg.Port),
-		zap.String("database_url", cfg.DatabaseURL),
+		zap.String("database_url", config.RedactDSN(cfg.DatabaseURL)),
 	)
 
 	// Connect to PostgreSQL

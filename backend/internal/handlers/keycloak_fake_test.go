@@ -14,6 +14,7 @@ type fakeKeycloak struct {
 	createUserFn          func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error)
 	disableUserFn         func(ctx context.Context, userID string) error
 	logoutSessionsFn      func(ctx context.Context, userID string) error
+	getUserSessionsFn     func(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error)
 	createClientFn        func(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
 	deleteClientFn        func(ctx context.Context, clientID string) error
 	assignUserToClientFn  func(ctx context.Context, userID, clientID string) error
@@ -36,6 +37,11 @@ func (f *fakeKeycloak) DisableUser(ctx context.Context, userID string) error {
 func (f *fakeKeycloak) LogoutAllSessions(ctx context.Context, userID string) error {
 	if f.logoutSessionsFn != nil { return f.logoutSessionsFn(ctx, userID) }
 	return nil
+}
+
+func (f *fakeKeycloak) GetUserSessions(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error) {
+	if f.getUserSessionsFn != nil { return f.getUserSessionsFn(ctx, userID) }
+	return nil, nil
 }
 
 func (f *fakeKeycloak) CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error) {

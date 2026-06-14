@@ -4,15 +4,8 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { offboardUser, checkDevice, getUser } from "@/lib/api";
-import type { OffboardResponse } from "@/lib/api";
-
-interface Device {
-  id: string;
-  name: string;
-  type: string;
-  os: string;
-}
+import { offboardUser, getUser, waitForAuthToken } from "@/lib/api";
+import type { OffboardResponse, Device } from "@/lib/api";
 
 interface EmployeeDetail {
   id: string;
@@ -21,12 +14,11 @@ interface EmployeeDetail {
   email: string;
   department: string;
   role: string;
-  status: string;
 }
 
 export default function EmployeeDetailPage() {
   const params = useParams();
-  const userId = params.id as string;
+  const userId = (params?.id as string) ?? "";
 
   const [employee, setEmployee] = useState<EmployeeDetail | null>(null);
   const [devices, setDevices] = useState<Device[]>([]);
@@ -44,7 +36,7 @@ export default function EmployeeDetailPage() {
         setLoading(true);
         setError(null);
 
-        // Fetch user details
+        await waitForAuthToken();
         const userData = await getUser(userId);
         setEmployee({
           id: String(userData.id || ""),
@@ -53,29 +45,11 @@ export default function EmployeeDetailPage() {
           email: String(userData.email || ""),
           department: String(userData.department || ""),
           role: String(userData.role || ""),
-          status: String(userData.status || "Active"),
         });
-
-        // Fetch device check
-        try {
-          const deviceData = await checkDevice();
-          if (deviceData.passed && deviceData.failures && deviceData.failures.length > 0) {
-            setDevices(deviceData.failures.map((f, i) => ({
-              id: `dev-${i}`,
-              name: f.detail,
-              type: f.type,
-              os: "N/A",
-            })));
-          } else if (deviceData.failures && deviceData.failures.length > 0) {
-            setDevices([]);
-          } else {
-            // Fallback: try to fetch devices from user endpoint
-            setDevices([]);
-          }
-        } catch {
-          // Device check may not be available; silently skip
-          setDevices([]);
-        }
+        // Read the viewed user's real devices from the user record, rather
+        // than calling checkDevice() (which checks the *current* logged-in
+        // user's devices, not this employee's).
+        setDevices(Array.isArray(userData.devices) ? userData.devices : []);
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Failed to load employee data");
       } finally {
@@ -262,12 +236,12 @@ export default function EmployeeDetailPage() {
                 </div>
                 <span
                   className={`mt-3 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                    employee.status === "Active"
-                      ? "bg-emerald-50 text-emerald-700"
-                      : "bg-amber-50 text-amber-700"
+                    employee.role.includes("(DISABLED)")
+                      ? "bg-amber-50 text-amber-700"
+                      : "bg-emerald-50 text-emerald-700"
                   }`}
                 >
-                  {employee.status}
+                  {employee.role.includes("(DISABLED)") ? "Disabled" : "Active"}
                 </span>
               </div>
             </div>
@@ -282,16 +256,16 @@ export default function EmployeeDetailPage() {
               ) : (
                 devices.map((device) => (
                   <div
-                    key={device.id}
+                    key={device.fleetHostId}
                     className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
                   >
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
                       <Monitor className="h-5 w-5" />
                     </div>
                     <div>
-                      <p className="font-medium text-slate-800">{device.name}</p>
+                      <p className="font-medium text-slate-800">{device.hostname || device.fleetHostId}</p>
                       <p className="text-sm text-slate-500">
-                        {device.type} &middot; {device.os}
+                        {device.osVersion || "Unknown OS"}
                       </p>
                     </div>
                   </div>

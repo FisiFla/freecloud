@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"go.uber.org/zap"
@@ -131,7 +132,7 @@ func (f *FleetClient) CreateEnrollmentToken(ctx context.Context) (string, error)
 func (f *FleetClient) GetHosts(ctx context.Context, query string) ([]Host, error) {
 	path := "/api/v1/fleet/hosts"
 	if query != "" {
-		path += "?query=" + query
+		path += "?query=" + url.QueryEscape(query)
 	}
 
 	body, err := f.doRequest(ctx, http.MethodGet, path, nil)

@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 )
 
 // Config holds application configuration loaded from environment variables.
@@ -57,4 +59,27 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// RedactDSN returns a copy of the database URL with the password component
+// masked, so it is safe to log. Non-URL strings (e.g. "host=... user=...")
+// are returned with a generic "(redacted)" marker if they appear to contain
+// a password.
+func RedactDSN(dsn string) string {
+	if dsn == "" {
+		return ""
+	}
+	// libpq connection URI form: postgres://user:pass@host:port/db?...
+	if u, err := url.Parse(dsn); err == nil && u.User != nil {
+		if _, hasPw := u.User.Password(); hasPw {
+			u.User = url.UserPassword(u.User.Username(), "REDACTED")
+			return u.String()
+		}
+		return u.String()
+	}
+	// libpq keyword/value form
+	if strings.Contains(dsn, "password=") {
+		return "(redacted: keyword/value DSN contains password)"
+	}
+	return dsn
 }
