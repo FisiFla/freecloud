@@ -97,6 +97,19 @@ func main() {
 	r.Use(chimiddleware.Logger)
 	r.Use(chimiddleware.Recoverer)
 	r.Use(chimiddleware.RequestID)
+	// Baseline security response headers on every response. The frontend sets a
+	// richer set (including a Content-Security-Policy) in next.config.js; this
+	// covers the JSON API surface.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			h := w.Header()
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Referrer-Policy", "no-referrer")
+			h.Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+			next.ServeHTTP(w, req)
+		})
+	})
 	// NOTE: chi RealIP is intentionally NOT installed. It rewrites RemoteAddr
 	// from X-Forwarded-For/X-Real-IP headers, which are client-spoofable and
 	// would let attackers bypass the rate limiter by rotating the header.
