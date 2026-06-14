@@ -113,6 +113,32 @@ Run the backend race tests directly:
 cd backend && go test -race ./internal/handlers ./internal/middleware ./internal/config ./internal/fleet
 ```
 
+## Production Deployment
+
+A production stack is defined in `docker/docker-compose.prod.yml`: the Go backend
+and Next.js dashboard (multi-stage `backend/Dockerfile` and `frontend/Dockerfile`),
+a TLS-enabled PostgreSQL, Keycloak in production mode, and **Caddy** as a reverse
+proxy that auto-provisions TLS certificates for the public hostnames. There is no
+`fleetdm-mock` here — point `FLEET_URL` at a real FleetDM.
+
+```bash
+cp .env.prod.example .env.prod      # then fill in real domains + secrets
+make prod-up                        # build images + bring the stack up (detached)
+```
+
+- **Three public hostnames** (dashboard, API, Keycloak) must resolve to the host;
+  Caddy obtains certificates for each.
+- The backend **fails closed**: with `APP_ENV=production` it refuses to start on
+  default DB credentials, `sslmode=disable`, the `admin-cli` client, a localhost
+  Keycloak URL, or any missing secret. Postgres serves TLS so `sslmode=require`
+  works on the internal network; the backend runs schema migrations on startup.
+- The backend image is `distroless:nonroot`; the frontend runs as a non-root node
+  user. `NEXT_PUBLIC_API_URL` is baked at build time from `API_PUBLIC_URL`.
+
+After first boot, run `make kc-setup` against the Keycloak instance to create the
+realm, groups, and the `freecloud-service` confidential client (least-privilege:
+`manage-users` + `manage-clients`).
+
 ## License
 
 MIT
