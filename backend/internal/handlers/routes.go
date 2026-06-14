@@ -18,6 +18,11 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	r.Get("/api/v1/health/keycloak", h.HealthKeycloak)
 	r.Get("/api/v1/health/fleetdm", h.HealthFleet)
 
+	// FleetDM enrollment callback — called by Fleet (not a browser) and
+	// authenticated by an HMAC signature over the body, so it sits OUTSIDE the
+	// JWT auth group.
+	r.Post("/api/v1/fleet/enrollment-callback", h.FleetEnrollmentCallback)
+
 	// Rate limiter for mutating endpoints: 20 requests / minute / client.
 	mutateLimiter := middleware.NewRateLimiter(20, time.Minute)
 

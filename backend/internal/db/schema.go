@@ -29,6 +29,11 @@ var migrations = []migration{
 		name:      "user_disabled_flag",
 		statement: Migration002,
 	},
+	{
+		id:        3,
+		name:      "device_text_ids_and_enrollment_tokens",
+		statement: Migration003,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -104,6 +109,31 @@ UPDATE users
 SET disabled = true,
     role = NULLIF(TRIM(REGEXP_REPLACE(COALESCE(role, ''), '([[:space:]]*\(DISABLED\))+[[:space:]]*$', '')), '')
 WHERE COALESCE(role, '') LIKE '%(DISABLED)%';
+`
+
+// Migration003 widens Fleet host identifiers from UUID to TEXT (real FleetDM
+// host IDs are opaque strings/numeric, not UUIDs) and adds the enrollment_tokens
+// table that links a Fleet enrollment token to the user it was issued for, so a
+// device that later enrolls can be mapped to its owner.
+const Migration003 = `
+ALTER TABLE users_devices_mapping DROP CONSTRAINT IF EXISTS users_devices_mapping_device_id_fkey;
+ALTER TABLE devices ALTER COLUMN fleet_host_id TYPE TEXT USING fleet_host_id::text;
+ALTER TABLE users_devices_mapping ALTER COLUMN device_id TYPE TEXT USING device_id::text;
+ALTER TABLE users_devices_mapping
+    ADD CONSTRAINT users_devices_mapping_device_id_fkey
+    FOREIGN KEY (device_id) REFERENCES devices(fleet_host_id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_devices_fleet_host_id ON devices(fleet_host_id);
+
+CREATE TABLE IF NOT EXISTS enrollment_tokens (
+    token       TEXT PRIMARY KEY,
+    user_id     UUID NOT NULL REFERENCES users(keycloak_user_id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    used_at     TIMESTAMPTZ,
+    expires_at  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_enrollment_tokens_user_id ON enrollment_tokens(user_id);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

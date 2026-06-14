@@ -80,6 +80,7 @@ func main() {
 
 	// Create handler
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
+	handler.SetFleetWebhookSecret(cfg.FleetWebhookSecret)
 
 	// Initialize JWT auth middleware
 	authMW := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)
