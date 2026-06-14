@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"go.uber.org/zap"
@@ -9,14 +8,11 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
-// DeviceCheckRequest is the JSON request body for the device check endpoint.
-// The body is optional; the user identity is derived from the JWT token.
-type DeviceCheckRequest struct{}
-
 // DeviceCheckResponse is the JSON response for the device check endpoint.
+// The request body is ignored; the user identity is derived from the JWT token.
 type DeviceCheckResponse struct {
-	Passed   bool       `json:"passed"`
-	Failures []Failure  `json:"failures,omitempty"`
+	Passed   bool      `json:"passed"`
+	Failures []Failure `json:"failures,omitempty"`
 }
 
 // Failure describes a security check that did not pass.
@@ -34,9 +30,6 @@ func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	userID := claims.Sub
-
-	// Body is optional; discard it
-	_ = json.NewDecoder(r.Body).Decode(&DeviceCheckRequest{})
 
 	ctx := r.Context()
 
@@ -65,6 +58,12 @@ func (h *Handler) DeviceCheck(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		deviceIDs = append(deviceIDs, deviceID)
+	}
+
+	if err := rows.Err(); err != nil {
+		h.logger.Error("error iterating device rows", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 
 	if len(deviceIDs) == 0 {

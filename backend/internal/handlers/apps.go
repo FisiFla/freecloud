@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -130,12 +131,17 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ensure we clean up the Keycloak client if DB operations fail
+	// Ensure we clean up the Keycloak client if DB operations fail.
+	// Use a fresh context (not the request context) so cleanup still runs if
+	// the client disconnects mid-request — otherwise the orphaned Keycloak
+	// client would never be deleted.
 	dbSucceeded := false
 	defer func() {
 		if !dbSucceeded {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 			h.logger.Warn("cleaning up orphaned Keycloak client", zap.String("kc_client_id", keycloakClientID))
-			if delErr := h.keycloak.DeleteClient(ctx, keycloakClientID); delErr != nil {
+			if delErr := h.keycloak.DeleteClient(cleanupCtx, keycloakClientID); delErr != nil {
 				h.logger.Error("failed to clean up orphaned Keycloak client",
 					zap.String("kc_client_id", keycloakClientID),
 					zap.Error(delErr),
@@ -199,6 +205,10 @@ func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 
 	if req.UserID == "" {
 		respondError(w, http.StatusBadRequest, "userId is required")
+		return
+	}
+	if !isValidUUID(req.UserID) {
+		respondError(w, http.StatusBadRequest, "userId must be a valid UUID")
 		return
 	}
 
@@ -287,6 +297,12 @@ func (h *Handler) ListApps(w http.ResponseWriter, r *http.Request) {
 		apps = append(apps, app)
 	}
 
+	if err := rows.Err(); err != nil {
+		h.logger.Error("error iterating apps", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
 	if apps == nil {
 		apps = []ConnectedApp{}
 	}
@@ -351,13 +367,24 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if len(detailsJSON) > 0 {
-			json.Unmarshal(detailsJSON, &entry.Details)
+			if err := json.Unmarshal(detailsJSON, &entry.Details); err != nil {
+				h.logger.Warn("failed to unmarshal audit log details, using empty map",
+					zap.String("entry_id", entry.ID),
+					zap.Error(err),
+				)
+			}
 		}
 		if entry.Details == nil {
 			entry.Details = make(map[string]interface{})
 		}
 		entry.CreatedAt = createdAt.Format(time.RFC3339)
 		entries = append(entries, entry)
+	}
+
+	if err := rows.Err(); err != nil {
+		h.logger.Error("error iterating audit logs", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 
 	if entries == nil {

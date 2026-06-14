@@ -17,6 +17,9 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
 
+  // Don't render the sidebar on auth pages (sign-in).
+  if (pathname === "/signin") return null;
+
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
     return !!pathname && pathname.startsWith(href);
@@ -40,6 +43,7 @@ export default function Sidebar() {
             <Link
               key={link.href}
               href={link.href}
+              aria-current={active ? "page" : undefined}
               className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
                 active
                   ? "bg-indigo-50 text-indigo-700"
@@ -76,6 +80,7 @@ export default function Sidebar() {
             <button
               onClick={() => signOut({ callbackUrl: "/signin" })}
               className="text-slate-400 hover:text-red-500 transition-colors"
+              aria-label="Sign out"
               title="Sign out"
             >
               <LogOut className="h-4 w-4" />

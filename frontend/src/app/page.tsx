@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Users, AppWindow, Monitor, ShieldCheck } from "lucide-react";
+import { Users, AppWindow, Monitor, ShieldCheck, AlertCircle } from "lucide-react";
 import { listUsers, listApps, listAuditLogs, waitForAuthToken } from "@/lib/api";
 
 interface StatData {
@@ -17,11 +17,13 @@ export default function DashboardPage() {
   const [devicesManaged, setDevicesManaged] = useState<number | null>(null);
   const [recentAuditEvents, setRecentAuditEvents] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
         setLoading(true);
+        setError(null);
         // Block until the access token is available so the first fetch is
         // authenticated (avoids the useEffect race with SessionProvider).
         await waitForAuthToken();
@@ -39,8 +41,8 @@ export default function DashboardPage() {
         }, 0);
         setDevicesManaged(deviceCount);
         setRecentAuditEvents(auditLogs.length);
-      } catch {
-        // On error leave nulls so skeletons show
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load dashboard data");
       } finally {
         setLoading(false);
       }
@@ -59,6 +61,14 @@ export default function DashboardPage() {
     <div>
       <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
       <p className="mt-1 text-sm text-slate-500">Overview of your FreeCloud instance.</p>
+
+      {/* Error banner */}
+      {error && !loading && (
+        <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <AlertCircle className="h-5 w-5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {/* Stats Grid */}
       <div className="mt-8 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">

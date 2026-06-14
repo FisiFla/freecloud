@@ -162,7 +162,8 @@ func TestOnboardValidation(t *testing.T) {
 func TestOffboardEndpoint(t *testing.T) {
 	h := setupTestHandler(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/test-user-456", nil)
+	const testUserID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/"+testUserID, nil)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Actor-ID", "admin-test")
 
@@ -170,7 +171,7 @@ func TestOffboardEndpoint(t *testing.T) {
 	chiCtx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
 		URLParams: chi.RouteParams{
 			Keys:   []string{"userId"},
-			Values: []string{"test-user-456"},
+			Values: []string{testUserID},
 		},
 	})
 	req = req.WithContext(chiCtx)
@@ -289,10 +290,11 @@ func TestOffboardContinuesOnDisableFailure(t *testing.T) {
 	}
 	fleet := &fakeFleet{}
 	h := NewHandler(nil, kc, fleet, logger)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/test-user-456", nil)
+	const testUserID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/"+testUserID, nil)
 	req.Header.Set("Content-Type", "application/json")
 	chiCtx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
-		URLParams: chi.RouteParams{Keys: []string{"userId"}, Values: []string{"test-user-456"}},
+		URLParams: chi.RouteParams{Keys: []string{"userId"}, Values: []string{testUserID}},
 	})
 	req = req.WithContext(chiCtx)
 	rec := httptest.NewRecorder()

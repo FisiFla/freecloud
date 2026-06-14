@@ -3,7 +3,16 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 )
+
+// uuidPattern matches standard hyphenated UUID format.
+var uuidPattern = regexp.MustCompile("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+// isValidUUID reports whether s is a well-formed UUID.
+func isValidUUID(s string) bool {
+	return uuidPattern.MatchString(s)
+}
 
 // APIResponse is the standard JSON response envelope for all API endpoints.
 type APIResponse struct {

@@ -118,6 +118,10 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 		}
 		applied[id] = true
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("iterate applied migrations: %w", err)
+	}
 	rows.Close()
 
 	pending := 0

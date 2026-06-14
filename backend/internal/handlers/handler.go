@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
@@ -35,7 +37,9 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 
 // HealthKeycloak checks connectivity to the Keycloak server.
 func (h *Handler) HealthKeycloak(w http.ResponseWriter, r *http.Request) {
-	err := h.keycloak.Ping(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	err := h.keycloak.Ping(ctx)
 	if err != nil {
 		respondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unreachable"})
 		return
@@ -45,7 +49,9 @@ func (h *Handler) HealthKeycloak(w http.ResponseWriter, r *http.Request) {
 
 // HealthFleet checks connectivity to the FleetDM server.
 func (h *Handler) HealthFleet(w http.ResponseWriter, r *http.Request) {
-	err := h.fleet.Ping(r.Context())
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	err := h.fleet.Ping(ctx)
 	if err != nil {
 		respondJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "unreachable"})
 		return

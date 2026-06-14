@@ -225,23 +225,11 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 
 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
-		// Parse without verification first to extract claims
-		parser := jwt.NewParser()
-		_, _, err := parser.ParseUnverified(tokenString, jwt.MapClaims{})
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"success":false,"error":"unauthorized: invalid token"}`))
-			return
-		}
-
 		// Resolve the verification key by kid (fast path); falls back to trying
 		// all cached keys if the token has no kid header.
 		primary, err := a.keyForToken(tokenString)
 		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(fmt.Sprintf(`{"success":false,"error":"unauthorized: %s"}`, err.Error())))
+			writeAuthError(w, http.StatusUnauthorized, "unauthorized: "+err.Error())
 			return
 		}
 
@@ -267,7 +255,15 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		var lastErr error
 		verified := false
 		for _, key := range candidates {
-			validated, err := jwt.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
+			// Parse with a parser that requires `exp` and allows 30s clock skew.
+			// Without WithExpirationRequired, a token lacking `exp` would be
+			// accepted as never-expiring.
+			parser := jwt.NewParser(
+				jwt.WithExpirationRequired(),
+				jwt.WithIssuedAt(),
+				jwt.WithLeeway(30*time.Second),
+			)
+			validated, err := parser.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
 				if _, ok := t.Method.(*jwt.SigningMethodRSA); !ok {
 					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 				}
@@ -342,13 +338,11 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		}
 
 		if !verified {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			errMsg := "unauthorized: token verification failed"
+			msg := "token verification failed"
 			if lastErr != nil {
-				errMsg = "unauthorized: " + lastErr.Error()
+				msg = lastErr.Error()
 			}
-			w.Write([]byte(fmt.Sprintf(`{"success":false,"error":"%s"}`, errMsg)))
+			writeAuthError(w, http.StatusUnauthorized, "unauthorized: "+msg)
 			return
 		}
 
@@ -364,5 +358,17 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		}
 
 		next.ServeHTTP(w, r)
+	})
+}
+
+// writeAuthError writes a JSON error response using proper encoding so the
+// message cannot break out of the JSON string (avoids the injection risk of
+// fmt.Sprintf-based JSON construction when the message reflects attacker input).
+func writeAuthError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": false,
+		"error":   message,
 	})
 }

@@ -43,8 +43,20 @@ func TestValidateProductionAllSet(t *testing.T) {
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("KEYCLOAK_CLIENT_SECRET", "some-secret")
 	t.Setenv("FLEET_API_TOKEN", "some-token")
+	t.Setenv("CORS_ORIGIN", "https://dashboard.example.com")
 	cfg := Load()
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error with all secrets set, got %v", err)
+	}
+}
+
+func TestValidateProductionMissingCORSOrigin(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("KEYCLOAK_CLIENT_SECRET", "some-secret")
+	t.Setenv("FLEET_API_TOKEN", "some-token")
+	// CORS_ORIGIN intentionally unset
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for missing CORS_ORIGIN in production, got nil")
 	}
 }

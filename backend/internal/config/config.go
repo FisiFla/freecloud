@@ -51,6 +51,11 @@ func (c *Config) Validate() error {
 	if c.DatabaseURL == "" {
 		return fmt.Errorf("DATABASE_URL is required in %s environment", env)
 	}
+	// CORS_ORIGIN must be set explicitly outside dev so credentials are never
+	// silently allowed from the localhost default.
+	if os.Getenv("CORS_ORIGIN") == "" {
+		return fmt.Errorf("CORS_ORIGIN is required in %s environment", env)
+	}
 	return nil
 }
 
