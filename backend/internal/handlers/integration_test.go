@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/Nerzal/gocloak/v13"
+	"github.com/jackc/pgx/v5"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 	"go.uber.org/zap"
@@ -278,13 +279,18 @@ func TestOffboardMissingUserID(t *testing.T) {
 	}
 }
 
-func TestOffboardContinuesOnDisableFailure(t *testing.T) {
+// When the Keycloak disable (the critical lock) fails, offboard must return a
+// non-2xx so monitoring escalates — but it still best-effort runs the remaining
+// steps and reports them in the body.
+func TestOffboardDisableFailureReturns502(t *testing.T) {
 	logger := zap.NewNop()
+	logoutCalled := false
 	kc := &fakeKeycloak{
 		disableUserFn: func(ctx context.Context, userID string) error {
 			return fmt.Errorf("keycloak unavailable")
 		},
 		logoutSessionsFn: func(ctx context.Context, userID string) error {
+			logoutCalled = true
 			return nil
 		},
 	}
@@ -299,8 +305,11 @@ func TestOffboardContinuesOnDisableFailure(t *testing.T) {
 	req = req.WithContext(chiCtx)
 	rec := httptest.NewRecorder()
 	h.Offboard(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200 (best-effort), got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502 (disable failed), got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !logoutCalled {
+		t.Error("expected best-effort session logout to still run after disable failure")
 	}
 }
 
@@ -376,6 +385,63 @@ func TestOnboardEmailWarningResponse(t *testing.T) {
 		if !strings.Contains(obResp.Warning, "email delivery failed") {
 			t.Fatalf("expected warning to contain 'email delivery failed', got %q", obResp.Warning)
 		}
+	}
+}
+
+// Onboarding must be idempotent: if the email already maps to a Keycloak user
+// locally, it returns 409 WITHOUT creating a second Keycloak user.
+func TestOnboardDuplicateEmailConflict(t *testing.T) {
+	logger := zap.NewNop()
+	createCalled := false
+	kc := &fakeKeycloak{createUserFn: func(ctx context.Context, fn, ln, e, d string) (*keycloak.CreateUserResult, error) {
+		createCalled = true
+		return nil, nil
+	}}
+	db := &fakeDB{queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+		return fakeRow{scanFn: func(dest ...any) error {
+			if p, ok := dest[0].(*string); ok {
+				*p = "existing-kc-id"
+			}
+			return nil
+		}}
+	}}
+	h := NewHandler(db, kc, &fakeFleet{}, logger)
+	body := map[string]string{"firstName": "T", "lastName": "U", "email": "dup@test.com", "department": "Engineering", "role": "Dev"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.Onboard(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409 (duplicate email), got %d: %s", rec.Code, rec.Body.String())
+	}
+	if createCalled {
+		t.Error("Keycloak CreateUser must NOT be called when the email already exists")
+	}
+}
+
+// If local persistence fails after the Keycloak user is created, the orphaned
+// Keycloak user must be rolled back (deleted) exactly once and the request 500s.
+func TestOnboardRollbackOnPersistFailure(t *testing.T) {
+	logger := zap.NewNop()
+	deleteCalled := 0
+	kc := &fakeKeycloak{deleteUserFn: func(ctx context.Context, userID string) error {
+		deleteCalled++
+		return nil
+	}}
+	// Default fakeDB: idempotency lookup returns no rows, Begin fails -> persist fails.
+	h := NewHandler(&fakeDB{}, kc, &fakeFleet{}, logger)
+	body := map[string]string{"firstName": "T", "lastName": "U", "email": "new@test.com", "department": "Engineering", "role": "Dev"}
+	b, _ := json.Marshal(body)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.Onboard(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 (persist failed), got %d: %s", rec.Code, rec.Body.String())
+	}
+	if deleteCalled != 1 {
+		t.Errorf("expected orphaned Keycloak user rolled back exactly once, got %d", deleteCalled)
 	}
 }
 

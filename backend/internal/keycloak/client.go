@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/google/uuid"
@@ -13,6 +15,7 @@ import (
 // KeycloakClientInterface defines the operations used by handlers.
 type KeycloakClientInterface interface {
 	CreateUser(ctx context.Context, firstName, lastName, email, department string) (*CreateUserResult, error)
+	DeleteUser(ctx context.Context, userID string) error
 	DisableUser(ctx context.Context, userID string) error
 	LogoutAllSessions(ctx context.Context, userID string) error
 	GetUserSessions(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error)
@@ -31,12 +34,23 @@ type CreateUserResult struct {
 	SetupWarning string
 }
 
+// tokenExpiryBuffer is how long before actual expiry a cached admin token is
+// considered stale, so a request never goes out with an about-to-expire token.
+const tokenExpiryBuffer = 30 * time.Second
+
 // KeycloakClient wraps gocloak.GoCloak for FreeCloud operations.
 type KeycloakClient struct {
-	client     *gocloak.GoCloak
-	clientID   string
+	client       *gocloak.GoCloak
+	clientID     string
 	clientSecret string
-	realm      string
+	realm        string
+
+	// Cached client-credentials admin token. Keycloak admin tokens are short
+	// lived (default 60s), and previously every operation fetched a fresh one —
+	// doubling the round-trips and risking Keycloak rate limits under load.
+	mu          sync.Mutex
+	cachedToken string
+	tokenExpiry time.Time
 }
 
 // NewClient creates a new KeycloakClient.
@@ -49,13 +63,23 @@ func NewClient(url, clientID, clientSecret, realm string) *KeycloakClient {
 	}
 }
 
-// login obtains an admin token using client credentials.
+// login returns a valid admin token, reusing the cached one until it is within
+// tokenExpiryBuffer of expiry. Thread-safe.
 func (k *KeycloakClient) login(ctx context.Context) (string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	if k.cachedToken != "" && time.Now().Add(tokenExpiryBuffer).Before(k.tokenExpiry) {
+		return k.cachedToken, nil
+	}
+
 	token, err := k.client.LoginClient(ctx, k.clientID, k.clientSecret, k.realm)
 	if err != nil {
 		return "", fmt.Errorf("keycloak login: %w", err)
 	}
-	return token.AccessToken, nil
+	k.cachedToken = token.AccessToken
+	k.tokenExpiry = time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
+	return k.cachedToken, nil
 }
 
 // CreateUser creates a Keycloak user, sets a temporary password, and assigns them
@@ -155,6 +179,20 @@ func (k *KeycloakClient) CreateUser(ctx context.Context, firstName, lastName, em
 	}
 
 	return result, nil
+}
+
+// DeleteUser permanently deletes a Keycloak user by ID. It is used to roll back
+// an orphaned user when a subsequent onboarding step (DB persistence) fails.
+func (k *KeycloakClient) DeleteUser(ctx context.Context, userID string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.DeleteUser(ctx, token, k.realm, userID); err != nil {
+		return fmt.Errorf("delete keycloak user %s: %w", userID, err)
+	}
+	zap.L().Info("deleted keycloak user", zap.String("user_id", userID))
+	return nil
 }
 
 // DisableUser disables a Keycloak user by setting enabled=false.
