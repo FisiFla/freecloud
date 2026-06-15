@@ -137,7 +137,11 @@ make prod-up                        # build images + bring the stack up (detache
 
 After first boot, run `make kc-setup` against the Keycloak instance to create the
 realm, groups, and the `freecloud-service` confidential client (least-privilege:
-`manage-users` + `manage-clients`).
+`manage-users` + `manage-clients`) without creating the development demo user:
+
+```bash
+APP_ENV=production ALLOW_DEV_SETUP=true CREATE_DEMO_USER=false make kc-setup
+```
 
 ## Documentation
 

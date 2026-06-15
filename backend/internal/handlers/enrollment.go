@@ -16,6 +16,8 @@ import (
 	"go.uber.org/zap"
 )
 
+var errEnrollmentTokenNotConsumable = errors.New("enrollment token is unknown, used, or expired")
+
 // EnrollmentCallbackRequest is the body FleetDM POSTs when a host enrolls using
 // an enrollment token that was issued for a user during onboarding.
 type EnrollmentCallbackRequest struct {
@@ -62,37 +64,15 @@ func (h *Handler) FleetEnrollmentCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	ctx := r.Context()
-
-	// Resolve the token to its user, checking it is unused and unexpired.
-	var userID string
-	var usedAt *time.Time
-	var expiresAt time.Time
-	lookupErr := h.db.QueryRow(ctx,
-		`SELECT user_id, used_at, expires_at FROM enrollment_tokens WHERE token = $1`,
-		req.EnrollmentToken,
-	).Scan(&userID, &usedAt, &expiresAt)
-	switch {
-	case errors.Is(lookupErr, pgx.ErrNoRows):
-		respondError(w, http.StatusNotFound, "unknown enrollment token")
-		return
-	case lookupErr != nil:
-		logger.Error("enrollment token lookup failed", zap.Error(lookupErr))
-		respondError(w, http.StatusInternalServerError, "internal error")
-		return
-	}
-	if usedAt != nil {
-		respondError(w, http.StatusConflict, "enrollment token already used")
-		return
-	}
-	if time.Now().After(expiresAt) {
-		respondError(w, http.StatusGone, "enrollment token expired")
-		return
-	}
-
 	// Link the device to the user atomically: upsert the device, map it to the
 	// user, and consume the token so it cannot be replayed.
-	if err := h.linkEnrolledDevice(ctx, req, userID); err != nil {
+	ctx := r.Context()
+	userID, err := h.linkEnrolledDevice(ctx, req)
+	if err != nil {
+		if errors.Is(err, errEnrollmentTokenNotConsumable) {
+			h.respondEnrollmentTokenState(w, ctx, req.EnrollmentToken)
+			return
+		}
 		logger.Error("failed to link enrolled device", zap.String("host_id", req.HostID), zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to record device enrollment")
 		return
@@ -117,36 +97,68 @@ func (h *Handler) FleetEnrollmentCallback(w http.ResponseWriter, r *http.Request
 
 // linkEnrolledDevice upserts the device, maps it to the user, and consumes the
 // enrollment token, all in one transaction.
-func (h *Handler) linkEnrolledDevice(ctx context.Context, req EnrollmentCallbackRequest, userID string) error {
+func (h *Handler) linkEnrolledDevice(ctx context.Context, req EnrollmentCallbackRequest) (string, error) {
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback(ctx)
+
+	var userID string
+	if err := tx.QueryRow(ctx,
+		`UPDATE enrollment_tokens
+		 SET used_at = NOW()
+		 WHERE token = $1 AND used_at IS NULL AND expires_at > NOW()
+		 RETURNING user_id`,
+		req.EnrollmentToken,
+	).Scan(&userID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", errEnrollmentTokenNotConsumable
+		}
+		return "", err
+	}
 
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO devices (fleet_host_id, hostname, os_version, last_seen_at)
 		 VALUES ($1, $2, $3, NOW())
 		 ON CONFLICT (fleet_host_id) DO UPDATE
-		 SET hostname = EXCLUDED.hostname, os_version = EXCLUDED.os_version, last_seen_at = NOW()`,
+		SET hostname = EXCLUDED.hostname, os_version = EXCLUDED.os_version, last_seen_at = NOW()`,
 		req.HostID, req.Hostname, req.OsVersion,
 	); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tx.Exec(ctx,
 		`INSERT INTO users_devices_mapping (user_id, device_id)
 		 VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		userID, req.HostID,
 	); err != nil {
-		return err
+		return "", err
 	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE enrollment_tokens SET used_at = NOW() WHERE token = $1`,
-		req.EnrollmentToken,
-	); err != nil {
-		return err
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
 	}
-	return tx.Commit(ctx)
+	return userID, nil
+}
+
+func (h *Handler) respondEnrollmentTokenState(w http.ResponseWriter, ctx context.Context, token string) {
+	var usedAt *time.Time
+	var expiresAt time.Time
+	err := h.db.QueryRow(ctx,
+		`SELECT used_at, expires_at FROM enrollment_tokens WHERE token = $1`,
+		token,
+	).Scan(&usedAt, &expiresAt)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		respondError(w, http.StatusNotFound, "unknown enrollment token")
+	case err != nil:
+		respondError(w, http.StatusInternalServerError, "internal error")
+	case usedAt != nil:
+		respondError(w, http.StatusConflict, "enrollment token already used")
+	case time.Now().After(expiresAt):
+		respondError(w, http.StatusGone, "enrollment token expired")
+	default:
+		respondError(w, http.StatusConflict, "enrollment token could not be consumed")
+	}
 }
 
 // validFleetSignature constant-time compares the X-Fleet-Signature header (hex

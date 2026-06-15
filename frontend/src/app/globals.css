@@ -1,6 +1,6 @@
 @import "tailwindcss";
 /* Load the existing v3-style theme (custom colors) via v4's config-compat path. */
-@config "../../tailwind.config.ts";
+@config "../../tailwind.config.js";
 
 body {
   background-color: #f8fafc; /* slate-50 */
