@@ -3,19 +3,19 @@
 # Requires: curl, jq
 # Usage: make kc-setup  OR  bash backend/cmd/scripts/setup_realm.sh
 #
-# DEVELOPMENT ONLY. This script creates fixed demo credentials and prints
-# a service-account secret to stdout. It refuses to run outside the
-# development environment unless ALLOW_DEV_SETUP=true is set explicitly.
+# DEVELOPMENT/BOOTSTRAP ONLY. It refuses to run outside the development
+# environment unless ALLOW_DEV_SETUP=true is set explicitly.
 
 set -euo pipefail
 
-# Refuse to run in non-development environments. This script creates a demo
-# user with a known password and prints a client secret — neither belongs in
-# staging or production.
-if [ "${APP_ENV:-development}" != "development" ] && [ "${ALLOW_DEV_SETUP:-}" != "true" ]; then
-  echo "ERROR: setup_realm.sh is for development only (APP_ENV=${APP_ENV:-<unset>})." >&2
-  echo "       It creates demo credentials and prints secrets to stdout." >&2
-  echo "       To force-run anyway, set ALLOW_DEV_SETUP=true." >&2
+APP_ENV_VALUE="${APP_ENV:-development}"
+
+# Refuse to run in non-development environments unless the operator explicitly
+# acknowledges they are bootstrapping a real realm. Demo users remain blocked by
+# a separate guard below.
+if [ "$APP_ENV_VALUE" != "development" ] && [ "${ALLOW_DEV_SETUP:-}" != "true" ]; then
+  echo "ERROR: setup_realm.sh is for development/bootstrap only (APP_ENV=${APP_ENV:-<unset>})." >&2
+  echo "       To bootstrap a non-development realm, set ALLOW_DEV_SETUP=true and CREATE_DEMO_USER=false." >&2
   exit 1
 fi
 
@@ -48,8 +48,21 @@ else
   SERVICE_CLIENT_SECRET="$KEYCLOAK_CLIENT_SECRET"
 fi
 
-# Demo user toggle. Set CREATE_DEMO_USER=false to skip creating the demo user.
-CREATE_DEMO_USER="${CREATE_DEMO_USER:-true}"
+# Demo user toggle. Defaults to true only for local development. Production and
+# staging bootstraps must opt in explicitly, and the guard below blocks that
+# unless ALLOW_DEMO_USER_OUTSIDE_DEV=true is also set.
+if [ -z "${CREATE_DEMO_USER:-}" ]; then
+  if [ "$APP_ENV_VALUE" = "development" ]; then
+    CREATE_DEMO_USER=true
+  else
+    CREATE_DEMO_USER=false
+  fi
+fi
+if [ "$APP_ENV_VALUE" != "development" ] && [ "$CREATE_DEMO_USER" = "true" ] && [ "${ALLOW_DEMO_USER_OUTSIDE_DEV:-}" != "true" ]; then
+  echo "ERROR: refusing to create a demo user outside development." >&2
+  echo "       Set CREATE_DEMO_USER=false for production/bootstrap runs." >&2
+  exit 1
+fi
 # Demo user password. Override with DEMO_PASSWORD; generated if unset.
 DEMO_PASSWORD_PROVIDED=true
 if [ -z "${DEMO_PASSWORD:-}" ]; then

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -129,5 +130,68 @@ func TestEnrollmentLoopEndToEnd(t *testing.T) {
 	}
 	if len(wiped) != 1 || wiped[0] != "host-e2e" {
 		t.Errorf("expected host-e2e to be wiped exactly once, got %v", wiped)
+	}
+}
+
+func TestEnrollmentTokenConcurrentCallbacksSingleWinner(t *testing.T) {
+	pool := enrollTestPool(t)
+	ctx := context.Background()
+
+	const secret = "webhook-secret"
+	const token = "race-token"
+	userID := uuid.New().String()
+
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO users (keycloak_user_id, email, first_name, last_name) VALUES ($1,$2,$3,$4)`,
+		userID, "race@example.com", "Race", "User"); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO enrollment_tokens (token, user_id, expires_at) VALUES ($1,$2, NOW() + INTERVAL '1 hour')`,
+		token, userID); err != nil {
+		t.Fatalf("insert enrollment token: %v", err)
+	}
+
+	h := NewHandler(pool, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	h.SetFleetWebhookSecret(secret)
+	body := []byte(`{"enrollment_token":"race-token","host_id":"host-race","hostname":"race.local","os_version":"macOS 15"}`)
+	sig := "sha256=" + hex.EncodeToString(func() []byte {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(body)
+		return mac.Sum(nil)
+	}())
+
+	start := make(chan struct{})
+	statuses := make(chan int, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/fleet/enrollment-callback", bytes.NewReader(body))
+			req.Header.Set("X-Fleet-Signature", sig)
+			rec := httptest.NewRecorder()
+			h.FleetEnrollmentCallback(rec, req)
+			statuses <- rec.Code
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(statuses)
+
+	ok, conflict := 0, 0
+	for code := range statuses {
+		switch code {
+		case http.StatusOK:
+			ok++
+		case http.StatusConflict:
+			conflict++
+		default:
+			t.Fatalf("unexpected callback status %d", code)
+		}
+	}
+	if ok != 1 || conflict != 1 {
+		t.Fatalf("expected exactly one 200 and one 409, got ok=%d conflict=%d", ok, conflict)
 	}
 }

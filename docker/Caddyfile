@@ -6,6 +6,7 @@
 }
 
 {$API_DOMAIN} {
+	respond /metrics 404
 	reverse_proxy backend:8080
 }
 

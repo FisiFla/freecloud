@@ -17,7 +17,7 @@ cd backend && APP_ENV=development go run cmd/server/main.go
 cd frontend && npm install && npm run dev
 ```
 
-Requires Go 1.25+, Node 20, and Docker.
+Requires Go 1.25+, Node 26, and Docker.
 
 ## Checks (run before opening a PR)
 
@@ -27,8 +27,8 @@ make verify-db    # + DB-backed integration tests (ephemeral Postgres)
 make verify-all   # + go test -race across all packages
 ```
 
-CI additionally runs `staticcheck`, `govulncheck`, `go test -race`, `npm audit`
-(report-only), and the DB integration suite. To match locally:
+CI additionally runs `staticcheck`, `govulncheck`, `go test -race`, `npm audit`,
+and the DB integration suite. To match locally:
 
 ```bash
 cd backend && go install honnef.co/go/tools/cmd/staticcheck@latest && "$(go env GOPATH)/bin/staticcheck" ./...

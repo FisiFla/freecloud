@@ -43,7 +43,8 @@ After the first boot, create the realm, groups, and the `freecloud-service`
 confidential client (run against the Keycloak instance):
 
 ```bash
-KEYCLOAK_URL=https://auth.example.com KEYCLOAK_CLIENT_SECRET=... make kc-setup
+APP_ENV=production ALLOW_DEV_SETUP=true CREATE_DEMO_USER=false \
+  KEYCLOAK_URL=https://auth.example.com KEYCLOAK_CLIENT_SECRET=... make kc-setup
 ```
 
 The backend runs database migrations automatically on startup.
@@ -55,8 +56,9 @@ curl -fsS https://api.example.com/healthz     # liveness -> 200
 curl -fsS https://api.example.com/readyz      # readiness (DB + Keycloak) -> 200
 ```
 
-`/metrics` exposes Prometheus metrics on the backend; restrict it at the proxy
-or network layer if you don't want it public.
+`/metrics` is exposed by the backend for Prometheus, but the bundled Caddyfile
+returns 404 for public API traffic by default. Expose it only on an internal
+network or behind authentication if you add scraping.
 
 ## Backup & Restore
 
