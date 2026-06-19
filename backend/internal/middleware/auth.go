@@ -49,6 +49,8 @@ func isManagementEndpoint(path string) bool {
 		"/api/v1/users":      true,
 		"/api/v1/apps":       true,
 		"/api/v1/audit-logs": true,
+		"/api/v1/groups":     true,
+		"/api/v1/roles":      true,
 		"/api/v1/compliance": true,
 		"/api/v1/policies":   true,
 	}
@@ -61,6 +63,8 @@ func isManagementEndpoint(path string) bool {
 		"/api/v1/apps/",
 		"/api/v1/users/",
 		"/api/v1/audit-logs/",
+		"/api/v1/groups/",
+		"/api/v1/roles/",
 		"/api/v1/devices/",
 		"/api/v1/compliance",
 		"/api/v1/policies",

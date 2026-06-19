@@ -87,8 +87,7 @@ is what lets offboarding actually lock/wipe the user's devices.
 - For local end-to-end testing the `fleetdm-mock` auto-fires this callback when
   `BACKEND_URL` and `FLEET_WEBHOOK_SECRET` are set in its environment.
 
-> Note: SAML app creation is currently a stub (the Keycloak client is created
-> without SAML-specific attributes); OIDC apps are fully functional.
+Both OIDC and SAML applications are fully supported; SAML clients are created with the standard X.500 attribute mappers and SP metadata.
 
 ## Development & Testing
 

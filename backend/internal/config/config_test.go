@@ -18,6 +18,7 @@ func setSecureProdEnv(t *testing.T) {
 	t.Setenv("FLEET_API_TOKEN", "fleet-token")
 	t.Setenv("FLEET_WEBHOOK_SECRET", "webhook-secret")
 	t.Setenv("CORS_ORIGIN", "https://dashboard.example.com")
+	t.Setenv("SCIM_BEARER_TOKEN", "scim-secret-token")
 }
 
 func TestValidateDevelopmentExplicit(t *testing.T) {
@@ -123,5 +124,14 @@ func TestValidateProductionMissingCORSOrigin(t *testing.T) {
 	cfg := Load()
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error for missing CORS_ORIGIN in production, got nil")
+	}
+}
+
+func TestValidateProductionMissingSCIMBearerToken(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("SCIM_BEARER_TOKEN", "")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for missing SCIM_BEARER_TOKEN in production, got nil")
 	}
 }

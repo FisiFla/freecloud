@@ -39,6 +39,16 @@ func (f *fakeKC) AssignUserToClient(_ context.Context, _, _ string) error  { ret
 func (f *fakeKC) GetUserGroups(_ context.Context, _ string) ([]*gocloak.Group, error) {
 	return nil, nil
 }
+func (f *fakeKC) UpdateUser(_ context.Context, _, _, _, _ string, _ bool) error { return nil }
+func (f *fakeKC) SendPasswordReset(_ context.Context, _ string) error             { return nil }
+func (f *fakeKC) ListGroups(_ context.Context) ([]*gocloak.Group, error)          { return nil, nil }
+func (f *fakeKC) CreateGroup(_ context.Context, _ string) (string, error)         { return "", nil }
+func (f *fakeKC) AddUserToGroup(_ context.Context, _, _ string) error             { return nil }
+func (f *fakeKC) RemoveUserFromGroup(_ context.Context, _, _ string) error        { return nil }
+func (f *fakeKC) ListRealmRoles(_ context.Context) ([]*gocloak.Role, error)       { return nil, nil }
+func (f *fakeKC) AssignRealmRoleToUser(_ context.Context, _ string, _ []gocloak.Role) error {
+	return nil
+}
 func (f *fakeKC) Ping(_ context.Context) error { return nil }
 func (f *fakeKC) GetUserCredentials(_ context.Context, _ string) ([]string, error) {
 	return nil, nil

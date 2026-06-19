@@ -4,8 +4,6 @@ import (
 	"net/http"
 
 	"go.uber.org/zap"
-
-	"github.com/FisiFla/freecloud/backend/internal/reconcile"
 )
 
 // GetDrift runs an on-demand reconciliation pass and returns the drift report.
@@ -39,8 +37,3 @@ func (h *Handler) GetDrift(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, resp)
 }
 
-// SetReconciler attaches a reconciler to the handler so GetDrift can use it.
-// Called once at startup from main.
-func (h *Handler) SetReconciler(rec *reconcile.Reconciler) {
-	h.reconciler = rec
-}
