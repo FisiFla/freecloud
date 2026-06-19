@@ -163,8 +163,9 @@ func main() {
 	}
 	handler.SetSnapshotter(snap)
 
-	// Initialize JWT auth middleware
-	authMW := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)
+	// Initialize JWT auth middleware, wrapping it with API token support (C2).
+	baseAuth := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)
+	authMW := middleware.NewAPITokenMiddleware(baseAuth, pool)
 
 	// CORS origin from env or secure default
 	corsOrigin := os.Getenv("CORS_ORIGIN")

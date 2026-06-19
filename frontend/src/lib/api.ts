@@ -554,3 +554,88 @@ export async function upsertAppPolicy(
     ...policy,
   });
 }
+
+// C2 (Epic C): API token management
+export interface APIToken {
+  id: string;
+  name: string;
+  token?: string; // present only on creation
+  role: string;
+  serviceIdentity: string;
+  createdAt: string;
+  expiresAt?: string;
+}
+
+export interface CreateAPITokenRequest {
+  name: string;
+  role: string;
+  serviceIdentity: string;
+  expiresInDays: number; // 0 = never
+}
+
+export async function listAPITokens(): Promise<APIToken[]> {
+  const res = await request<{ tokens: APIToken[] }>("GET", "/api/v1/api-tokens");
+  return res.tokens;
+}
+
+export async function createAPIToken(req: CreateAPITokenRequest): Promise<APIToken> {
+  return request<APIToken>("POST", "/api/v1/api-tokens", req);
+}
+
+export async function revokeAPIToken(id: string): Promise<void> {
+  return request<void>("DELETE", `/api/v1/api-tokens/${id}`);
+}
+
+// C4 (Epic C): Self-service portal
+export interface PortalDevice {
+  fleetHostId: string;
+  hostname: string;
+  osVersion: string;
+  lastSeenAt?: string;
+  createdAt: string;
+}
+
+export interface PortalApp {
+  id: string;
+  name: string;
+  baseUrl: string;
+  protocol: string;
+  enabled: boolean;
+}
+
+export interface AccessRequest {
+  id: string;
+  requesterId: string;
+  appId: string;
+  status: string;
+  reason: string;
+  decidedBy: string;
+  createdAt: string;
+}
+
+export async function portalMyDevices(): Promise<PortalDevice[]> {
+  return request<PortalDevice[]>("GET", "/api/v1/portal/me/devices");
+}
+
+export async function portalMyApps(): Promise<PortalApp[]> {
+  return request<PortalApp[]>("GET", "/api/v1/portal/me/apps");
+}
+
+export async function portalMyCompliance(): Promise<ComplianceResponse> {
+  return request<ComplianceResponse>("GET", "/api/v1/portal/me/compliance");
+}
+
+export async function portalRequestAccess(appId: string, reason: string): Promise<{ id: string }> {
+  return request<{ id: string }>("POST", "/api/v1/portal/access-requests", { appId, reason });
+}
+
+export async function listAccessRequests(): Promise<AccessRequest[]> {
+  return request<AccessRequest[]>("GET", "/api/v1/portal/access-requests");
+}
+
+export async function decideAccessRequest(
+  id: string,
+  decision: "approved" | "rejected",
+): Promise<{ status: string }> {
+  return request<{ status: string }>("PATCH", `/api/v1/portal/access-requests/${id}`, { decision });
+}
