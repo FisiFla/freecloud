@@ -12,20 +12,27 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
-// fakeAuthMW injects valid admin claims and the actor ID into the context,
+// fakeRoleAuthMW injects valid claims and the actor ID into the context,
 // bypassing real JWT verification. Used only by router-level tests.
+func fakeRoleAuthMW(role middleware.Role) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims := &middleware.JWTClaims{
+				Sub:               "test-user",
+				PreferredUsername: "test-user",
+				Email:             "user@test.local",
+				IsAdmin:           role == middleware.RoleSuperAdmin,
+				Role:              role,
+			}
+			ctx := middleware.SetClaims(r.Context(), claims)
+			ctx = context.WithValue(ctx, middleware.ActorIDKey, "test-user")
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 func fakeAuthMW(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims := &middleware.JWTClaims{
-			Sub:               "test-admin",
-			PreferredUsername: "admin",
-			Email:             "admin@test.local",
-			IsAdmin:           true,
-		}
-		ctx := middleware.SetClaims(r.Context(), claims)
-		ctx = context.WithValue(ctx, middleware.ActorIDKey, "admin")
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+	return fakeRoleAuthMW(middleware.RoleSuperAdmin)(next)
 }
 
 // newTestRouter builds a chi router wired exactly like the real server
@@ -33,6 +40,12 @@ func fakeAuthMW(next http.Handler) http.Handler {
 func newTestRouter(h *Handler) *chi.Mux {
 	r := chi.NewRouter()
 	SetupRoutes(r, h, fakeAuthMW)
+	return r
+}
+
+func newRoleTestRouter(h *Handler, role middleware.Role) *chi.Mux {
+	r := chi.NewRouter()
+	SetupRoutes(r, h, fakeRoleAuthMW(role))
 	return r
 }
 
@@ -62,6 +75,50 @@ func TestRouterOnboardRateLimited(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("over-limit onboard: expected 429, got %d", rec.Code)
+	}
+}
+
+func TestRouterReadOnlyCanReadUsersButCannotOnboard(t *testing.T) {
+	h := setupTestHandler(t)
+	r := newRoleTestRouter(h, middleware.RoleReadOnly)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("read-only GET /users: expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	body := `{"firstName":"A","lastName":"B","email":"a@b.com"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/onboard", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("read-only POST /onboard: expected 403, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRouterHelpdeskCanOnboardButCannotCreateApp(t *testing.T) {
+	h := setupTestHandler(t)
+	r := newRoleTestRouter(h, middleware.RoleHelpdesk)
+
+	body := `{"firstName":"A","lastName":"B","email":"a@b.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("helpdesk POST /onboard: expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	appBody := `{"name":"App","protocol":"OIDC","redirectURIs":["https://app.example/cb"],"baseURL":"https://app.example"}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/apps/create", strings.NewReader(appBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("helpdesk POST /apps/create: expected 403, got %d (body: %s)", rec.Code, rec.Body.String())
 	}
 }
 

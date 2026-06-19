@@ -20,7 +20,7 @@ type RemoteLockResponse struct {
 }
 
 // RemoteLock issues a remote-lock command to the given Fleet host.
-// Route: POST /api/v1/devices/{id}/lock (admin-gated via isManagementEndpoint).
+// Route: POST /api/v1/devices/{id}/lock (requires PermManageDevices).
 func (h *Handler) RemoteLock(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
 	if deviceID == "" {
@@ -83,7 +83,7 @@ type DeviceSoftwareResponse struct {
 }
 
 // GetDeviceSoftware returns the software inventory for the devices mapped to a
-// user. Route: GET /api/v1/users/{id}/devices/software (admin-gated).
+// user. Route: GET /api/v1/users/{id}/devices/software (requires PermReadCompliance).
 func (h *Handler) GetDeviceSoftware(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
 	if userID == "" {
@@ -196,7 +196,7 @@ type ComplianceResponse struct {
 }
 
 // GetUserCompliance returns compliance posture for a single user's devices.
-// Route: GET /api/v1/users/{id}/devices/compliance (admin-gated).
+// Route: GET /api/v1/users/{id}/devices/compliance (requires PermReadCompliance).
 func (h *Handler) GetUserCompliance(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
 	if userID == "" {
@@ -245,7 +245,7 @@ func (h *Handler) GetUserCompliance(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetOrgCompliance returns compliance posture across all org devices.
-// Route: GET /api/v1/compliance (admin-gated).
+// Route: GET /api/v1/compliance (requires PermReadCompliance).
 func (h *Handler) GetOrgCompliance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

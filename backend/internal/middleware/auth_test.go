@@ -12,33 +12,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 )
-
-func TestIsManagementEndpoint(t *testing.T) {
-	tests := []struct {
-		path string
-		want bool
-	}{
-		{"/api/v1/onboard", true},
-		{"/api/v1/offboard/some-id", true},
-		{"/api/v1/apps/create", true},
-		{"/api/v1/apps/some-id/assign", true},
-		{"/api/v1/health", false},
-		{"/api/v1/users", true},
-		{"/api/v1/audit-logs", true},
-		{"/api/v1/auth/device-check", false},
-		{"/api/v1/apps", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			got := isManagementEndpoint(tt.path)
-			if got != tt.want {
-				t.Errorf("isManagementEndpoint(%q) = %v, want %v", tt.path, got, tt.want)
-			}
-		})
-	}
-}
 
 func TestAuthMiddlewareMissingToken(t *testing.T) {
 	am := NewAuthMiddleware("http://localhost:8081", "freecloud", "freecloud-dashboard")
@@ -144,12 +119,12 @@ func TestAuthMiddlewareAdminBoundary(t *testing.T) {
 
 	now := time.Now()
 	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
-		"sub":               "admin-user",
-		"iss":               issuer,
-		"aud":               "freecloud-dashboard",
-		"azp":               "freecloud-dashboard",
+		"sub":                "admin-user",
+		"iss":                issuer,
+		"aud":                "freecloud-dashboard",
+		"azp":                "freecloud-dashboard",
 		"preferred_username": "admin-user",
-		"email":             "admin@test.com",
+		"email":              "admin@test.com",
 		"realm_access": map[string]interface{}{
 			"roles": []string{"admin"},
 		},
@@ -177,8 +152,9 @@ func TestAuthMiddlewareAdminBoundary(t *testing.T) {
 	}
 }
 
-// TestAuthMiddlewareNonAdminBlocked verifies a non-admin token gets 403 on /api/v1/users.
-func TestAuthMiddlewareNonAdminBlocked(t *testing.T) {
+// TestAuthMiddlewareNonAdminAuthenticated verifies auth middleware only
+// authenticates and populates claims. Route-level middleware owns authorization.
+func TestAuthMiddlewareNonAdminAuthenticated(t *testing.T) {
 	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
 	jwksSrv := startJWKSServer(t, jwksPayload)
 
@@ -187,12 +163,12 @@ func TestAuthMiddlewareNonAdminBlocked(t *testing.T) {
 
 	now := time.Now()
 	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
-		"sub":               "regular-user",
-		"iss":               issuer,
-		"aud":               "freecloud-dashboard",
-		"azp":               "freecloud-dashboard",
+		"sub":                "regular-user",
+		"iss":                issuer,
+		"aud":                "freecloud-dashboard",
+		"azp":                "freecloud-dashboard",
 		"preferred_username": "regular-user",
-		"email":             "user@test.com",
+		"email":              "user@test.com",
 		"realm_access": map[string]interface{}{
 			"roles": []string{"user"},
 		},
@@ -201,6 +177,13 @@ func TestAuthMiddlewareNonAdminBlocked(t *testing.T) {
 	})
 
 	handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := GetClaims(r.Context())
+		if claims == nil {
+			t.Fatal("expected claims in context")
+		}
+		if claims.Role != RoleEndUser {
+			t.Fatalf("expected end-user role, got %q", claims.Role)
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -209,8 +192,8 @@ func TestAuthMiddlewareNonAdminBlocked(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("non-admin token on /api/v1/users: expected 403, got %d — body: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Errorf("non-admin token: expected 200 from auth-only middleware, got %d — body: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -224,12 +207,12 @@ func TestAuthMiddlewareWrongAudience(t *testing.T) {
 
 	now := time.Now()
 	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
-		"sub":               "user",
-		"iss":               issuer,
-		"aud":               "wrong-audience",
-		"azp":               "wrong-audience",
+		"sub":                "user",
+		"iss":                issuer,
+		"aud":                "wrong-audience",
+		"azp":                "wrong-audience",
 		"preferred_username": "user",
-		"email":             "user@test.com",
+		"email":              "user@test.com",
 		"realm_access": map[string]interface{}{
 			"roles": []string{"admin"},
 		},
@@ -263,12 +246,12 @@ func TestAuthMiddlewareWrongIssuer(t *testing.T) {
 
 	now := time.Now()
 	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
-		"sub":               "user",
-		"iss":               wrongIssuer,
-		"aud":               "freecloud-dashboard",
-		"azp":               "freecloud-dashboard",
+		"sub":                "user",
+		"iss":                wrongIssuer,
+		"aud":                "freecloud-dashboard",
+		"azp":                "freecloud-dashboard",
 		"preferred_username": "user",
-		"email":             "user@test.com",
+		"email":              "user@test.com",
 		"realm_access": map[string]interface{}{
 			"roles": []string{"admin"},
 		},
@@ -300,12 +283,12 @@ func TestAuthMiddlewareExpiredToken(t *testing.T) {
 
 	now := time.Now()
 	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
-		"sub":               "user",
-		"iss":               issuer,
-		"aud":               "freecloud-dashboard",
-		"azp":               "freecloud-dashboard",
+		"sub":                "user",
+		"iss":                issuer,
+		"aud":                "freecloud-dashboard",
+		"azp":                "freecloud-dashboard",
 		"preferred_username": "user",
-		"email":             "user@test.com",
+		"email":              "user@test.com",
 		"realm_access": map[string]interface{}{
 			"roles": []string{"admin"},
 		},
@@ -346,12 +329,12 @@ func TestAuthMiddlewareWrongKey(t *testing.T) {
 	// Sign with the wrong (unknown) private key. Use a kid that won't match
 	// anything in the JWKS, forcing a refresh and then a "no key for kid" failure.
 	tokenStr := signedToken(t, wrongKey, "unknown-kid", jwt.MapClaims{
-		"sub":               "user",
-		"iss":               issuer,
-		"aud":               "freecloud-dashboard",
-		"azp":               "freecloud-dashboard",
+		"sub":                "user",
+		"iss":                issuer,
+		"aud":                "freecloud-dashboard",
+		"azp":                "freecloud-dashboard",
 		"preferred_username": "user",
-		"email":             "user@test.com",
+		"email":              "user@test.com",
 		"realm_access": map[string]interface{}{
 			"roles": []string{"admin"},
 		},
@@ -466,5 +449,72 @@ func TestRequirePermissionNoClaims(t *testing.T) {
 	RequirePermission(PermSelfService)(inner).ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("no claims+PermSelfService: want 403, got %d", rec.Code)
+	}
+}
+
+type fakeTokenDB struct {
+	role string
+	err  error
+}
+
+func (db fakeTokenDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return fakeTokenRow{role: db.role, err: db.err}
+}
+
+type fakeTokenRow struct {
+	role string
+	err  error
+}
+
+func (r fakeTokenRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	*(dest[0].(*string)) = r.role
+	*(dest[1].(**time.Time)) = nil
+	*(dest[2].(**time.Time)) = nil
+	return nil
+}
+
+func TestAPITokenMiddlewareStoredRoleAllowsPermission(t *testing.T) {
+	base := NewAuthMiddleware("http://localhost:8081", "freecloud", "freecloud-dashboard")
+	apiMW := NewAPITokenMiddleware(base, fakeTokenDB{role: string(RoleSuperAdmin)})
+	handler := apiMW.Middleware(RequirePermission(PermManageAPITokens)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims := GetClaims(r.Context())
+			if claims == nil {
+				t.Fatal("expected API token claims")
+			}
+			if claims.Role != RoleSuperAdmin {
+				t.Fatalf("expected super-admin role, got %q", claims.Role)
+			}
+			w.WriteHeader(http.StatusOK)
+		}),
+	))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/api-tokens", nil)
+	req.Header.Set("Authorization", "Bearer fc_testtoken")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("super-admin API token: expected 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAPITokenMiddlewareStoredRoleDeniesMissingPermission(t *testing.T) {
+	base := NewAuthMiddleware("http://localhost:8081", "freecloud", "freecloud-dashboard")
+	apiMW := NewAPITokenMiddleware(base, fakeTokenDB{role: string(RoleReadOnly)})
+	handler := apiMW.Middleware(RequirePermission(PermManageAPITokens)(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/api-tokens", nil)
+	req.Header.Set("Authorization", "Bearer fc_testtoken")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("read-only API token: expected 403, got %d — body: %s", rec.Code, rec.Body.String())
 	}
 }

@@ -51,8 +51,7 @@ const maxBulkRows = 500
 // that fails does not abort the remaining rows.  Duplicate emails (already in
 // the DB) are skipped and reported as "skipped-duplicate".
 //
-// The endpoint is admin-gated via the authMW and the isManagementEndpoint
-// check in middleware/auth.go (prefix /api/v1/onboard).
+// The endpoint is permission-gated via PermOnboardOffboard in routes.go.
 func (h *Handler) BulkOnboard(w http.ResponseWriter, r *http.Request) {
 	logger := h.logger
 

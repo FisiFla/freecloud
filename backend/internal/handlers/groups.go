@@ -2,7 +2,7 @@ package handlers
 
 // A3 — Keycloak group & role management.
 //
-// Admin-gated endpoints (auto-covered by isManagementEndpoint via /api/v1/groups/ prefix).
+// Group and role endpoints are permission-gated in routes.go.
 // All writes are audited via a detached context.
 
 import (

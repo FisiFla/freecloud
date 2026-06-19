@@ -3,10 +3,13 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -62,7 +65,9 @@ func (h *Handler) PortalMyDevices(w http.ResponseWriter, r *http.Request) {
 		var lastSeenAt *time.Time
 		var createdAt time.Time
 		if err := rows.Scan(&d.FleetHostID, &d.Hostname, &d.OsVersion, &lastSeenAt, &createdAt); err != nil {
-			continue
+			h.logger.Error("portal: failed to scan device row", zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 		d.CreatedAt = createdAt.Format(time.RFC3339)
 		if lastSeenAt != nil {
@@ -70,6 +75,11 @@ func (h *Handler) PortalMyDevices(w http.ResponseWriter, r *http.Request) {
 			d.LastSeenAt = &s
 		}
 		devices = append(devices, d)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("portal: failed to iterate device rows", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 	respondJSON(w, http.StatusOK, devices)
 }
@@ -111,9 +121,16 @@ func (h *Handler) PortalMyApps(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var a portalApp
 		if err := rows.Scan(&a.ID, &a.Name, &a.BaseURL, &a.Protocol, &a.Enabled); err != nil {
-			continue
+			h.logger.Error("portal: failed to scan app row", zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 		apps = append(apps, a)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("portal: failed to iterate app rows", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 	respondJSON(w, http.StatusOK, apps)
 }
@@ -171,8 +188,18 @@ func (h *Handler) PortalRequestAccess(w http.ResponseWriter, r *http.Request) {
 		uid, req.AppID, req.Reason,
 	).Scan(&id)
 	if err != nil {
-		// ON CONFLICT DO NOTHING returns no row — treat as conflict.
-		respondError(w, http.StatusConflict, "a pending request for this app already exists")
+		if errors.Is(err, pgx.ErrNoRows) {
+			// ON CONFLICT DO NOTHING returns no row — treat as conflict.
+			respondError(w, http.StatusConflict, "a pending request for this app already exists")
+			return
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			respondError(w, http.StatusNotFound, "app or requester not found")
+			return
+		}
+		h.logger.Error("portal: failed to create access request", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	respondJSON(w, http.StatusCreated, map[string]string{"id": id})
@@ -214,10 +241,17 @@ func (h *Handler) AdminListAccessRequests(w http.ResponseWriter, r *http.Request
 		var createdAt time.Time
 		if err := rows.Scan(&req.ID, &req.RequesterID, &req.AppID, &req.Status,
 			&req.Reason, &req.DecidedBy, &createdAt); err != nil {
-			continue
+			h.logger.Error("admin: failed to scan access request row", zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 		req.CreatedAt = createdAt.Format(time.RFC3339)
 		reqs = append(reqs, req)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("admin: failed to iterate access request rows", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 	respondJSON(w, http.StatusOK, reqs)
 }
@@ -249,8 +283,16 @@ func (h *Handler) AdminDecideAccessRequest(w http.ResponseWriter, r *http.Reques
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin access request decision transaction", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer tx.Rollback(ctx)
+
 	var requesterID, appID string
-	err := h.db.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`UPDATE access_requests
 		 SET status = $1, decided_by = $2, decided_at = NOW()
 		 WHERE id = $3 AND status = 'pending'
@@ -265,15 +307,22 @@ func (h *Handler) AdminDecideAccessRequest(w http.ResponseWriter, r *http.Reques
 
 	// If approved, create the app assignment (idempotent).
 	if req.Decision == "approved" {
-		_, assignErr := h.db.Exec(ctx,
+		_, assignErr := tx.Exec(ctx,
 			`INSERT INTO app_assignments (app_id, user_id, assigned_by)
 			 VALUES ($1::uuid, $2, $3)
 			 ON CONFLICT DO NOTHING`,
 			appID, requesterID, actorID,
 		)
 		if assignErr != nil {
-			h.logger.Warn("access request approved but assignment insert failed", zap.Error(assignErr))
+			h.logger.Error("access request approval assignment insert failed", zap.Error(assignErr))
+			respondError(w, http.StatusInternalServerError, "failed to grant requested access")
+			return
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit access request decision", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": req.Decision})

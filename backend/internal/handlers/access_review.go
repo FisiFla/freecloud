@@ -65,9 +65,17 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin campaign transaction", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to create campaign")
+		return
+	}
+	defer tx.Rollback(ctx)
+
 	var campaignID string
 	var createdAt time.Time
-	err := h.db.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`INSERT INTO review_campaigns (name, created_by) VALUES ($1, $2) RETURNING id, created_at`,
 		req.Name, actorID,
 	).Scan(&campaignID, &createdAt)
@@ -78,7 +86,7 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Snapshot current app assignments into review items.
-	_, snapErr := h.db.Exec(ctx,
+	_, snapErr := tx.Exec(ctx,
 		`INSERT INTO review_items (campaign_id, user_id, resource_type, resource_id, resource_name)
 		 SELECT $1, aa.user_id, 'app', aa.app_id::text, ca.name
 		 FROM app_assignments aa
@@ -86,7 +94,14 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 		campaignID,
 	)
 	if snapErr != nil {
-		h.logger.Warn("partial campaign snapshot: app assignments failed", zap.Error(snapErr))
+		h.logger.Error("campaign snapshot failed", zap.Error(snapErr))
+		respondError(w, http.StatusInternalServerError, "failed to create campaign snapshot")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit campaign transaction", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to create campaign")
+		return
 	}
 
 	respondJSON(w, http.StatusCreated, ReviewCampaign{
@@ -121,7 +136,9 @@ func (h *Handler) ListCampaigns(w http.ResponseWriter, r *http.Request) {
 		var createdAt time.Time
 		var closedAt *time.Time
 		if err := rows.Scan(&c.ID, &c.Name, &c.Status, &c.CreatedBy, &createdAt, &closedAt); err != nil {
-			continue
+			h.logger.Error("failed to scan campaign row", zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 		c.CreatedAt = createdAt.Format(time.RFC3339)
 		if closedAt != nil {
@@ -129,6 +146,11 @@ func (h *Handler) ListCampaigns(w http.ResponseWriter, r *http.Request) {
 			c.ClosedAt = &s
 		}
 		campaigns = append(campaigns, c)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed to iterate campaign rows", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 	respondJSON(w, http.StatusOK, campaigns)
 }
@@ -167,7 +189,9 @@ func (h *Handler) ListCampaignItems(w http.ResponseWriter, r *http.Request) {
 			&item.ResourceType, &item.ResourceID, &item.ResourceName,
 			&item.Decision, &item.DecidedBy, &decidedAt, &createdAt,
 		); err != nil {
-			continue
+			h.logger.Error("failed to scan campaign item row", zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 		item.CreatedAt = createdAt.Format(time.RFC3339)
 		if decidedAt != nil {
@@ -175,6 +199,11 @@ func (h *Handler) ListCampaignItems(w http.ResponseWriter, r *http.Request) {
 			item.DecidedAt = &s
 		}
 		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed to iterate campaign item rows", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 	respondJSON(w, http.StatusOK, items)
 }
@@ -234,8 +263,17 @@ func (h *Handler) CompleteCampaign(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	actorID := middleware.GetActorID(ctx)
 
-	// Apply revocations for app resources (best-effort, non-fatal if partial).
-	_, revokeErr := h.db.Exec(ctx,
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin campaign completion transaction", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Apply revocations for app resources in the same transaction as campaign
+	// completion so the campaign cannot close with unapplied revoke decisions.
+	_, revokeErr := tx.Exec(ctx,
 		`DELETE FROM app_assignments aa
 		 USING review_items ri
 		 WHERE ri.campaign_id = $1
@@ -246,11 +284,13 @@ func (h *Handler) CompleteCampaign(w http.ResponseWriter, r *http.Request) {
 		campaignID,
 	)
 	if revokeErr != nil {
-		h.logger.Warn("partial revocation during campaign completion", zap.Error(revokeErr))
+		h.logger.Error("revocation failed during campaign completion", zap.Error(revokeErr))
+		respondError(w, http.StatusInternalServerError, "failed to apply revocations")
+		return
 	}
 
 	// Mark campaign as completed.
-	tag, err := h.db.Exec(ctx,
+	tag, err := tx.Exec(ctx,
 		`UPDATE review_campaigns SET status = 'completed', closed_at = NOW()
 		 WHERE id = $1 AND status = 'open'`,
 		campaignID,
@@ -262,6 +302,11 @@ func (h *Handler) CompleteCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	if tag.RowsAffected() == 0 {
 		respondError(w, http.StatusNotFound, "campaign not found or already closed")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit campaign completion", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
