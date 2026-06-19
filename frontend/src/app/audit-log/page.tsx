@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Search, Filter } from "lucide-react";
-import { listAuditLogs } from "@/lib/api";
+import { Search, Filter, Download } from "lucide-react";
+import { listAuditLogs, downloadAuditLogs } from "@/lib/api";
 import type { AuditLogEntry } from "@/lib/api";
 import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
@@ -108,8 +108,39 @@ export default function AuditLogPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-slate-800">Audit Log</h1>
-      <p className="mt-1 text-sm text-slate-500">Track all actions across your FreeCloud instance.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-800">Audit Log</h1>
+          <p className="mt-1 text-sm text-slate-500">Track all actions across your FreeCloud instance.</p>
+        </div>
+        {/* C4: Export buttons — honour current actor/action filters */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() =>
+              downloadAuditLogs("csv", {
+                actor: debouncedActor || undefined,
+                action: actionFilter !== "All Actions" ? actionFilter : undefined,
+              })
+            }
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export CSV
+          </button>
+          <button
+            onClick={() =>
+              downloadAuditLogs("json", {
+                actor: debouncedActor || undefined,
+                action: actionFilter !== "All Actions" ? actionFilter : undefined,
+              })
+            }
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export JSON
+          </button>
+        </div>
+      </div>
 
       {/* Error banner */}
       {error && (

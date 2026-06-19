@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle, Lock, Package, ShieldCheck, ChevronRight } from "lucide-react";
+import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle, Lock, Package, ShieldCheck, ShieldAlert, ChevronRight } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { offboardUser, getUser, lockDevice, listPolicies, assignDevicePolicy } from "@/lib/api";
-import type { OffboardResponse, Device, Policy } from "@/lib/api";
+import { offboardUser, getUser, getMFAStatus, requireMFA, lockDevice, listPolicies, assignDevicePolicy } from "@/lib/api";
+import type { OffboardResponse, Device, MFAStatus, Policy } from "@/lib/api";
 import { useApiReady } from "../../providers";
 
 interface EmployeeDetail {
@@ -33,6 +33,12 @@ export default function EmployeeDetailPage() {
   const [deprovisioned, setDeprovisioned] = useState(false);
   const [offboardResult, setOffboardResult] = useState<OffboardResponse | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // C2: MFA state
+  const [mfaStatus, setMfaStatus] = useState<MFAStatus | null>(null);
+  const [mfaLoading, setMfaLoading] = useState(false);
+  const [mfaError, setMfaError] = useState<string | null>(null);
+  const [mfaSuccess, setMfaSuccess] = useState<string | null>(null);
 
   // B1: remote lock state
   const [lockingDeviceId, setLockingDeviceId] = useState<string | null>(null);
@@ -66,6 +72,9 @@ export default function EmployeeDetailPage() {
         });
         setDevices(Array.isArray(userData.devices) ? userData.devices : []);
 
+        // C2: fetch MFA status in parallel — non-blocking.
+        getMFAStatus(userId).then(setMfaStatus).catch(() => {/* silently skip */});
+
         // Fetch policies for B4 (best-effort)
         try {
           const policyData = await listPolicies();
@@ -81,6 +90,22 @@ export default function EmployeeDetailPage() {
     };
     fetchData();
   }, [userId, apiReady]);
+
+  const handleRequireMFA = async (type: "totp" | "webauthn") => {
+    setMfaLoading(true);
+    setMfaError(null);
+    setMfaSuccess(null);
+    try {
+      await requireMFA(userId, type);
+      setMfaSuccess(`MFA requirement (${type.toUpperCase()}) set. User will be prompted on next login.`);
+      const updated = await getMFAStatus(userId);
+      setMfaStatus(updated);
+    } catch (err: unknown) {
+      setMfaError(err instanceof Error ? err.message : "Failed to set MFA requirement");
+    } finally {
+      setMfaLoading(false);
+    }
+  };
 
   const handleDeprovision = async () => {
     setDeprovisioning(true);
@@ -422,6 +447,72 @@ export default function EmployeeDetailPage() {
                 ))
               )}
             </div>
+          </div>
+
+          {/* MFA Status — C2 */}
+          <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-800">MFA Status</h2>
+            {mfaStatus ? (
+              <div className="mt-3 space-y-2">
+                <div className="flex items-center gap-2 text-sm">
+                  {mfaStatus.otpEnabled ? (
+                    <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                  ) : (
+                    <ShieldAlert className="h-4 w-4 text-slate-400" />
+                  )}
+                  <span className={mfaStatus.otpEnabled ? "text-emerald-700" : "text-slate-500"}>
+                    TOTP / Authenticator app:{" "}
+                    {mfaStatus.otpEnabled
+                      ? "Enrolled"
+                      : mfaStatus.otpPending
+                      ? "Pending setup"
+                      : "Not enrolled"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  {mfaStatus.webAuthnEnabled ? (
+                    <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                  ) : (
+                    <ShieldAlert className="h-4 w-4 text-slate-400" />
+                  )}
+                  <span className={mfaStatus.webAuthnEnabled ? "text-emerald-700" : "text-slate-500"}>
+                    WebAuthn / Security key: {mfaStatus.webAuthnEnabled ? "Enrolled" : "Not enrolled"}
+                  </span>
+                </div>
+
+                {mfaSuccess && (
+                  <div className="mt-2 flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                    <CheckCircle className="h-4 w-4 shrink-0" />
+                    {mfaSuccess}
+                  </div>
+                )}
+                {mfaError && (
+                  <div className="mt-2 flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    {mfaError}
+                  </div>
+                )}
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleRequireMFA("totp")}
+                    disabled={mfaLoading || mfaStatus.otpEnabled}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {mfaLoading ? "Setting…" : "Require TOTP on next login"}
+                  </button>
+                  <button
+                    onClick={() => handleRequireMFA("webauthn")}
+                    disabled={mfaLoading || mfaStatus.webAuthnEnabled}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {mfaLoading ? "Setting…" : "Require WebAuthn on next login"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-slate-400">Loading MFA status…</p>
+            )}
           </div>
 
           {/* Deprovision */}
