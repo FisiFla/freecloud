@@ -146,11 +146,61 @@ APP_ENV=production ALLOW_DEV_SETUP=true CREATE_DEMO_USER=false make kc-setup
 ## Documentation
 
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, environment
-  reference, backup/restore, upgrades, and troubleshooting.
+  reference, upgrades, and troubleshooting.
+- [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) — backup scripts, restore
+  runbook, and automated restore verification.
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) — Prometheus metrics, Grafana
+  dashboard, and alert rules.
 - [SECURITY.md](SECURITY.md) — security model and how to report vulnerabilities.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — local setup and the checks a PR must pass.
-- [docs/adr/](docs/adr/) — architecture decision records (distributed-state
-  integrity; the Fleet enrollment callback).
+- [docs/adr/](docs/adr/) — architecture decision records:
+  - [0001](docs/adr/0001-distributed-state-integrity.md) distributed-state integrity
+  - [0002](docs/adr/0002-fleet-enrollment-callback.md) Fleet enrollment callback
+  - [0003](docs/adr/0003-single-instance.md) single-instance v1 constraint
+
+## Operations
+
+### Backup
+
+```bash
+DATABASE_URL=postgres://user:pass@host:5432/freecloud \
+  scripts/backup.sh /var/backups/freecloud/
+```
+
+See [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) for the full runbook,
+restore instructions, and automated verification.
+
+### Observability
+
+```bash
+docker compose \
+  -f docker/docker-compose.prod.yml \
+  -f docker/docker-compose.observability.yml \
+  --env-file .env.prod up -d
+```
+
+Grafana dashboard and Prometheus alert rules are in `docker/observability/`.
+See [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
+
+### Reconciliation drift
+
+The backend runs a background job (interval: `RECONCILE_INTERVAL`, default 15m)
+that detects Keycloak↔DB drift and exposes it as Prometheus gauges
+(`freecloud_reconcile_orphans_in_keycloak`, `freecloud_reconcile_orphans_in_db`).
+An admin API endpoint returns the current drift report on demand:
+
+```
+GET /api/v1/admin/drift   (requires JWT auth)
+```
+
+Set `RECONCILE_INTERVAL=0` to disable the background job.
+
+### Single-instance note
+
+FreeCloud v1 is designed for a single backend instance (in-memory rate limiter,
+no advisory-lock migrations). See
+[docs/adr/0003-single-instance.md](docs/adr/0003-single-instance.md) for the
+full rationale and what multi-instance would require.
 
 ## License
 
