@@ -488,3 +488,27 @@ export async function listPolicies(): Promise<{ policies: Policy[] }> {
 export async function assignDevicePolicy(deviceId: string, policyId: string): Promise<AssignPolicyResponse> {
   return request<AssignPolicyResponse>("POST", `/api/v1/devices/${deviceId}/policies`, { policyId });
 }
+
+// A3: per-app access policy (conditional access)
+export interface AppAccessPolicy {
+  appId: string;
+  requireEnrolled: boolean;
+  requireDiskEncrypted: boolean;
+  requireNoCriticalVulns: boolean;
+  maxOsAgeDays?: number;
+  updatedAt?: string;
+}
+
+export async function getAppPolicy(appId: string): Promise<AppAccessPolicy> {
+  return request<AppAccessPolicy>("GET", `/api/v1/apps/${appId}/policy`);
+}
+
+export async function upsertAppPolicy(
+  appId: string,
+  policy: Omit<AppAccessPolicy, "appId" | "updatedAt">,
+): Promise<AppAccessPolicy> {
+  return request<AppAccessPolicy>("PUT", `/api/v1/apps/${appId}/policy`, {
+    appId,
+    ...policy,
+  });
+}
