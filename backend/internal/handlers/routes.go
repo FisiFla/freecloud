@@ -130,5 +130,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 		// Admin: drift / reconciliation report (read-only).
 		r.Get("/api/v1/admin/drift", h.GetDrift)
+
+		// D2: analytics time-series snapshots (read-only).
+		r.Get("/api/v1/analytics/snapshots", h.GetAnalyticsSnapshots)
 	})
 }
