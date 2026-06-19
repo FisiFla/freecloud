@@ -12,7 +12,7 @@
     "verify": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
-    "lucide-react": "^0.400.0",
+    "lucide-react": "^1.18.0",
     "next": "^16.2.9",
     "next-auth": "^5.0.0-beta.31",
     "react": "^18.3.0",
