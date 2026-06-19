@@ -17,6 +17,8 @@ type fakeFleet struct {
 	issueRemoteLockFn       func(ctx context.Context, hostID string) error
 	issueRemoteWipeFn       func(ctx context.Context, hostID string) error
 	pingFn                  func(ctx context.Context) error
+	listPoliciesFn          func(ctx context.Context) ([]fleet.Policy, error)
+	assignPolicyToHostFn    func(ctx context.Context, hostID, policyID string) error
 }
 
 func (f *fakeFleet) CreateEnrollmentToken(ctx context.Context) (string, error) {
@@ -51,5 +53,17 @@ func (f *fakeFleet) IssueRemoteWipe(ctx context.Context, hostID string) error {
 
 func (f *fakeFleet) Ping(ctx context.Context) error {
 	if f.pingFn != nil { return f.pingFn(ctx) }
+	return nil
+}
+
+func (f *fakeFleet) ListPolicies(ctx context.Context) ([]fleet.Policy, error) {
+	if f.listPoliciesFn != nil { return f.listPoliciesFn(ctx) }
+	return []fleet.Policy{
+		{ID: "pol-001", Name: "Disk Encryption Required", Description: "Ensure disk encryption is enabled"},
+	}, nil
+}
+
+func (f *fakeFleet) AssignPolicyToHost(ctx context.Context, hostID, policyID string) error {
+	if f.assignPolicyToHostFn != nil { return f.assignPolicyToHostFn(ctx, hostID, policyID) }
 	return nil
 }
