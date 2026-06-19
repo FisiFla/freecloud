@@ -17,12 +17,20 @@ type KeycloakClientInterface interface {
 	CreateUser(ctx context.Context, firstName, lastName, email, department string) (*CreateUserResult, error)
 	DeleteUser(ctx context.Context, userID string) error
 	DisableUser(ctx context.Context, userID string) error
+	UpdateUser(ctx context.Context, userID, firstName, lastName, department string, enabled bool) error
 	LogoutAllSessions(ctx context.Context, userID string) error
 	GetUserSessions(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error)
 	CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
 	DeleteClient(ctx context.Context, clientID string) error
 	AssignUserToClient(ctx context.Context, userID, clientID string) error
 	GetUserGroups(ctx context.Context, userID string) ([]*gocloak.Group, error)
+	ListGroups(ctx context.Context) ([]*gocloak.Group, error)
+	CreateGroup(ctx context.Context, name string) (string, error)
+	AddUserToGroup(ctx context.Context, userID, groupID string) error
+	RemoveUserFromGroup(ctx context.Context, userID, groupID string) error
+	ListRealmRoles(ctx context.Context) ([]*gocloak.Role, error)
+	AssignRealmRoleToUser(ctx context.Context, userID string, roles []gocloak.Role) error
+	SendPasswordReset(ctx context.Context, userID string) error
 	Ping(ctx context.Context) error
 
 	// C2: MFA surfacing + require-MFA.
@@ -291,6 +299,195 @@ func (k *KeycloakClient) GetUserSessions(ctx context.Context, userID string) ([]
 	return k.client.GetUserSessions(ctx, token, k.realm, userID)
 }
 
+// UpdateUser updates mutable profile fields for a Keycloak user.
+func (k *KeycloakClient) UpdateUser(ctx context.Context, userID, firstName, lastName, department string, enabled bool) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	user, err := k.client.GetUserByID(ctx, token, k.realm, userID)
+	if err != nil {
+		return fmt.Errorf("get user %s: %w", userID, err)
+	}
+
+	user.FirstName = &firstName
+	user.LastName = &lastName
+	user.Enabled = &enabled
+	// Store department in user attributes so it survives round-trips.
+	if user.Attributes == nil {
+		attrs := map[string][]string{}
+		user.Attributes = &attrs
+	}
+	(*user.Attributes)["department"] = []string{department}
+
+	if err := k.client.UpdateUser(ctx, token, k.realm, *user); err != nil {
+		return fmt.Errorf("update keycloak user %s: %w", userID, err)
+	}
+	zap.L().Info("updated keycloak user", zap.String("user_id", userID))
+	return nil
+}
+
+// SendPasswordReset triggers a Keycloak UPDATE_PASSWORD required-action email.
+func (k *KeycloakClient) SendPasswordReset(ctx context.Context, userID string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.ExecuteActionsEmail(ctx, token, k.realm, gocloak.ExecuteActionsEmail{
+		UserID:  &userID,
+		Actions: &[]string{"UPDATE_PASSWORD"},
+	}); err != nil {
+		return fmt.Errorf("execute actions email for user %s: %w", userID, err)
+	}
+	zap.L().Info("sent password reset email", zap.String("user_id", userID))
+	return nil
+}
+
+// ListGroups returns all groups in the realm.
+func (k *KeycloakClient) ListGroups(ctx context.Context) ([]*gocloak.Group, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	groups, err := k.client.GetGroups(ctx, token, k.realm, gocloak.GetGroupsParams{})
+	if err != nil {
+		return nil, fmt.Errorf("list groups: %w", err)
+	}
+	return groups, nil
+}
+
+// CreateGroup creates a new realm group and returns its ID.
+func (k *KeycloakClient) CreateGroup(ctx context.Context, name string) (string, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return "", err
+	}
+	groupID, err := k.client.CreateGroup(ctx, token, k.realm, gocloak.Group{Name: &name})
+	if err != nil {
+		return "", fmt.Errorf("create group %q: %w", name, err)
+	}
+	zap.L().Info("created group", zap.String("group_id", groupID), zap.String("name", name))
+	return groupID, nil
+}
+
+// AddUserToGroup adds a user to a Keycloak group.
+func (k *KeycloakClient) AddUserToGroup(ctx context.Context, userID, groupID string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.AddUserToGroup(ctx, token, k.realm, userID, groupID); err != nil {
+		return fmt.Errorf("add user %s to group %s: %w", userID, groupID, err)
+	}
+	return nil
+}
+
+// RemoveUserFromGroup removes a user from a Keycloak group.
+func (k *KeycloakClient) RemoveUserFromGroup(ctx context.Context, userID, groupID string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.DeleteUserFromGroup(ctx, token, k.realm, userID, groupID); err != nil {
+		return fmt.Errorf("remove user %s from group %s: %w", userID, groupID, err)
+	}
+	return nil
+}
+
+// ListRealmRoles returns all realm-level roles.
+func (k *KeycloakClient) ListRealmRoles(ctx context.Context) ([]*gocloak.Role, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	roles, err := k.client.GetRealmRoles(ctx, token, k.realm, gocloak.GetRoleParams{})
+	if err != nil {
+		return nil, fmt.Errorf("list realm roles: %w", err)
+	}
+	return roles, nil
+}
+
+// AssignRealmRoleToUser assigns one or more realm roles to a user.
+func (k *KeycloakClient) AssignRealmRoleToUser(ctx context.Context, userID string, roles []gocloak.Role) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.AddRealmRoleToUser(ctx, token, k.realm, userID, roles); err != nil {
+		return fmt.Errorf("assign realm roles to user %s: %w", userID, err)
+	}
+	return nil
+}
+
+// samlProtocolMappers returns the standard set of X.500/SAML attribute mappers
+// for email, firstName, lastName, and username. These are required for most SP
+// implementations to receive user identity in the assertion.
+func samlProtocolMappers() *[]gocloak.ProtocolMapperRepresentation {
+	trueStr := "true"
+	mappers := []gocloak.ProtocolMapperRepresentation{
+		{
+			Name:            gocloak.StringP("X500 email"),
+			Protocol:        gocloak.StringP("saml"),
+			ProtocolMapper:  gocloak.StringP("saml-user-property-mapper"),
+			ConsentRequired: gocloak.BoolP(false),
+			Config: &map[string]string{
+				"attribute.nameformat": "URI Reference",
+				"user.attribute":       "email",
+				"attribute.name":       "urn:oid:1.2.840.113549.1.9.1",
+				"friendly.name":        "email",
+			},
+		},
+		{
+			Name:            gocloak.StringP("X500 givenName"),
+			Protocol:        gocloak.StringP("saml"),
+			ProtocolMapper:  gocloak.StringP("saml-user-property-mapper"),
+			ConsentRequired: gocloak.BoolP(false),
+			Config: &map[string]string{
+				"attribute.nameformat": "URI Reference",
+				"user.attribute":       "firstName",
+				"attribute.name":       "urn:oid:2.5.4.42",
+				"friendly.name":        "givenName",
+			},
+		},
+		{
+			Name:            gocloak.StringP("X500 surname"),
+			Protocol:        gocloak.StringP("saml"),
+			ProtocolMapper:  gocloak.StringP("saml-user-property-mapper"),
+			ConsentRequired: gocloak.BoolP(false),
+			Config: &map[string]string{
+				"attribute.nameformat": "URI Reference",
+				"user.attribute":       "lastName",
+				"attribute.name":       "urn:oid:2.5.4.4",
+				"friendly.name":        "sn",
+			},
+		},
+		{
+			Name:            gocloak.StringP("username"),
+			Protocol:        gocloak.StringP("saml"),
+			ProtocolMapper:  gocloak.StringP("saml-user-property-mapper"),
+			ConsentRequired: gocloak.BoolP(false),
+			Config: &map[string]string{
+				"attribute.nameformat": "Basic",
+				"user.attribute":       "username",
+				"attribute.name":       "username",
+			},
+		},
+		{
+			Name:            gocloak.StringP("role list"),
+			Protocol:        gocloak.StringP("saml"),
+			ProtocolMapper:  gocloak.StringP("saml-role-list-mapper"),
+			ConsentRequired: gocloak.BoolP(false),
+			Config: &map[string]string{
+				"single":               trueStr,
+				"attribute.name":       "Role",
+				"attribute.nameformat": "Basic",
+			},
+		},
+	}
+	return &mappers
+}
+
 // CreateClient creates an OIDC or SAML client in Keycloak and returns the client ID.
 func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error) {
 	logger := zap.L()
@@ -299,12 +496,13 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 		return "", err
 	}
 
-	// Let Keycloak assign the client's internal ID; we only need the
-	// clientId (human name) and returned createdID.
+	// Lower-case protocol name as required by Keycloak.
+	kcProtocol := strings.ToLower(protocol)
+
 	client := gocloak.Client{
 		ClientID:                  &name,
 		Name:                      &name,
-		Protocol:                  &protocol,
+		Protocol:                  &kcProtocol,
 		RedirectURIs:              &redirectURIs,
 		BaseURL:                   &baseURL,
 		Enabled:                   gocloak.BoolP(true),
@@ -315,6 +513,45 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 		PublicClient:              gocloak.BoolP(false),
 	}
 
+	if kcProtocol == "saml" {
+		// Derive the SP entity ID from baseURL (falling back to name) and ACS URL
+		// from the first redirect URI. Both are required for SAML to function.
+		entityID := baseURL
+		if entityID == "" {
+			entityID = name
+		}
+		acsURL := ""
+		if len(redirectURIs) > 0 {
+			acsURL = redirectURIs[0]
+		}
+
+		client.Attributes = &map[string]string{
+			// NameID format: persistent is the most interoperable default.
+			"saml_name_id_format":                                "persistent",
+			// SP entity ID
+			"saml_sp_entity_id":                                  entityID,
+			// ACS URL (POST binding)
+			"saml.assertion.consumer.service.post.binding.url":   acsURL,
+			"saml_assertion_consumer_url_post":                   acsURL,
+			// Signing
+			"saml.server.signature":                              "true",
+			"saml.assertion.signature":                           "true",
+			"saml.client.signature":                              "false",
+			// Token details
+			"saml.authnstatement":                                "true",
+			"saml.onetimeuse.condition":                          "false",
+			"saml.server.signature.keyinfo.ext":                  "false",
+			"saml.force.post.binding":                            "true",
+			"saml.multivalued.roles":                             "false",
+			"saml.encrypt":                                       "false",
+			// Logout
+			"saml.server.signature.logout":                       "true",
+			// Session
+			"saml_assertion_lifespan":                            "3600",
+		}
+		client.ProtocolMappers = samlProtocolMappers()
+	}
+
 	createdID, err := k.client.CreateClient(ctx, token, k.realm, client)
 	if err != nil {
 		return "", fmt.Errorf("create keycloak client: %w", err)
@@ -323,7 +560,7 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 	logger.Info("created keycloak client",
 		zap.String("client_id", createdID),
 		zap.String("name", name),
-		zap.String("protocol", protocol),
+		zap.String("protocol", kcProtocol),
 	)
 
 	return createdID, nil

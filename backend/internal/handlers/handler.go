@@ -36,6 +36,10 @@ type Handler struct {
 	// Empty means the callback rejects everything (fail closed).
 	fleetWebhookSecret string
 
+	// scimBearerMW is the SCIM bearer-token middleware. Set via SetSCIMBearerToken.
+	// Defaults to a middleware that rejects all requests (fail closed).
+	scimBearerMW func(http.Handler) http.Handler
+
 	// reconciler is optional — nil when RECONCILE_INTERVAL=0 or not yet wired.
 	reconciler *reconcile.Reconciler
 }
@@ -48,12 +52,28 @@ func (h *Handler) SetFleetWebhookSecret(secret string) {
 
 // NewHandler creates a new Handler.
 func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetClientInterface, logger *zap.Logger) *Handler {
-	return &Handler{
+	h := &Handler{
 		db:       db,
 		keycloak: kc,
 		fleet:    fc,
 		logger:   logger,
 	}
+	// Default SCIM middleware: fail closed — rejects all requests until a token
+	// is configured via SetSCIMBearerToken.
+	h.scimBearerMW = SCIMBearerMiddleware("")
+	return h
+}
+
+// SetSCIMBearerToken configures the SCIM bearer-token middleware. Must be
+// called at startup before the server starts accepting requests.
+func (h *Handler) SetSCIMBearerToken(token string) {
+	h.scimBearerMW = SCIMBearerMiddleware(token)
+}
+
+// SetReconciler wires the reconciliation job into the handler so it can
+// serve the drift report endpoint (D1).
+func (h *Handler) SetReconciler(r *reconcile.Reconciler) {
+	h.reconciler = r
 }
 
 // Health returns a simple health check response.

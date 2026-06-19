@@ -30,6 +30,11 @@ type CreateAppResponse struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
 	KeycloakClientID string `json:"keycloakClientId"`
+	// SAMLEntityID and SAMLAcsURL are only set when protocol is SAML.
+	// They reflect the SP metadata fields configured in Keycloak so the
+	// admin can copy them into the SP's configuration without guessing.
+	SAMLEntityID string `json:"samlEntityId,omitempty"`
+	SAMLAcsURL   string `json:"samlAcsUrl,omitempty"`
 }
 
 // AssignAppRequest is the JSON request body for assigning a user to an app.
@@ -177,11 +182,25 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("failed to write audit log", zap.Error(auditErr))
 	}
 
-	respondJSON(w, http.StatusOK, CreateAppResponse{
+	resp := CreateAppResponse{
 		ID:               appID,
 		Name:             req.Name,
 		KeycloakClientID: keycloakClientID,
-	})
+	}
+	// Surface SAML SP metadata so admins can configure their SP.
+	if req.Protocol == "SAML" {
+		entityID := req.BaseURL
+		if entityID == "" {
+			entityID = req.Name
+		}
+		acsURL := ""
+		if len(req.RedirectURIs) > 0 {
+			acsURL = req.RedirectURIs[0]
+		}
+		resp.SAMLEntityID = entityID
+		resp.SAMLAcsURL = acsURL
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // AssignApp assigns a user to an app.
