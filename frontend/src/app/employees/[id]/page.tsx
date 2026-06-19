@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle, Pencil, KeyRound } from "lucide-react";
+import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle, Pencil, KeyRound, Lock, Package, ShieldCheck, ShieldAlert, ChevronRight } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { offboardUser, getUser, patchUser, resetPassword } from "@/lib/api";
-import type { OffboardResponse, Device, PatchUserRequest } from "@/lib/api";
+import { offboardUser, getUser, patchUser, resetPassword, getMFAStatus, requireMFA, lockDevice, listPolicies, assignDevicePolicy } from "@/lib/api";
+import type { OffboardResponse, Device, PatchUserRequest, MFAStatus, Policy } from "@/lib/api";
 import { useApiReady } from "../../providers";
 
 interface EmployeeDetail {
@@ -49,6 +49,25 @@ export default function EmployeeDetailPage() {
   const [resetSending, setResetSending] = useState(false);
   const [resetMessage, setResetMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // C2: MFA state
+  const [mfaStatus, setMfaStatus] = useState<MFAStatus | null>(null);
+  const [mfaLoading, setMfaLoading] = useState(false);
+  const [mfaError, setMfaError] = useState<string | null>(null);
+  const [mfaSuccess, setMfaSuccess] = useState<string | null>(null);
+
+  // B1: remote lock state
+  const [lockingDeviceId, setLockingDeviceId] = useState<string | null>(null);
+  const [lockConfirmDeviceId, setLockConfirmDeviceId] = useState<string | null>(null);
+  const [lockSuccess, setLockSuccess] = useState<string | null>(null);
+  const [lockError, setLockError] = useState<string | null>(null);
+
+  // B4: policy assignment state
+  const [policies, setPolicies] = useState<Policy[]>([]);
+  const [assigningPolicyForDeviceId, setAssigningPolicyForDeviceId] = useState<string | null>(null);
+  const [selectedPolicyId, setSelectedPolicyId] = useState<string>("");
+  const [policySuccess, setPolicySuccess] = useState<string | null>(null);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+
   useEffect(() => {
     if (!apiReady) return;
     const fetchData = async () => {
@@ -66,10 +85,18 @@ export default function EmployeeDetailPage() {
           role: String(userData.role || ""),
           disabled: Boolean(userData.disabled),
         });
-        // Read the viewed user's real devices from the user record, rather
-        // than calling checkDevice() (which checks the *current* logged-in
-        // user's devices, not this employee's).
         setDevices(Array.isArray(userData.devices) ? userData.devices : []);
+
+        // C2: fetch MFA status in parallel — non-blocking.
+        getMFAStatus(userId).then(setMfaStatus).catch(() => {/* silently skip */});
+
+        // Fetch policies for B4 (best-effort)
+        try {
+          const policyData = await listPolicies();
+          setPolicies(Array.isArray(policyData.policies) ? policyData.policies : []);
+        } catch {
+          // Policy list is non-critical; don't block the page
+        }
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : "Failed to load employee data");
       } finally {
@@ -136,6 +163,22 @@ export default function EmployeeDetailPage() {
     }
   };
 
+  const handleRequireMFA = async (type: "totp" | "webauthn") => {
+    setMfaLoading(true);
+    setMfaError(null);
+    setMfaSuccess(null);
+    try {
+      await requireMFA(userId, type);
+      setMfaSuccess(`MFA requirement (${type.toUpperCase()}) set. User will be prompted on next login.`);
+      const updated = await getMFAStatus(userId);
+      setMfaStatus(updated);
+    } catch (err: unknown) {
+      setMfaError(err instanceof Error ? err.message : "Failed to set MFA requirement");
+    } finally {
+      setMfaLoading(false);
+    }
+  };
+
   const handleDeprovision = async () => {
     setDeprovisioning(true);
     setActionError(null);
@@ -147,6 +190,40 @@ export default function EmployeeDetailPage() {
       setActionError(err instanceof Error ? err.message : "Failed to deprovision. Check the backend is running.");
     } finally {
       setDeprovisioning(false);
+    }
+  };
+
+  // B1: lock device handler
+  const handleLockDevice = async () => {
+    if (!lockConfirmDeviceId) return;
+    setLockingDeviceId(lockConfirmDeviceId);
+    setLockError(null);
+    setLockSuccess(null);
+    try {
+      await lockDevice(lockConfirmDeviceId);
+      setLockSuccess(`Lock command sent to device ${lockConfirmDeviceId}.`);
+    } catch (err: unknown) {
+      setLockError(err instanceof Error ? err.message : "Failed to send lock command.");
+    } finally {
+      setLockingDeviceId(null);
+      setLockConfirmDeviceId(null);
+    }
+  };
+
+  // B4: assign policy handler
+  const handleAssignPolicy = async () => {
+    if (!assigningPolicyForDeviceId || !selectedPolicyId) return;
+    setPolicyError(null);
+    setPolicySuccess(null);
+    try {
+      await assignDevicePolicy(assigningPolicyForDeviceId, selectedPolicyId);
+      const policyName = policies.find(p => p.id === selectedPolicyId)?.name ?? selectedPolicyId;
+      setPolicySuccess(`Policy "${policyName}" assigned to device ${assigningPolicyForDeviceId}.`);
+    } catch (err: unknown) {
+      setPolicyError(err instanceof Error ? err.message : "Failed to assign policy.");
+    } finally {
+      setAssigningPolicyForDeviceId(null);
+      setSelectedPolicyId("");
     }
   };
 
@@ -434,6 +511,56 @@ export default function EmployeeDetailPage() {
             </div>
           )}
 
+          {/* Quick links — B2/B3 device pages */}
+          <div className="mt-4 flex gap-3">
+            <a
+              href={`/employees/${userId}/software`}
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
+            >
+              <Package className="h-4 w-4 text-indigo-500" />
+              Software Inventory
+              <ChevronRight className="h-4 w-4 text-slate-400" />
+            </a>
+            <a
+              href={`/employees/${userId}/compliance`}
+              className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
+            >
+              <ShieldCheck className="h-4 w-4 text-indigo-500" />
+              Compliance / Posture
+              <ChevronRight className="h-4 w-4 text-slate-400" />
+            </a>
+          </div>
+
+          {/* Lock / policy success / error banners */}
+          {lockSuccess && (
+            <div className="mt-4 flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              <CheckCircle className="h-4 w-4 shrink-0" />
+              {lockSuccess}
+              <button onClick={() => setLockSuccess(null)} className="ml-auto text-emerald-400 hover:text-emerald-600" aria-label="Dismiss">✕</button>
+            </div>
+          )}
+          {lockError && (
+            <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {lockError}
+              <button onClick={() => setLockError(null)} className="ml-auto text-red-400 hover:text-red-600" aria-label="Dismiss">✕</button>
+            </div>
+          )}
+          {policySuccess && (
+            <div className="mt-4 flex items-center gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              <CheckCircle className="h-4 w-4 shrink-0" />
+              {policySuccess}
+              <button onClick={() => setPolicySuccess(null)} className="ml-auto text-emerald-400 hover:text-emerald-600" aria-label="Dismiss">✕</button>
+            </div>
+          )}
+          {policyError && (
+            <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {policyError}
+              <button onClick={() => setPolicyError(null)} className="ml-auto text-red-400 hover:text-red-600" aria-label="Dismiss">✕</button>
+            </div>
+          )}
+
           {/* Devices */}
           <div className="mt-6">
             <h2 className="text-lg font-semibold text-slate-800">Assigned Devices</h2>
@@ -444,21 +571,129 @@ export default function EmployeeDetailPage() {
                 devices.map((device) => (
                   <div
                     key={device.fleetHostId}
-                    className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                    className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
                   >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
-                      <Monitor className="h-5 w-5" />
+                    <div className="flex items-center gap-4">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+                        <Monitor className="h-5 w-5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-slate-800 truncate">{device.hostname || device.fleetHostId}</p>
+                        <p className="text-sm text-slate-500">
+                          {device.osVersion || "Unknown OS"}
+                        </p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="font-medium text-slate-800">{device.hostname || device.fleetHostId}</p>
-                      <p className="text-sm text-slate-500">
-                        {device.osVersion || "Unknown OS"}
-                      </p>
+
+                    {/* B1: Lock device button */}
+                    <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3">
+                      <button
+                        onClick={() => setLockConfirmDeviceId(device.fleetHostId)}
+                        disabled={lockingDeviceId === device.fleetHostId}
+                        className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-50"
+                        title="Send a remote lock command to this device"
+                      >
+                        <Lock className="h-3.5 w-3.5" />
+                        {lockingDeviceId === device.fleetHostId ? "Locking..." : "Lock Device"}
+                      </button>
+
+                      {/* B4: Assign policy — inline picker */}
+                      {policies.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-1">
+                          <select
+                            value={assigningPolicyForDeviceId === device.fleetHostId ? selectedPolicyId : ""}
+                            onChange={(e) => {
+                              setAssigningPolicyForDeviceId(device.fleetHostId);
+                              setSelectedPolicyId(e.target.value);
+                            }}
+                            className="flex-1 min-w-0 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                          >
+                            <option value="">Assign policy…</option>
+                            {policies.map((p) => (
+                              <option key={p.id} value={p.id}>{p.name}</option>
+                            ))}
+                          </select>
+                          {assigningPolicyForDeviceId === device.fleetHostId && selectedPolicyId && (
+                            <button
+                              onClick={handleAssignPolicy}
+                              className="rounded-lg bg-indigo-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-indigo-700"
+                            >
+                              Apply
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))
               )}
             </div>
+          </div>
+
+          {/* MFA Status — C2 */}
+          <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-800">MFA Status</h2>
+            {mfaStatus ? (
+              <div className="mt-3 space-y-2">
+                <div className="flex items-center gap-2 text-sm">
+                  {mfaStatus.otpEnabled ? (
+                    <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                  ) : (
+                    <ShieldAlert className="h-4 w-4 text-slate-400" />
+                  )}
+                  <span className={mfaStatus.otpEnabled ? "text-emerald-700" : "text-slate-500"}>
+                    TOTP / Authenticator app:{" "}
+                    {mfaStatus.otpEnabled
+                      ? "Enrolled"
+                      : mfaStatus.otpPending
+                      ? "Pending setup"
+                      : "Not enrolled"}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-sm">
+                  {mfaStatus.webAuthnEnabled ? (
+                    <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                  ) : (
+                    <ShieldAlert className="h-4 w-4 text-slate-400" />
+                  )}
+                  <span className={mfaStatus.webAuthnEnabled ? "text-emerald-700" : "text-slate-500"}>
+                    WebAuthn / Security key: {mfaStatus.webAuthnEnabled ? "Enrolled" : "Not enrolled"}
+                  </span>
+                </div>
+
+                {mfaSuccess && (
+                  <div className="mt-2 flex items-center gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                    <CheckCircle className="h-4 w-4 shrink-0" />
+                    {mfaSuccess}
+                  </div>
+                )}
+                {mfaError && (
+                  <div className="mt-2 flex items-center gap-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    {mfaError}
+                  </div>
+                )}
+
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    onClick={() => handleRequireMFA("totp")}
+                    disabled={mfaLoading || mfaStatus.otpEnabled}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {mfaLoading ? "Setting…" : "Require TOTP on next login"}
+                  </button>
+                  <button
+                    onClick={() => handleRequireMFA("webauthn")}
+                    disabled={mfaLoading || mfaStatus.webAuthnEnabled}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {mfaLoading ? "Setting…" : "Require WebAuthn on next login"}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-slate-400">Loading MFA status…</p>
+            )}
           </div>
 
           {/* Deprovision */}
@@ -502,6 +737,7 @@ export default function EmployeeDetailPage() {
         </>
       )}
 
+      {/* Confirm deprovision */}
       <ConfirmDialog
         isOpen={showConfirm}
         onClose={() => setShowConfirm(false)}
@@ -510,6 +746,17 @@ export default function EmployeeDetailPage() {
         message={`Are you sure you want to deprovision ${employee.firstName} ${employee.lastName}? This will immediately revoke all access.`}
         confirmLabel="Yes, Nuke Account"
         variant="danger"
+      />
+
+      {/* B1: Confirm lock */}
+      <ConfirmDialog
+        isOpen={lockConfirmDeviceId !== null}
+        onClose={() => setLockConfirmDeviceId(null)}
+        onConfirm={handleLockDevice}
+        title="Lock Device?"
+        message={`This will send a remote lock command to device ${lockConfirmDeviceId}. The device will be locked immediately. Unlike a wipe, data is preserved and the device can be unlocked later.`}
+        confirmLabel="Yes, Lock Device"
+        variant="default"
       />
     </div>
   );

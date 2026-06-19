@@ -11,6 +11,7 @@ import (
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
+	"github.com/FisiFla/freecloud/backend/internal/reconcile"
 )
 
 // DBPool is the subset of *pgxpool.Pool the handlers use. Depending on an
@@ -38,6 +39,9 @@ type Handler struct {
 	// scimBearerMW is the SCIM bearer-token middleware. Set via SetSCIMBearerToken.
 	// Defaults to a middleware that rejects all requests (fail closed).
 	scimBearerMW func(http.Handler) http.Handler
+
+	// reconciler is optional — nil when RECONCILE_INTERVAL=0 or not yet wired.
+	reconciler *reconcile.Reconciler
 }
 
 // SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment
@@ -64,6 +68,12 @@ func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetCl
 // called at startup before the server starts accepting requests.
 func (h *Handler) SetSCIMBearerToken(token string) {
 	h.scimBearerMW = SCIMBearerMiddleware(token)
+}
+
+// SetReconciler wires the reconciliation job into the handler so it can
+// serve the drift report endpoint (D1).
+func (h *Handler) SetReconciler(r *reconcile.Reconciler) {
+	h.reconciler = r
 }
 
 // Health returns a simple health check response.
