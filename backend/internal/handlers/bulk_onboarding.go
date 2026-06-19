@@ -131,13 +131,7 @@ func (h *Handler) BulkOnboard(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Delegate to the same logic as the single-user onboard.
-		req := OnboardRequest{
-			FirstName:  row.FirstName,
-			LastName:   row.LastName,
-			Email:      row.Email,
-			Department: row.Department,
-			Role:       row.Role,
-		}
+		req := OnboardRequest(row)
 		if err := h.onboardOne(r.Context(), req, actorID); err != nil {
 			logger.Warn("bulk onboard row failed",
 				zap.Int("row", rowNum),

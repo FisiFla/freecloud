@@ -54,13 +54,6 @@ func (r *fakeAuditRows) Values() ([]any, error)    { return nil, nil }
 func (r *fakeAuditRows) RawValues() [][]byte        { return nil }
 func (r *fakeAuditRows) Conn() *pgx.Conn            { return nil }
 
-// newExportDB creates a fakeDB whose Query returns the given rows.
-func newExportDB(entries []AuditLogEntry) *fakeDB {
-	return &fakeDB{
-		// We override the Query method via a fakeDB extension.
-	}
-}
-
 // fakeDBWithQuery extends fakeDB to support Query.
 type fakeDBWithQuery struct {
 	fakeDB
