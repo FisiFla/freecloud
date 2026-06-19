@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle, Pencil, KeyRound, Lock, Package, ShieldCheck, ShieldAlert, ChevronRight } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { offboardUser, getUser, patchUser, resetPassword, getMFAStatus, requireMFA, lockDevice, listPolicies, assignDevicePolicy } from "@/lib/api";
+import { offboardUser, getUser, patchUser, resetPassword, getMFAStatus, requireMFA, lockDevice, listPolicies } from "@/lib/api";
 import type { OffboardResponse, Device, PatchUserRequest, MFAStatus, Policy } from "@/lib/api";
 import { useApiReady } from "../../providers";
 
@@ -210,21 +210,12 @@ export default function EmployeeDetailPage() {
     }
   };
 
-  // B4: assign policy handler
+  // B2: Policy assignment is now team-scoped (see /teams page).
+  // This handler shows a redirect hint instead of a direct assignment.
   const handleAssignPolicy = async () => {
-    if (!assigningPolicyForDeviceId || !selectedPolicyId) return;
-    setPolicyError(null);
-    setPolicySuccess(null);
-    try {
-      await assignDevicePolicy(assigningPolicyForDeviceId, selectedPolicyId);
-      const policyName = policies.find(p => p.id === selectedPolicyId)?.name ?? selectedPolicyId;
-      setPolicySuccess(`Policy "${policyName}" assigned to device ${assigningPolicyForDeviceId}.`);
-    } catch (err: unknown) {
-      setPolicyError(err instanceof Error ? err.message : "Failed to assign policy.");
-    } finally {
-      setAssigningPolicyForDeviceId(null);
-      setSelectedPolicyId("");
-    }
+    setPolicySuccess("Policy assignment is now managed via Fleet Teams. Use the Teams page to assign policies to teams and move devices there.");
+    setAssigningPolicyForDeviceId(null);
+    setSelectedPolicyId("");
   };
 
   if (loading) {

@@ -18,7 +18,11 @@ type fakeFleet struct {
 	issueRemoteWipeFn       func(ctx context.Context, hostID string) error
 	pingFn                  func(ctx context.Context) error
 	listPoliciesFn          func(ctx context.Context) ([]fleet.Policy, error)
-	assignPolicyToHostFn    func(ctx context.Context, hostID, policyID string) error
+	// B2: team-scoped policy
+	listTeamsFn          func(ctx context.Context) ([]fleet.Team, error)
+	createTeamFn         func(ctx context.Context, name, description string) (*fleet.Team, error)
+	assignPolicyToTeamFn func(ctx context.Context, teamID int, policyID string) error
+	moveHostToTeamFn     func(ctx context.Context, teamID int, hostIDs []string) error
 }
 
 func (f *fakeFleet) CreateEnrollmentToken(ctx context.Context) (string, error) {
@@ -63,7 +67,22 @@ func (f *fakeFleet) ListPolicies(ctx context.Context) ([]fleet.Policy, error) {
 	}, nil
 }
 
-func (f *fakeFleet) AssignPolicyToHost(ctx context.Context, hostID, policyID string) error {
-	if f.assignPolicyToHostFn != nil { return f.assignPolicyToHostFn(ctx, hostID, policyID) }
+func (f *fakeFleet) ListTeams(ctx context.Context) ([]fleet.Team, error) {
+	if f.listTeamsFn != nil { return f.listTeamsFn(ctx) }
+	return []fleet.Team{{ID: 1, Name: "Default"}}, nil
+}
+
+func (f *fakeFleet) CreateTeam(ctx context.Context, name, description string) (*fleet.Team, error) {
+	if f.createTeamFn != nil { return f.createTeamFn(ctx, name, description) }
+	return &fleet.Team{ID: 42, Name: name, Description: description}, nil
+}
+
+func (f *fakeFleet) AssignPolicyToTeam(ctx context.Context, teamID int, policyID string) error {
+	if f.assignPolicyToTeamFn != nil { return f.assignPolicyToTeamFn(ctx, teamID, policyID) }
+	return nil
+}
+
+func (f *fakeFleet) MoveHostToTeam(ctx context.Context, teamID int, hostIDs []string) error {
+	if f.moveHostToTeamFn != nil { return f.moveHostToTeamFn(ctx, teamID, hostIDs) }
 	return nil
 }
