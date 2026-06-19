@@ -492,6 +492,23 @@ export async function getOrgCompliance(): Promise<ComplianceResponse> {
   return request<ComplianceResponse>("GET", `/api/v1/compliance`);
 }
 
+// D2: Analytics snapshots
+export interface SnapshotRow {
+  id: number;
+  capturedAt: string;
+  complianceRate: number;
+  enrolledDevices: number;
+  mfaCoveragePct: number;
+  appCount: number;
+  onboardCount: number;
+  offboardCount: number;
+}
+
+export async function getAnalyticsSnapshots(limit?: number): Promise<SnapshotRow[]> {
+  const qs = limit ? `?limit=${limit}` : "";
+  return request<SnapshotRow[]>("GET", `/api/v1/analytics/snapshots${qs}`);
+}
+
 // B4 / B2: Policies
 export async function listPolicies(): Promise<{ policies: Policy[] }> {
   return request<{ policies: Policy[] }>("GET", "/api/v1/policies");

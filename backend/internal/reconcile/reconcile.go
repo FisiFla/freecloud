@@ -21,6 +21,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
+	"github.com/FisiFla/freecloud/backend/internal/notify"
 )
 
 // DBPool is the subset of *pgxpool.Pool the reconciler uses. *pgxpool.Pool
@@ -57,14 +58,20 @@ type DriftResult struct {
 
 // Reconciler compares Keycloak users against the local DB.
 type Reconciler struct {
-	kc     keycloak.KeycloakClientInterface
-	pool   DBPool
-	logger *zap.Logger
+	kc       keycloak.KeycloakClientInterface
+	pool     DBPool
+	logger   *zap.Logger
+	notifier notify.Notifier
 }
 
 // New creates a Reconciler.
 func New(kc keycloak.KeycloakClientInterface, pool DBPool, logger *zap.Logger) *Reconciler {
 	return &Reconciler{kc: kc, pool: pool, logger: logger}
+}
+
+// SetNotifier wires the event notifier into the reconciler (D1 / FCEX2-17).
+func (r *Reconciler) SetNotifier(n notify.Notifier) {
+	r.notifier = n
 }
 
 // Run performs one reconciliation pass and returns the drift. It never mutates
@@ -162,6 +169,21 @@ func (r *Reconciler) runAndRecord(ctx context.Context) {
 			zap.Strings("orphans_in_keycloak_ids", result.OrphansInKeycloak),
 			zap.Strings("orphans_in_db_ids", result.OrphansInDB),
 		)
+		// Fire drift notification (fail-open: background goroutine).
+		if r.notifier != nil {
+			n := r.notifier
+			go func() {
+				notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = n.Notify(notifyCtx, notify.Event{
+					Type: notify.EventReconcileDrift,
+					Details: map[string]any{
+						"orphans_in_keycloak": len(result.OrphansInKeycloak),
+						"orphans_in_db":       len(result.OrphansInDB),
+					},
+				})
+			}()
+		}
 	} else {
 		r.logger.Info("reconciliation: no drift detected")
 	}

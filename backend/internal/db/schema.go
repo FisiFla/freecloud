@@ -44,6 +44,21 @@ var migrations = []migration{
 		name:      "app_access_policies",
 		statement: Migration005,
 	},
+	{
+		id:        20,
+		name:      "analytics_snapshots",
+		statement: Migration020,
+	},
+	{
+		id:        21,
+		name:      "siem_cursor",
+		statement: Migration021,
+	},
+	{
+		id:        22,
+		name:      "audit_logs_seq",
+		statement: Migration022,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -173,6 +188,41 @@ CREATE TABLE IF NOT EXISTS app_access_policies (
     max_os_age_days         INTEGER,
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+`
+
+// Migration020 creates the analytics_snapshots time-series table (D2 / FCEX2-18).
+const Migration020 = `
+CREATE TABLE IF NOT EXISTS analytics_snapshots (
+    id               BIGSERIAL PRIMARY KEY,
+    captured_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    compliance_rate  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    enrolled_devices INTEGER NOT NULL DEFAULT 0,
+    mfa_coverage_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+    app_count        INTEGER NOT NULL DEFAULT 0,
+    onboard_count    INTEGER NOT NULL DEFAULT 0,
+    offboard_count   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_snapshots_captured_at ON analytics_snapshots(captured_at DESC);
+`
+
+// Migration021 creates the SIEM streaming cursor table (D3 / FCEX2-19).
+// A single row (id=1) holds the monotonic seq of the last audit_log entry
+// successfully delivered to the external sink.
+const Migration021 = `
+CREATE TABLE IF NOT EXISTS siem_cursor (
+    id       INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    last_seq BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO siem_cursor (id, last_seq) VALUES (1, 0) ON CONFLICT DO NOTHING;
+`
+
+// Migration022 adds a BIGSERIAL seq column to audit_logs used as a durable
+// monotonic cursor by the SIEM streamer (D3 / FCEX2-19). Existing rows receive
+// seq values via the DEFAULT sequence; new inserts get auto-assigned values.
+const Migration022 = `
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS seq BIGSERIAL;
+CREATE INDEX IF NOT EXISTS idx_audit_logs_seq ON audit_logs(seq);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in
