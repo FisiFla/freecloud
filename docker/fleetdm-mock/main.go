@@ -86,6 +86,38 @@ func main() {
 				})
 			}
 
+		case path == "/policies" || path == "/policies/":
+			if r.Method == "GET" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"policies": []map[string]interface{}{
+						{"id": "pol-001", "name": "Disk Encryption Required", "description": "Ensure disk encryption is enabled"},
+					},
+				})
+			} else {
+				json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			}
+
+		case path == "/teams" || path == "/teams/":
+			if r.Method == "GET" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"teams": []map[string]interface{}{
+						{"id": 1, "name": "Default", "description": "Default team"},
+					},
+				})
+			} else if r.Method == "POST" {
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"team": map[string]interface{}{"id": 2, "name": "e2e-team"},
+				})
+			} else {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+			}
+
+		case strings.HasPrefix(path, "/teams/") && strings.HasSuffix(path, "/policies"):
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
+		case path == "/hosts/transfer/teams":
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+
 		default:
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(map[string]string{"error": "not found"})

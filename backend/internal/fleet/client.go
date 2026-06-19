@@ -57,6 +57,22 @@ type AssignPolicyRequest struct {
 	PolicyID string `json:"policy_id"`
 }
 
+// Team represents a FleetDM team.
+type Team struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// TeamPolicy represents a policy scoped to a team.
+type TeamPolicy struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Query       string `json:"query,omitempty"`
+	Description string `json:"description,omitempty"`
+	TeamID      int    `json:"team_id"`
+}
+
 // FleetClientInterface defines the operations used by handlers.
 type FleetClientInterface interface {
 	CreateEnrollmentToken(ctx context.Context) (string, error)
@@ -66,9 +82,13 @@ type FleetClientInterface interface {
 	IssueRemoteLock(ctx context.Context, hostID string) error
 	IssueRemoteWipe(ctx context.Context, hostID string) error
 	Ping(ctx context.Context) error
-	// B4: policy management
+	// Global policies
 	ListPolicies(ctx context.Context) ([]Policy, error)
-	AssignPolicyToHost(ctx context.Context, hostID, policyID string) error
+	// B2: team-scoped MDM policy management (replaces host-scoped stub)
+	ListTeams(ctx context.Context) ([]Team, error)
+	CreateTeam(ctx context.Context, name, description string) (*Team, error)
+	AssignPolicyToTeam(ctx context.Context, teamID int, policyID string) error
+	MoveHostToTeam(ctx context.Context, teamID int, hostIDs []string) error
 }
 
 // FleetClient communicates with the FleetDM API.
@@ -305,36 +325,91 @@ func (f *FleetClient) ListPolicies(ctx context.Context) ([]Policy, error) {
 	return result.Policies, nil
 }
 
-// AssignPolicyToHost triggers policy enforcement for a specific host by
-// posting to the FleetDM run-policy-on-host endpoint.
-// FleetDM does not have a direct "assign policy to host" REST endpoint; the
-// nearest supported operation is to add the host to a team that already has the
-// policy, or to trigger a policy run. We model this as a POST to the policies
-// endpoint with the host context — this is e2e-pending against a live Fleet
-// stack because the mock does not implement the policies API.
-func (f *FleetClient) AssignPolicyToHost(ctx context.Context, hostID, policyID string) error {
-	if err := validateHostID(hostID); err != nil {
-		return err
+// ListTeams returns all teams defined in FleetDM.
+func (f *FleetClient) ListTeams(ctx context.Context) ([]Team, error) {
+	body, err := f.doRequest(ctx, http.MethodGet, "/api/v1/fleet/teams", nil)
+	if err != nil {
+		return nil, fmt.Errorf("fleet list teams: %w", err)
 	}
+	var result struct {
+		Teams []Team `json:"teams"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("fleet parse teams: %w", err)
+	}
+	if result.Teams == nil {
+		return []Team{}, nil
+	}
+	return result.Teams, nil
+}
+
+// CreateTeam creates a new team in FleetDM and returns it.
+func (f *FleetClient) CreateTeam(ctx context.Context, name, description string) (*Team, error) {
+	payload := map[string]string{"name": name, "description": description}
+	body, err := f.doRequest(ctx, http.MethodPost, "/api/v1/fleet/teams", payload)
+	if err != nil {
+		return nil, fmt.Errorf("fleet create team: %w", err)
+	}
+	var result struct {
+		Team Team `json:"team"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("fleet parse create team: %w", err)
+	}
+	zap.L().Info("created fleet team", zap.String("name", name), zap.Int("id", result.Team.ID))
+	return &result.Team, nil
+}
+
+// AssignPolicyToTeam assigns an existing global policy to a team by posting to
+// the FleetDM team-policies endpoint (POST /api/v1/fleet/teams/{id}/policies).
+func (f *FleetClient) AssignPolicyToTeam(ctx context.Context, teamID int, policyID string) error {
 	if err := validateHostID(policyID); err != nil {
 		return fmt.Errorf("invalid policyID: %w", err)
 	}
-	// FleetDM REST: PATCH /api/v1/fleet/hosts/{id} does not carry policy
-	// assignment; the supported path is team-based. We POST to a synthetic
-	// path that the mock will 404 on (documented as e2e-pending).
-	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/policies", hostID)
-	_, err := f.doRequest(ctx, http.MethodPost, path, AssignPolicyRequest{PolicyID: policyID})
+	path := fmt.Sprintf("/api/v1/fleet/teams/%d/policies", teamID)
+	_, err := f.doRequest(ctx, http.MethodPost, path, map[string]string{"policy_id": policyID})
 	if err != nil {
-		zap.L().Error("fleet AssignPolicyToHost failed",
-			zap.String("host_id", hostID),
+		zap.L().Error("fleet AssignPolicyToTeam failed",
+			zap.Int("team_id", teamID),
 			zap.String("policy_id", policyID),
 			zap.Error(err),
 		)
-		return fmt.Errorf("assign policy %s to host %s: %w", policyID, hostID, err)
+		return fmt.Errorf("assign policy %s to team %d: %w", policyID, teamID, err)
 	}
-	zap.L().Info("assigned policy to host",
-		zap.String("host_id", hostID),
+	zap.L().Info("assigned policy to team",
+		zap.Int("team_id", teamID),
 		zap.String("policy_id", policyID),
+	)
+	return nil
+}
+
+// MoveHostToTeam moves hosts to a team via PATCH /api/v1/fleet/hosts/transfer/teams.
+// This is the canonical FleetDM REST endpoint for host team assignment.
+func (f *FleetClient) MoveHostToTeam(ctx context.Context, teamID int, hostIDs []string) error {
+	if len(hostIDs) == 0 {
+		return nil
+	}
+	for _, id := range hostIDs {
+		if err := validateHostID(id); err != nil {
+			return fmt.Errorf("invalid host id %q: %w", id, err)
+		}
+	}
+	payload := map[string]interface{}{
+		"team_id":  teamID,
+		"host_ids": hostIDs,
+	}
+	_, err := f.doRequest(ctx, http.MethodPost, "/api/v1/fleet/hosts/transfer/teams", payload)
+	if err != nil {
+		zap.L().Error("fleet MoveHostToTeam failed",
+			zap.Int("team_id", teamID),
+			zap.Strings("host_ids", hostIDs),
+			zap.Error(err),
+		)
+		return fmt.Errorf("move hosts to team %d: %w", teamID, err)
+	}
+	zap.L().Info("moved hosts to team",
+		zap.Int("team_id", teamID),
+		zap.Int("count", len(hostIDs)),
 	)
 	return nil
 }

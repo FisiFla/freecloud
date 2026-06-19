@@ -124,13 +124,14 @@ func TestSCIMCreateUserNilDB(t *testing.T) {
 	}
 }
 
-func TestSCIMGroupsStub(t *testing.T) {
+func TestSCIMGroupsListReplacedStub(t *testing.T) {
+	// Verify that the Groups endpoint now returns a real response (200) rather than 501.
 	h := setupTestHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/scim/v2/Groups", nil)
 	rec := httptest.NewRecorder()
-	h.SCIMGroupsStub(rec, req)
-	if rec.Code != http.StatusNotImplemented {
-		t.Errorf("groups stub: expected 501, got %d", rec.Code)
+	h.SCIMListGroups(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("groups list: expected 200, got %d", rec.Code)
 	}
 }
 

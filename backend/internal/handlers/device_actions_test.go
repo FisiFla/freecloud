@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -401,71 +400,6 @@ func TestListPolicies_FleetError(t *testing.T) {
 	}
 }
 
-func TestAssignDevicePolicy_HappyPath(t *testing.T) {
-	assignCalled := false
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
-		assignPolicyToHostFn: func(_ context.Context, hostID, policyID string) error {
-			assignCalled = true
-			if hostID != "host-001" {
-				t.Errorf("unexpected host: %s", hostID)
-			}
-			if policyID != "pol-001" {
-				t.Errorf("unexpected policy: %s", policyID)
-			}
-			return nil
-		},
-	}, zap.NewNop())
-
-	body, _ := json.Marshal(map[string]string{"policyId": "pol-001"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/policies", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = chiCtxWithID(req, "id", "host-001")
-	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
-	rec := httptest.NewRecorder()
-
-	h.AssignDevicePolicy(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if !assignCalled {
-		t.Error("expected AssignPolicyToHost to be called")
-	}
-}
-
-func TestAssignDevicePolicy_MissingPolicyID(t *testing.T) {
-	h := setupTestHandler(t)
-
-	body, _ := json.Marshal(map[string]string{"policyId": ""})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/policies", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = chiCtxWithID(req, "id", "host-001")
-	rec := httptest.NewRecorder()
-
-	h.AssignDevicePolicy(rec, req)
-
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 (missing policyId), got %d", rec.Code)
-	}
-}
-
-func TestAssignDevicePolicy_FleetError(t *testing.T) {
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
-		assignPolicyToHostFn: func(_ context.Context, hostID, policyID string) error {
-			return errors.New("fleet error")
-		},
-	}, zap.NewNop())
-
-	body, _ := json.Marshal(map[string]string{"policyId": "pol-001"})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/policies", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req = chiCtxWithID(req, "id", "host-001")
-	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
-	rec := httptest.NewRecorder()
-
-	h.AssignDevicePolicy(rec, req)
-
-	if rec.Code != http.StatusBadGateway {
-		t.Errorf("expected 502 on fleet error, got %d", rec.Code)
-	}
-}
+// B2: The host-scoped AssignDevicePolicy was replaced by the team-scoped
+// AssignTeamPolicy / MoveHostToTeam flow. Coverage for those handlers lives in
+// fleet_teams_test.go. These placeholder tests document the removal.
