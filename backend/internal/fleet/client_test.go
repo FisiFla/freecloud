@@ -262,21 +262,30 @@ func TestListPolicies_EmptyList(t *testing.T) {
 	}
 }
 
-// TestAssignPolicyToHost_InvalidInputs confirms validation blocks bad IDs.
-func TestAssignPolicyToHost_InvalidInputs(t *testing.T) {
+// TestAssignPolicyToTeam_InvalidInput confirms validation blocks a bad policy ID.
+func TestAssignPolicyToTeam_InvalidInput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("request should not reach server for invalid IDs")
 	}))
 	defer srv.Close()
 
 	c := newTestClient(t, srv)
-	// Empty host ID.
-	if err := c.AssignPolicyToHost(context.Background(), "", "pol-1"); err == nil {
-		t.Error("expected error for empty hostID")
-	}
 	// Path traversal in policy ID.
-	if err := c.AssignPolicyToHost(context.Background(), "host-1", "../admin"); err == nil {
+	if err := c.AssignPolicyToTeam(context.Background(), 1, "../admin"); err == nil {
 		t.Error("expected error for traversal policyID")
+	}
+}
+
+// TestMoveHostToTeam_EmptyHostIDs confirms no-op for empty slice.
+func TestMoveHostToTeam_EmptyHostIDs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request should not reach server for empty host IDs")
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	if err := c.MoveHostToTeam(context.Background(), 1, []string{}); err != nil {
+		t.Errorf("expected nil for empty hostIDs, got %v", err)
 	}
 }
 

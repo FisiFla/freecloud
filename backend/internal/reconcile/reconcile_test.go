@@ -62,6 +62,12 @@ func (f *fakeKC) ListUsers(_ context.Context) ([]gocloak.User, error) {
 	return f.users, f.err
 }
 
+// B1: SCIM group operations (not used by reconciler — satisfy interface)
+func (f *fakeKC) GetGroupByID(_ context.Context, _ string) (*gocloak.Group, error)     { return nil, nil }
+func (f *fakeKC) ListGroupMembers(_ context.Context, _ string) ([]*gocloak.User, error) { return nil, nil }
+func (f *fakeKC) RenameGroup(_ context.Context, _, _ string) error                      { return nil }
+func (f *fakeKC) DeleteGroup(_ context.Context, _ string) error                         { return nil }
+
 // fakeRows implements pgx.Rows backed by a string slice.
 type fakeRows struct {
 	ids []string
