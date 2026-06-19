@@ -57,6 +57,10 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.Post("/api/v1/apps/create", h.CreateApp)
 			r.Post("/api/v1/apps/{appId}/assign", h.AssignApp)
 			r.Post("/api/v1/users/{id}/require-mfa", h.RequireMFA)  // C2
+			// B1: admin-only remote lock (distinct from wipe which runs in offboard)
+			r.Post("/api/v1/devices/{id}/lock", h.RemoteLock)
+			// B4: assign a policy to a device
+			r.Post("/api/v1/devices/{id}/policies", h.AssignDevicePolicy)
 		})
 
 		r.Post("/api/v1/auth/device-check", h.DeviceCheck)
@@ -66,5 +70,12 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Get("/api/v1/users", h.ListUsers)
 		r.Get("/api/v1/users/{id}", h.GetUser)
 		r.Get("/api/v1/users/{id}/mfa-status", h.GetMFAStatus)  // C2
+		// B2: software inventory for a user's devices
+		r.Get("/api/v1/users/{id}/devices/software", h.GetDeviceSoftware)
+		// B3: compliance posture
+		r.Get("/api/v1/users/{id}/devices/compliance", h.GetUserCompliance)
+		r.Get("/api/v1/compliance", h.GetOrgCompliance)
+		// B4: list policies
+		r.Get("/api/v1/policies", h.ListPolicies)
 	})
 }

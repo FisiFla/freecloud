@@ -125,6 +125,73 @@ export interface MFAStatus {
   webAuthnEnabled: boolean;
 }
 
+// B1
+export interface RemoteLockResponse {
+  deviceId: string;
+  locked: boolean;
+}
+
+// B2
+export interface SoftwareEntry {
+  name: string;
+  version: string;
+  vulnerabilities: string[];
+}
+
+export interface DeviceSoftwareHost {
+  deviceId: string;
+  hostname?: string;
+  software: SoftwareEntry[];
+}
+
+export interface DeviceSoftwareResponse {
+  userId: string;
+  devices: DeviceSoftwareHost[];
+}
+
+// B3
+export interface DeviceHostPosture {
+  deviceId: string;
+  hostname?: string;
+  osVersion?: string;
+  diskEncrypted: boolean;
+  firewallEnabled: boolean;
+  mdmEnrolled: boolean;
+  vulnerabilities: string[];
+  unknownVulns: boolean;
+  compliant: boolean;
+}
+
+export interface ComplianceSummary {
+  totalDevices: number;
+  compliantDevices: number;
+  encryptedDevices: number;
+  firewallEnabled: number;
+  devicesWithVulns: number;
+}
+
+export interface ComplianceResponse {
+  userId?: string;
+  summary: ComplianceSummary;
+  devices: DeviceHostPosture[];
+}
+
+// B4
+export interface Policy {
+  id: string;
+  name: string;
+  query?: string;
+  description?: string;
+  resolution?: string;
+  teamId?: string;
+}
+
+export interface AssignPolicyResponse {
+  deviceId: string;
+  policyId: string;
+  assigned: boolean;
+}
+
 // Backend API envelope
 interface ApiEnvelope<T> {
   success: boolean;
@@ -328,4 +395,32 @@ export async function healthKeycloak(): Promise<{status: string}> {
 
 export async function healthFleet(): Promise<{status: string}> {
   return request<{status: string}>("GET", "/api/v1/health/fleetdm");
+}
+
+// B1: Remote lock
+export async function lockDevice(deviceId: string): Promise<RemoteLockResponse> {
+  return request<RemoteLockResponse>("POST", `/api/v1/devices/${deviceId}/lock`);
+}
+
+// B2: Software inventory for a user's devices
+export async function getUserDeviceSoftware(userId: string): Promise<DeviceSoftwareResponse> {
+  return request<DeviceSoftwareResponse>("GET", `/api/v1/users/${userId}/devices/software`);
+}
+
+// B3: Compliance posture
+export async function getUserCompliance(userId: string): Promise<ComplianceResponse> {
+  return request<ComplianceResponse>("GET", `/api/v1/users/${userId}/devices/compliance`);
+}
+
+export async function getOrgCompliance(): Promise<ComplianceResponse> {
+  return request<ComplianceResponse>("GET", `/api/v1/compliance`);
+}
+
+// B4: Policies
+export async function listPolicies(): Promise<{ policies: Policy[] }> {
+  return request<{ policies: Policy[] }>("GET", "/api/v1/policies");
+}
+
+export async function assignDevicePolicy(deviceId: string, policyId: string): Promise<AssignPolicyResponse> {
+  return request<AssignPolicyResponse>("POST", `/api/v1/devices/${deviceId}/policies`, { policyId });
 }
