@@ -5,8 +5,8 @@ import { Plus, Globe, AlertCircle, UserPlus } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
 import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
-import { listApps, createApp, listUsers, assignAppToUser } from "@/lib/api";
-import type { App, User, CreateAppResponse } from "@/lib/api";
+import { listApps, createApp, listUsers, assignAppToUser, getAppPolicy, upsertAppPolicy } from "@/lib/api";
+import type { App, User, CreateAppResponse, AppAccessPolicy } from "@/lib/api";
 import { useApiReady } from "../providers";
 
 export default function AppsPage() {
@@ -23,6 +23,14 @@ export default function AppsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [samlMetadata, setSamlMetadata] = useState<{ entityId: string; acsUrl: string } | null>(null);
+
+  // Policy dialog state
+  const [policyAppId, setPolicyAppId] = useState<string | null>(null);
+  const [policyAppName, setPolicyAppName] = useState<string>("");
+  const [policy, setPolicy] = useState<AppAccessPolicy | null>(null);
+  const [policyLoading, setPolicyLoading] = useState(false);
+  const [policySaving, setPolicySaving] = useState(false);
+  const [policyError, setPolicyError] = useState<string | null>(null);
 
   // Assign dialog state
   const [assignAppId, setAssignAppId] = useState<string | null>(null);
@@ -95,6 +103,42 @@ export default function AppsPage() {
       setSubmitError(err instanceof Error ? err.message : "Failed to create app");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const openPolicy = async (app: App) => {
+    setPolicyAppId(app.id);
+    setPolicyAppName(app.name);
+    setPolicyError(null);
+    setPolicyLoading(true);
+    try {
+      const p = await getAppPolicy(app.id);
+      setPolicy(p);
+    } catch (err: unknown) {
+      setPolicyError(err instanceof Error ? err.message : "Failed to load policy");
+      setPolicy({ appId: app.id, requireEnrolled: false, requireDiskEncrypted: false, requireNoCriticalVulns: false });
+    } finally {
+      setPolicyLoading(false);
+    }
+  };
+
+  const savePolicy = async () => {
+    if (!policy || !policyAppId) return;
+    setPolicySaving(true);
+    setPolicyError(null);
+    try {
+      const updated = await upsertAppPolicy(policyAppId, {
+        requireEnrolled: policy.requireEnrolled,
+        requireDiskEncrypted: policy.requireDiskEncrypted,
+        requireNoCriticalVulns: policy.requireNoCriticalVulns,
+        maxOsAgeDays: policy.maxOsAgeDays,
+      });
+      setPolicy(updated);
+      setPolicyAppId(null);
+    } catch (err: unknown) {
+      setPolicyError(err instanceof Error ? err.message : "Failed to save policy");
+    } finally {
+      setPolicySaving(false);
     }
   };
 
@@ -181,14 +225,22 @@ export default function AppsPage() {
                   </span>
                 </div>
 
-                {/* Assign button */}
-                <button
-                  onClick={() => { setAssignAppId(app.id); setAssignUserId(""); setAssignMessage(null); }}
-                  className="mt-4 flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200"
-                >
-                  <UserPlus className="h-3.5 w-3.5" />
-                  Assign
-                </button>
+                {/* Action buttons */}
+                <div className="mt-4 flex gap-2">
+                  <button
+                    onClick={() => { setAssignAppId(app.id); setAssignUserId(""); setAssignMessage(null); }}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200"
+                  >
+                    <UserPlus className="h-3.5 w-3.5" />
+                    Assign
+                  </button>
+                  <button
+                    onClick={() => openPolicy(app)}
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200"
+                  >
+                    Access Policy
+                  </button>
+                </div>
               </div>
             ))}
             {apps.length === 0 && (
@@ -321,6 +373,90 @@ export default function AppsPage() {
           </div>
         )}
       </SlideOver>
+
+      {/* Access Policy dialog modal */}
+      {policyAppId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/40" onClick={() => setPolicyAppId(null)} />
+          <div className="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-800">Access Policy</h3>
+            <p className="mt-1 text-sm text-slate-500">{policyAppName}</p>
+
+            {policyLoading ? (
+              <div className="mt-4 space-y-3">
+                {[1, 2, 3].map((i) => <div key={i} className="h-6 animate-pulse rounded bg-slate-200" />)}
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {policyError && (
+                  <p className="text-sm text-red-600">{policyError}</p>
+                )}
+                {policy && (
+                  <>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={policy.requireEnrolled}
+                        onChange={(e) => setPolicy({ ...policy, requireEnrolled: e.target.checked })}
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span className="text-sm text-slate-700">Require device enrolled in MDM</span>
+                    </label>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={policy.requireDiskEncrypted}
+                        onChange={(e) => setPolicy({ ...policy, requireDiskEncrypted: e.target.checked })}
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span className="text-sm text-slate-700">Require disk encryption</span>
+                    </label>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={policy.requireNoCriticalVulns}
+                        onChange={(e) => setPolicy({ ...policy, requireNoCriticalVulns: e.target.checked })}
+                        className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                      />
+                      <span className="text-sm text-slate-700">Require no critical vulnerabilities</span>
+                    </label>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700">Max OS age (days)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={policy.maxOsAgeDays ?? ""}
+                        onChange={(e) => setPolicy({
+                          ...policy,
+                          maxOsAgeDays: e.target.value === "" ? undefined : parseInt(e.target.value, 10),
+                        })}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                        placeholder="No limit"
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                onClick={() => setPolicyAppId(null)}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={savePolicy}
+                disabled={policyLoading || policySaving}
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {policySaving ? "Saving..." : "Save Policy"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Assign dialog modal */}
       {assignAppId && (

@@ -513,3 +513,27 @@ export async function assignPolicyToTeam(teamId: number, policyId: string): Prom
 export async function moveHostToTeam(teamId: number, hostIds: string[]): Promise<MoveHostResponse> {
   return request<MoveHostResponse>("POST", `/api/v1/teams/${teamId}/hosts`, { hostIds });
 }
+
+// A3: per-app access policy (conditional access)
+export interface AppAccessPolicy {
+  appId: string;
+  requireEnrolled: boolean;
+  requireDiskEncrypted: boolean;
+  requireNoCriticalVulns: boolean;
+  maxOsAgeDays?: number;
+  updatedAt?: string;
+}
+
+export async function getAppPolicy(appId: string): Promise<AppAccessPolicy> {
+  return request<AppAccessPolicy>("GET", `/api/v1/apps/${appId}/policy`);
+}
+
+export async function upsertAppPolicy(
+  appId: string,
+  policy: Omit<AppAccessPolicy, "appId" | "updatedAt">,
+): Promise<AppAccessPolicy> {
+  return request<AppAccessPolicy>("PUT", `/api/v1/apps/${appId}/policy`, {
+    appId,
+    ...policy,
+  });
+}
