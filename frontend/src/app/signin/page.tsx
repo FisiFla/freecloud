@@ -22,6 +22,13 @@ export default function SignIn() {
         >
           Sign in with Keycloak
         </button>
+
+        <a
+          href="/forgot-password"
+          className="mt-4 block text-sm text-indigo-600 hover:text-indigo-800"
+        >
+          Forgot password?
+        </a>
       </div>
     </div>
   );

@@ -101,6 +101,97 @@ export interface HealthStatus {
   status: string;
 }
 
+// C1: Bulk onboarding
+export interface BulkOnboardRowResult {
+  row: number;
+  email: string;
+  status: "succeeded" | "skipped-duplicate" | "failed";
+  reason?: string;
+}
+
+export interface BulkOnboardResponse {
+  total: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  results: BulkOnboardRowResult[];
+}
+
+// C2: MFA status
+export interface MFAStatus {
+  userId: string;
+  otpEnabled: boolean;
+  otpPending: boolean;
+  webAuthnEnabled: boolean;
+}
+
+// B1
+export interface RemoteLockResponse {
+  deviceId: string;
+  locked: boolean;
+}
+
+// B2
+export interface SoftwareEntry {
+  name: string;
+  version: string;
+  vulnerabilities: string[];
+}
+
+export interface DeviceSoftwareHost {
+  deviceId: string;
+  hostname?: string;
+  software: SoftwareEntry[];
+}
+
+export interface DeviceSoftwareResponse {
+  userId: string;
+  devices: DeviceSoftwareHost[];
+}
+
+// B3
+export interface DeviceHostPosture {
+  deviceId: string;
+  hostname?: string;
+  osVersion?: string;
+  diskEncrypted: boolean;
+  firewallEnabled: boolean;
+  mdmEnrolled: boolean;
+  vulnerabilities: string[];
+  unknownVulns: boolean;
+  compliant: boolean;
+}
+
+export interface ComplianceSummary {
+  totalDevices: number;
+  compliantDevices: number;
+  encryptedDevices: number;
+  firewallEnabled: number;
+  devicesWithVulns: number;
+}
+
+export interface ComplianceResponse {
+  userId?: string;
+  summary: ComplianceSummary;
+  devices: DeviceHostPosture[];
+}
+
+// B4
+export interface Policy {
+  id: string;
+  name: string;
+  query?: string;
+  description?: string;
+  resolution?: string;
+  teamId?: string;
+}
+
+export interface AssignPolicyResponse {
+  deviceId: string;
+  policyId: string;
+  assigned: boolean;
+}
+
 // Backend API envelope
 interface ApiEnvelope<T> {
   success: boolean;
@@ -239,6 +330,61 @@ export async function listAuditLogs(filters?: AuditLogFilters): Promise<AuditLog
   return request<AuditLogEntry[]>("GET", `/api/v1/audit-logs${qs ? `?${qs}` : ""}`);
 }
 
+// C1: Bulk CSV onboarding
+export async function bulkOnboardEmployees(
+  file: File,
+): Promise<BulkOnboardResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const url = `${getBaseUrl()}/api/v1/onboard/bulk`;
+  const headers: Record<string, string> = {};
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+  const res = await fetch(url, { method: "POST", headers, body: form });
+  const text = await res.text();
+  let json: ApiEnvelope<BulkOnboardResponse>;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new ApiError(`HTTP ${res.status}: ${text || res.statusText}`);
+  }
+  if (!json.success && res.status !== 207) {
+    throw new ApiError(json.error || `Request failed with status ${res.status}`);
+  }
+  return json.data as BulkOnboardResponse;
+}
+
+// C2: MFA status
+export async function getMFAStatus(userId: string): Promise<MFAStatus> {
+  return request<MFAStatus>("GET", `/api/v1/users/${userId}/mfa-status`);
+}
+
+export async function requireMFA(
+  userId: string,
+  type: "totp" | "webauthn",
+): Promise<{ userId: string; action: string; set: boolean }> {
+  return request("POST", `/api/v1/users/${userId}/require-mfa`, { type });
+}
+
+// C3: Forgot password (public — no auth token needed, but we pass one if present)
+export async function forgotPassword(email: string): Promise<{ message: string }> {
+  return request<{ message: string }>("POST", "/api/v1/auth/forgot-password", { email });
+}
+
+// C4: Audit log export — opens a browser download
+export function downloadAuditLogs(
+  format: "csv" | "json",
+  filters?: { actor?: string; action?: string },
+): void {
+  const params = new URLSearchParams({ format });
+  if (filters?.actor) params.set("actor", filters.actor);
+  if (filters?.action) params.set("action", filters.action);
+  const base = getBaseUrl();
+  const url = `${base}/api/v1/audit-logs/export?${params.toString()}`;
+  // Open in current tab — browser will treat it as a download due to
+  // Content-Disposition: attachment on the backend response.
+  window.location.href = url;
+}
+
 export async function healthCheck(): Promise<HealthStatus> {
   return request<HealthStatus>("GET", "/api/v1/health");
 }
@@ -249,4 +395,32 @@ export async function healthKeycloak(): Promise<{status: string}> {
 
 export async function healthFleet(): Promise<{status: string}> {
   return request<{status: string}>("GET", "/api/v1/health/fleetdm");
+}
+
+// B1: Remote lock
+export async function lockDevice(deviceId: string): Promise<RemoteLockResponse> {
+  return request<RemoteLockResponse>("POST", `/api/v1/devices/${deviceId}/lock`);
+}
+
+// B2: Software inventory for a user's devices
+export async function getUserDeviceSoftware(userId: string): Promise<DeviceSoftwareResponse> {
+  return request<DeviceSoftwareResponse>("GET", `/api/v1/users/${userId}/devices/software`);
+}
+
+// B3: Compliance posture
+export async function getUserCompliance(userId: string): Promise<ComplianceResponse> {
+  return request<ComplianceResponse>("GET", `/api/v1/users/${userId}/devices/compliance`);
+}
+
+export async function getOrgCompliance(): Promise<ComplianceResponse> {
+  return request<ComplianceResponse>("GET", `/api/v1/compliance`);
+}
+
+// B4: Policies
+export async function listPolicies(): Promise<{ policies: Policy[] }> {
+  return request<{ policies: Policy[] }>("GET", "/api/v1/policies");
+}
+
+export async function assignDevicePolicy(deviceId: string, policyId: string): Promise<AssignPolicyResponse> {
+  return request<AssignPolicyResponse>("POST", `/api/v1/devices/${deviceId}/policies`, { policyId });
 }

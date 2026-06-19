@@ -40,6 +40,14 @@ func (f *fakeKC) GetUserGroups(_ context.Context, _ string) ([]*gocloak.Group, e
 	return nil, nil
 }
 func (f *fakeKC) Ping(_ context.Context) error { return nil }
+func (f *fakeKC) GetUserCredentials(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+func (f *fakeKC) GetUserRequiredActions(_ context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+func (f *fakeKC) SetRequiredAction(_ context.Context, _, _ string) error  { return nil }
+func (f *fakeKC) SendPasswordResetEmail(_ context.Context, _ string) error { return nil }
 func (f *fakeKC) ListUsers(_ context.Context) ([]gocloak.User, error) {
 	return f.users, f.err
 }

@@ -24,6 +24,20 @@ type KeycloakClientInterface interface {
 	AssignUserToClient(ctx context.Context, userID, clientID string) error
 	GetUserGroups(ctx context.Context, userID string) ([]*gocloak.Group, error)
 	Ping(ctx context.Context) error
+
+	// C2: MFA surfacing + require-MFA.
+	// GetUserCredentials returns the credential types currently registered for
+	// the user (e.g. "otp", "webauthn").
+	GetUserCredentials(ctx context.Context, userID string) ([]string, error)
+	// GetUserRequiredActions returns the pending required actions on the user.
+	GetUserRequiredActions(ctx context.Context, userID string) ([]string, error)
+	// SetRequiredAction adds a required action to the user (idempotent).
+	SetRequiredAction(ctx context.Context, userID, action string) error
+
+	// C3: Self-service password reset.
+	// SendPasswordResetEmail triggers an execute-actions email with UPDATE_PASSWORD.
+	SendPasswordResetEmail(ctx context.Context, userID string) error
+
 	// ListUsers returns all enabled users in the realm. Used by the reconciliation
 	// job to detect Keycloak↔DB drift.
 	ListUsers(ctx context.Context) ([]gocloak.User, error)
@@ -406,6 +420,92 @@ func (k *KeycloakClient) GetUserGroups(ctx context.Context, userID string) ([]*g
 func (k *KeycloakClient) Ping(ctx context.Context) error {
 	_, err := k.login(ctx)
 	return err
+}
+
+// GetUserCredentials returns the credential types currently registered for a
+// user (e.g. "otp", "webauthn").  Keycloak's GetCredentials endpoint returns
+// the full credential representation; we extract only the type field.
+func (k *KeycloakClient) GetUserCredentials(ctx context.Context, userID string) ([]string, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	creds, err := k.client.GetCredentials(ctx, token, k.realm, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get credentials for user %s: %w", userID, err)
+	}
+	types := make([]string, 0, len(creds))
+	for _, c := range creds {
+		if c.Type != nil {
+			types = append(types, *c.Type)
+		}
+	}
+	return types, nil
+}
+
+// GetUserRequiredActions returns the pending required actions for a user.
+func (k *KeycloakClient) GetUserRequiredActions(ctx context.Context, userID string) ([]string, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	user, err := k.client.GetUserByID(ctx, token, k.realm, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get user %s: %w", userID, err)
+	}
+	if user.RequiredActions == nil {
+		return nil, nil
+	}
+	return *user.RequiredActions, nil
+}
+
+// SetRequiredAction adds the given required action to the user, preserving any
+// existing required actions (idempotent).
+func (k *KeycloakClient) SetRequiredAction(ctx context.Context, userID, action string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	user, err := k.client.GetUserByID(ctx, token, k.realm, userID)
+	if err != nil {
+		return fmt.Errorf("get user %s: %w", userID, err)
+	}
+
+	existing := []string{}
+	if user.RequiredActions != nil {
+		existing = *user.RequiredActions
+	}
+	// Idempotent: only add if not already present.
+	for _, a := range existing {
+		if a == action {
+			return nil // already set
+		}
+	}
+	updated := append(existing, action)
+	user.RequiredActions = &updated
+	if err := k.client.UpdateUser(ctx, token, k.realm, *user); err != nil {
+		return fmt.Errorf("set required action %q for user %s: %w", action, userID, err)
+	}
+	zap.L().Info("set required action on user",
+		zap.String("user_id", userID), zap.String("action", action))
+	return nil
+}
+
+// SendPasswordResetEmail sends an execute-actions email with UPDATE_PASSWORD to
+// the user, triggering the Keycloak self-service password reset flow.
+func (k *KeycloakClient) SendPasswordResetEmail(ctx context.Context, userID string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if execErr := k.client.ExecuteActionsEmail(ctx, token, k.realm, gocloak.ExecuteActionsEmail{
+		UserID:  &userID,
+		Actions: &[]string{"UPDATE_PASSWORD"},
+	}); execErr != nil {
+		return fmt.Errorf("execute-actions-email for user %s: %w", userID, execErr)
+	}
+	zap.L().Info("sent password reset email", zap.String("user_id", userID))
+	return nil
 }
 
 // ListUsers returns all users in the realm. Used by the reconciliation job.
