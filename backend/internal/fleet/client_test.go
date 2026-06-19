@@ -222,3 +222,82 @@ func TestPing_Health(t *testing.T) {
 		t.Errorf("expected /api/v1/fleet/status, got %s", path)
 	}
 }
+
+// TestListPolicies_ParsesPolicies confirms the happy path parses the policy slice.
+func TestListPolicies_ParsesPolicies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/fleet/policies" {
+			t.Errorf("unexpected path %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"policies": []map[string]any{
+			{"id": "pol-1", "name": "Disk Encryption", "description": "Require FDE"},
+		}})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	policies, err := c.ListPolicies(context.Background())
+	if err != nil {
+		t.Fatalf("ListPolicies: %v", err)
+	}
+	if len(policies) != 1 || policies[0].ID != "pol-1" {
+		t.Fatalf("unexpected policies: %+v", policies)
+	}
+}
+
+// TestListPolicies_EmptyList confirms nil policies are normalised to an empty slice.
+func TestListPolicies_EmptyList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"policies": nil})
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	policies, err := c.ListPolicies(context.Background())
+	if err != nil {
+		t.Fatalf("ListPolicies: %v", err)
+	}
+	if policies == nil {
+		t.Error("expected non-nil empty slice")
+	}
+}
+
+// TestAssignPolicyToHost_InvalidInputs confirms validation blocks bad IDs.
+func TestAssignPolicyToHost_InvalidInputs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("request should not reach server for invalid IDs")
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	// Empty host ID.
+	if err := c.AssignPolicyToHost(context.Background(), "", "pol-1"); err == nil {
+		t.Error("expected error for empty hostID")
+	}
+	// Path traversal in policy ID.
+	if err := c.AssignPolicyToHost(context.Background(), "host-1", "../admin"); err == nil {
+		t.Error("expected error for traversal policyID")
+	}
+}
+
+// TestIssueRemoteLock_HappyPath mirrors the wipe test for the lock endpoint.
+func TestIssueRemoteLock_HappyPath(t *testing.T) {
+	var path, method string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		method = r.Method
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	if err := c.IssueRemoteLock(context.Background(), "host-1"); err != nil {
+		t.Fatalf("IssueRemoteLock: %v", err)
+	}
+	if method != http.MethodPost {
+		t.Errorf("expected POST, got %s", method)
+	}
+	if path != "/api/v1/fleet/hosts/host-1/lock" {
+		t.Errorf("unexpected path: %s", path)
+	}
+}

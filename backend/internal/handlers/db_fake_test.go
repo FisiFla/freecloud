@@ -20,11 +20,52 @@ func (r fakeRow) Scan(dest ...any) error {
 	return nil
 }
 
+// fakeQueryRows is a minimal pgx.Rows whose Next/Scan are backed by a
+// pre-populated slice. Tests use it to exercise the Query → rows.Next loop.
+type fakeQueryRows struct {
+	rows [][]interface{}
+	idx  int
+	err  error
+}
+
+func (r *fakeQueryRows) Next() bool          { return r.idx < len(r.rows) }
+func (r *fakeQueryRows) Err() error          { return r.err }
+func (r *fakeQueryRows) Close()              {}
+func (r *fakeQueryRows) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} }
+func (r *fakeQueryRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *fakeQueryRows) Values() ([]interface{}, error)               { return nil, nil }
+func (r *fakeQueryRows) RawValues() [][]byte                          { return nil }
+func (r *fakeQueryRows) Conn() *pgx.Conn                              { return nil }
+func (r *fakeQueryRows) Scan(dest ...any) error {
+	if r.idx >= len(r.rows) {
+		return errors.New("no more rows")
+	}
+	row := r.rows[r.idx]
+	r.idx++
+	for i, d := range dest {
+		if i >= len(row) {
+			break
+		}
+		switch p := d.(type) {
+		case *string:
+			if v, ok := row[i].(string); ok {
+				*p = v
+			}
+		case *bool:
+			if v, ok := row[i].(bool); ok {
+				*p = v
+			}
+		}
+	}
+	return nil
+}
+
 // fakeDB is a minimal DBPool for unit tests. A test wires only the methods it
 // needs; the rest return safe defaults. QueryRow defaults to "no rows" and
 // Begin defaults to a failure (so persistence-path tests exercise rollback).
 type fakeDB struct {
 	execFn     func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	queryFn    func(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	queryRowFn func(ctx context.Context, sql string, args ...any) pgx.Row
 	beginFn    func(ctx context.Context) (pgx.Tx, error)
 }
@@ -37,6 +78,9 @@ func (d *fakeDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.Comm
 }
 
 func (d *fakeDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	if d.queryFn != nil {
+		return d.queryFn(ctx, sql, args...)
+	}
 	return nil, errors.New("fakeDB.Query not implemented")
 }
 
