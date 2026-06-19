@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
-import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck } from "lucide-react";
+import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard } from "lucide-react";
 
 const navLinks = [
   { href: "/", label: "Dashboard", icon: Cloud },
@@ -11,6 +11,7 @@ const navLinks = [
   { href: "/apps", label: "App Catalog", icon: Grid },
   { href: "/compliance", label: "Compliance", icon: ShieldCheck },
   { href: "/audit-log", label: "Audit Log", icon: Shield },
+  { href: "/portal", label: "My Portal", icon: LayoutDashboard },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

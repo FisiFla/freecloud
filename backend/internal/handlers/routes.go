@@ -111,5 +111,43 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 		// Admin: drift / reconciliation report (read-only).
 		r.Get("/api/v1/admin/drift", h.GetDrift)
+
+		// C2: API token management (super-admin only).
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequirePermission(middleware.PermManageAPITokens))
+			r.Post("/api/v1/api-tokens", h.CreateAPIToken)
+			r.Get("/api/v1/api-tokens", h.ListAPITokens)
+			r.Delete("/api/v1/api-tokens/{id}", h.RevokeAPIToken)
+		})
+
+		// C3: Access review campaigns.
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequirePermission(middleware.PermReviewCampaigns))
+			r.Get("/api/v1/campaigns", h.ListCampaigns)
+			r.Get("/api/v1/campaigns/{id}/items", h.ListCampaignItems)
+			r.Post("/api/v1/campaigns/{id}/items/{itemId}/decide", h.DecideCampaignItem)
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequirePermission(middleware.PermManageCampaigns))
+			r.Post("/api/v1/campaigns", h.CreateCampaign)
+			r.Post("/api/v1/campaigns/{id}/complete", h.CompleteCampaign)
+		})
+
+		// C4: Self-service portal — available to all authenticated roles.
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequirePermission(middleware.PermSelfService))
+			r.Get("/api/v1/portal/me/devices", h.PortalMyDevices)
+			r.Get("/api/v1/portal/me/apps", h.PortalMyApps)
+			r.Get("/api/v1/portal/me/compliance", h.PortalMyCompliance)
+			r.Post("/api/v1/portal/access-requests", h.PortalRequestAccess)
+		})
+		// Admin approval queue for access requests.
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequirePermission(middleware.PermManageUsers))
+			r.Get("/api/v1/portal/access-requests", h.AdminListAccessRequests)
+			r.Patch("/api/v1/portal/access-requests/{id}", h.AdminDecideAccessRequest)
+		})
+
+		// C5: Onboarding approval workflow — not implemented in this release.
 	})
 }

@@ -39,6 +39,21 @@ var migrations = []migration{
 		name:      "scim_resource_versions",
 		statement: Migration004,
 	},
+	{
+		id:        15,
+		name:      "api_tokens",
+		statement: Migration015,
+	},
+	{
+		id:        16,
+		name:      "review_campaigns",
+		statement: Migration016,
+	},
+	{
+		id:        17,
+		name:      "access_requests",
+		statement: Migration017,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -153,6 +168,75 @@ CREATE TABLE IF NOT EXISTS scim_resource_versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scim_resource_versions_updated_at ON scim_resource_versions(updated_at);
+`
+
+// Migration015 creates the api_tokens table for C2 service-account API tokens.
+// Only the SHA-256 hash of the token is stored; the plaintext is shown once at
+// creation time and never persisted.
+const Migration015 = `
+CREATE TABLE IF NOT EXISTS api_tokens (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name             TEXT NOT NULL,
+    token_hash       TEXT UNIQUE NOT NULL,
+    role             TEXT NOT NULL,
+    scopes           TEXT[] NOT NULL DEFAULT '{}',
+    service_identity TEXT NOT NULL,
+    created_by       TEXT NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at       TIMESTAMPTZ,
+    revoked_at       TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tokens_token_hash ON api_tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_service_identity ON api_tokens(service_identity);
+`
+
+// Migration016 creates tables for C3 access review campaigns.
+const Migration016 = `
+CREATE TABLE IF NOT EXISTS review_campaigns (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'open'
+                    CHECK (status IN ('open', 'completed', 'cancelled')),
+    created_by  TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    closed_at   TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS review_items (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    campaign_id   UUID NOT NULL REFERENCES review_campaigns(id) ON DELETE CASCADE,
+    user_id       UUID NOT NULL REFERENCES users(keycloak_user_id) ON DELETE CASCADE,
+    resource_type TEXT NOT NULL CHECK (resource_type IN ('app', 'group')),
+    resource_id   TEXT NOT NULL,
+    resource_name TEXT NOT NULL,
+    decision      TEXT CHECK (decision IN ('confirm', 'revoke')),
+    decided_by    TEXT,
+    decided_at    TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_items_campaign_id ON review_items(campaign_id);
+CREATE INDEX IF NOT EXISTS idx_review_items_user_id ON review_items(user_id);
+`
+
+// Migration017 adds access_requests for C4 self-service access requests.
+const Migration017 = `
+CREATE TABLE IF NOT EXISTS access_requests (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    requester_id UUID NOT NULL REFERENCES users(keycloak_user_id) ON DELETE CASCADE,
+    app_id       UUID NOT NULL REFERENCES connected_apps(id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending', 'approved', 'rejected')),
+    reason       TEXT,
+    decided_by   TEXT,
+    decided_at   TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (requester_id, app_id, status)
+);
+
+CREATE INDEX IF NOT EXISTS idx_access_requests_requester ON access_requests(requester_id);
+CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

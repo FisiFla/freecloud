@@ -233,13 +233,16 @@ func SetClaims(ctx context.Context, claims *JWTClaims) context.Context {
 // isManagementEndpoint returns true if the path is a management API that requires admin access.
 func isManagementEndpoint(path string) bool {
 	mgmtExactPaths := map[string]bool{
-		"/api/v1/users":      true,
-		"/api/v1/apps":       true,
-		"/api/v1/audit-logs": true,
-		"/api/v1/groups":     true,
-		"/api/v1/roles":      true,
-		"/api/v1/compliance": true,
-		"/api/v1/policies":   true,
+		"/api/v1/users":                    true,
+		"/api/v1/apps":                     true,
+		"/api/v1/audit-logs":               true,
+		"/api/v1/groups":                   true,
+		"/api/v1/roles":                    true,
+		"/api/v1/compliance":               true,
+		"/api/v1/policies":                 true,
+		"/api/v1/api-tokens":               true,
+		"/api/v1/campaigns":                true,
+		"/api/v1/portal/access-requests":   true,
 	}
 	if mgmtExactPaths[path] {
 		return true
@@ -255,6 +258,9 @@ func isManagementEndpoint(path string) bool {
 		"/api/v1/devices/",
 		"/api/v1/compliance",
 		"/api/v1/policies",
+		"/api/v1/api-tokens/",
+		"/api/v1/campaigns/",
+		"/api/v1/portal/access-requests/",
 	}
 	for _, p := range mgmtPrefixes {
 		if strings.HasPrefix(path, p) {
