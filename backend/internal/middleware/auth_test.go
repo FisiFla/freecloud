@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -369,5 +370,101 @@ func TestAuthMiddlewareWrongKey(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("wrong key token: expected 401, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ---- RBAC tests ----
+
+func TestResolveRole(t *testing.T) {
+	tests := []struct {
+		roles []string
+		want  Role
+	}{
+		{[]string{"admin"}, RoleSuperAdmin},
+		{[]string{"freecloud-admin"}, RoleSuperAdmin},
+		{[]string{"freecloud-helpdesk"}, RoleHelpdesk},
+		{[]string{"freecloud-auditor"}, RoleAuditor},
+		{[]string{"freecloud-readonly"}, RoleReadOnly},
+		{[]string{"some-other-role"}, RoleEndUser},
+		{[]string{}, RoleEndUser},
+		// super-admin beats helpdesk
+		{[]string{"freecloud-helpdesk", "admin"}, RoleSuperAdmin},
+	}
+	for _, tt := range tests {
+		got := resolveRole(tt.roles)
+		if got != tt.want {
+			t.Errorf("resolveRole(%v) = %q, want %q", tt.roles, got, tt.want)
+		}
+	}
+}
+
+func TestHasPermissionDeniesNilClaims(t *testing.T) {
+	if HasPermission(context.Background(), PermReadUsers) {
+		t.Error("expected false when no claims in context")
+	}
+}
+
+func TestHasPermissionMatrix(t *testing.T) {
+	tests := []struct {
+		role Role
+		perm Permission
+		want bool
+	}{
+		{RoleSuperAdmin, PermManageUsers, true},
+		{RoleHelpdesk, PermManageUsers, false},
+		{RoleHelpdesk, PermOnboardOffboard, true},
+		{RoleAuditor, PermOnboardOffboard, false},
+		{RoleAuditor, PermExportAuditLogs, true},
+		{RoleReadOnly, PermExportAuditLogs, false},
+		{RoleReadOnly, PermReadUsers, true},
+		{RoleEndUser, PermReadUsers, false},
+		{RoleEndUser, PermSelfService, true},
+	}
+	for _, tt := range tests {
+		ctx := SetClaims(context.Background(), &JWTClaims{Role: tt.role})
+		got := HasPermission(ctx, tt.perm)
+		if got != tt.want {
+			t.Errorf("HasPermission(role=%s, perm=%s) = %v, want %v", tt.role, tt.perm, got, tt.want)
+		}
+	}
+}
+
+func TestRequirePermissionAllows(t *testing.T) {
+	// Test RequirePermission in isolation — inject claims directly without going
+	// through AuthMiddleware (which has the management-gate that would block auditor).
+	claims := &JWTClaims{Role: RoleAuditor}
+	ctx := SetClaims(context.Background(), claims)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/some-path", nil)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	RequirePermission(PermReadAuditLogs)(inner).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("auditor+PermReadAuditLogs: want 200, got %d — %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRequirePermissionDenies(t *testing.T) {
+	// end-user cannot manage users.
+	claims := &JWTClaims{Role: RoleEndUser}
+	ctx := SetClaims(context.Background(), claims)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/some-path", nil)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	RequirePermission(PermManageUsers)(inner).ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("end-user+PermManageUsers: want 403, got %d", rec.Code)
+	}
+}
+
+func TestRequirePermissionNoClaims(t *testing.T) {
+	// No claims in context → 403.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/some-path", nil)
+	rec := httptest.NewRecorder()
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	RequirePermission(PermSelfService)(inner).ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("no claims+PermSelfService: want 403, got %d", rec.Code)
 	}
 }
