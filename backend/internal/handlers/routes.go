@@ -47,6 +47,13 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.HandleFunc("/scim/v2/Groups/{id}", h.SCIMGroupsStub)
 	})
 
+	// A1: access evaluation — bearer-token authenticated, outside the user-JWT group.
+	// Called by the Keycloak authenticator SPI (or any service) to gate SSO on posture.
+	r.Group(func(r chi.Router) {
+		r.Use(h.accessEvalBearerMW)
+		r.Post("/api/v1/access/evaluate", h.EvaluateAccess)
+	})
+
 	// C3: self-service password reset — public, no JWT. Rate-limited to
 	// prevent email flooding. Returns a fixed message to avoid user enumeration.
 	forgotLimiter := middleware.NewRateLimiter(10, time.Minute)
@@ -87,10 +94,15 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.Post("/api/v1/devices/{id}/lock", h.RemoteLock)
 			// B4: assign a policy to a device
 			r.Post("/api/v1/devices/{id}/policies", h.AssignDevicePolicy)
+
+			// A3: per-app access policy (admin-only write)
+			r.Put("/api/v1/apps/{appId}/policy", h.UpsertAppAccessPolicy)
 		})
 
 		r.Post("/api/v1/auth/device-check", h.DeviceCheck)
 		r.Get("/api/v1/apps", h.ListApps)
+		// A3: per-app access policy (read)
+		r.Get("/api/v1/apps/{appId}/policy", h.GetAppAccessPolicy)
 		r.Get("/api/v1/audit-logs", h.ListAuditLogs)
 		r.Get("/api/v1/audit-logs/export", h.ExportAuditLogs)  // C4
 		r.Get("/api/v1/users", h.ListUsers)

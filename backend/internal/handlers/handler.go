@@ -40,6 +40,10 @@ type Handler struct {
 	// Defaults to a middleware that rejects all requests (fail closed).
 	scimBearerMW func(http.Handler) http.Handler
 
+	// accessEvalBearerMW authenticates POST /api/v1/access/evaluate requests.
+	// Set via SetAccessEvalToken. Defaults to fail-closed (rejects all).
+	accessEvalBearerMW func(http.Handler) http.Handler
+
 	// reconciler is optional — nil when RECONCILE_INTERVAL=0 or not yet wired.
 	reconciler *reconcile.Reconciler
 }
@@ -61,6 +65,8 @@ func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetCl
 	// Default SCIM middleware: fail closed — rejects all requests until a token
 	// is configured via SetSCIMBearerToken.
 	h.scimBearerMW = SCIMBearerMiddleware("")
+	// Default access-eval middleware: fail closed until SetAccessEvalToken is called.
+	h.accessEvalBearerMW = accessEvalBearerMiddleware("")
 	return h
 }
 
@@ -68,6 +74,12 @@ func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetCl
 // called at startup before the server starts accepting requests.
 func (h *Handler) SetSCIMBearerToken(token string) {
 	h.scimBearerMW = SCIMBearerMiddleware(token)
+}
+
+// SetAccessEvalToken configures the access-evaluation bearer-token middleware.
+// Must be called at startup before the server starts accepting requests.
+func (h *Handler) SetAccessEvalToken(token string) {
+	h.accessEvalBearerMW = accessEvalBearerMiddleware(token)
 }
 
 // SetReconciler wires the reconciliation job into the handler so it can
