@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/FisiFla/freecloud/backend/internal/notify"
 )
 
 // OffboardResponse is the JSON response for the offboard endpoint.
@@ -145,6 +146,24 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 			logger.Warn("failed to write audit log", zap.Error(auditErr))
 			warnings = append(warnings, "failed to write offboard audit log")
 		}
+	}
+
+	// Fire event notification (fail-open: runs in background, never blocks response).
+	if h.notifier != nil {
+		n := h.notifier
+		go func() {
+			notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = n.Notify(notifyCtx, notify.Event{
+				Type:     notify.EventOffboardCompleted,
+				ActorID:  actorID,
+				TargetID: userID,
+				Details: map[string]any{
+					"devices_wiped":  devicesWiped,
+					"devices_failed": devicesFailed,
+				},
+			})
+		}()
 	}
 
 	// If the account couldn't be disabled, return a non-2xx so callers and

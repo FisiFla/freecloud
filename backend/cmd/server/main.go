@@ -15,13 +15,18 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
+	"strings"
+
 	"github.com/FisiFla/freecloud/backend/internal/config"
 	"github.com/FisiFla/freecloud/backend/internal/db"
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
 	"github.com/FisiFla/freecloud/backend/internal/handlers"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/FisiFla/freecloud/backend/internal/notify"
 	"github.com/FisiFla/freecloud/backend/internal/reconcile"
+	"github.com/FisiFla/freecloud/backend/internal/siem"
+	"github.com/FisiFla/freecloud/backend/internal/snapshot"
 )
 
 func main() {
@@ -93,16 +98,69 @@ func main() {
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	defer lifecycleCancel()
 
+	// D1 — Build event notifier from config.
+	var notifiers []notify.Notifier
+	if cfg.NotifyEmail && cfg.SMTPHost != "" {
+		var to []string
+		for _, addr := range strings.Split(cfg.SMTPTo, ",") {
+			addr = strings.TrimSpace(addr)
+			if addr != "" {
+				to = append(to, addr)
+			}
+		}
+		notifiers = append(notifiers, notify.NewEmailNotifier(notify.EmailConfig{
+			Host:     cfg.SMTPHost,
+			Port:     cfg.SMTPPort,
+			From:     cfg.SMTPFrom,
+			To:       to,
+			Password: cfg.SMTPPassword,
+		}))
+		logger.Info("event notifier: email channel enabled")
+	}
+	if cfg.NotifySlack && cfg.SlackWebhookURL != "" {
+		notifiers = append(notifiers, notify.NewSlackNotifier(cfg.SlackWebhookURL))
+		logger.Info("event notifier: slack channel enabled")
+	}
+	if cfg.NotifyWebhook && cfg.WebhookURL != "" {
+		notifiers = append(notifiers, notify.NewWebhookNotifier(cfg.WebhookURL, cfg.WebhookSecret))
+		logger.Info("event notifier: webhook channel enabled")
+	}
+	toggles := notify.EventToggles{
+		Offboard:   cfg.NotifyEventOffboard,
+		Drift:      cfg.NotifyEventDrift,
+		Compliance: cfg.NotifyEventCompliance,
+	}
+	var eventNotifier notify.Notifier
+	if len(notifiers) > 0 {
+		eventNotifier = notify.NewMultiNotifier(toggles, logger, notifiers...)
+	}
+
 	// Start the Keycloak↔DB reconciliation job (FCEXP-21).
 	// RECONCILE_INTERVAL=0 disables it; the default is 15m.
 	rec := reconcile.New(kcClient, pool, logger)
+	if eventNotifier != nil {
+		rec.SetNotifier(eventNotifier)
+	}
 	rec.Start(lifecycleCtx, cfg.ReconcileInterval)
+
+	// D2 — Analytics snapshot job.
+	snap := snapshot.New(pool, logger)
+	snap.Start(lifecycleCtx, cfg.SnapshotInterval)
+
+	// D3 — SIEM streamer.
+	siemSink := siem.BuildSink(cfg.SIEMSyslogNet, cfg.SIEMSyslogAddr, cfg.SIEMHTTPUrl, cfg.SIEMHTTPToken, logger)
+	siemStreamer := siem.New(pool, siemSink, logger)
+	siemStreamer.Start(lifecycleCtx, cfg.SIEMInterval)
 
 	// Create handler
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
 	handler.SetFleetWebhookSecret(cfg.FleetWebhookSecret)
 	handler.SetSCIMBearerToken(cfg.SCIMBearerToken)
 	handler.SetReconciler(rec)
+	if eventNotifier != nil {
+		handler.SetNotifier(eventNotifier)
+	}
+	handler.SetSnapshotter(snap)
 
 	// Initialize JWT auth middleware
 	authMW := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)
