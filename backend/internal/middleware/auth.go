@@ -82,6 +82,16 @@ func roleHasPermission(role Role, perm Permission) bool {
 	return false
 }
 
+// RoleFromString parses a persisted/internal role string.
+func RoleFromString(role string) (Role, bool) {
+	switch Role(role) {
+	case RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly, RoleEndUser:
+		return Role(role), true
+	default:
+		return "", false
+	}
+}
+
 // JWTClaims holds the claims we extract from the validated JWT.
 type JWTClaims struct {
 	Sub               string `json:"sub"`
@@ -203,7 +213,11 @@ func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	resolved := resolveRole([]string{role})
+	resolved, ok := RoleFromString(role)
+	if !ok {
+		writeAuthError(w, http.StatusUnauthorized, "unauthorized: invalid API token role")
+		return
+	}
 	claims := &JWTClaims{
 		Sub:               "api-token",
 		PreferredUsername: "api-token",
@@ -228,46 +242,6 @@ func GetClaims(ctx context.Context) *JWTClaims {
 // SetClaims stores JWT claims in the context for testing or manual injection.
 func SetClaims(ctx context.Context, claims *JWTClaims) context.Context {
 	return context.WithValue(ctx, claimsKey, claims)
-}
-
-// isManagementEndpoint returns true if the path is a management API that requires admin access.
-func isManagementEndpoint(path string) bool {
-	mgmtExactPaths := map[string]bool{
-		"/api/v1/users":                    true,
-		"/api/v1/apps":                     true,
-		"/api/v1/audit-logs":               true,
-		"/api/v1/groups":                   true,
-		"/api/v1/roles":                    true,
-		"/api/v1/compliance":               true,
-		"/api/v1/policies":                 true,
-		"/api/v1/api-tokens":               true,
-		"/api/v1/campaigns":                true,
-		"/api/v1/portal/access-requests":   true,
-	}
-	if mgmtExactPaths[path] {
-		return true
-	}
-	mgmtPrefixes := []string{
-		"/api/v1/onboard",
-		"/api/v1/offboard",
-		"/api/v1/apps/",
-		"/api/v1/users/",
-		"/api/v1/audit-logs/",
-		"/api/v1/groups/",
-		"/api/v1/roles/",
-		"/api/v1/devices/",
-		"/api/v1/compliance",
-		"/api/v1/policies",
-		"/api/v1/api-tokens/",
-		"/api/v1/campaigns/",
-		"/api/v1/portal/access-requests/",
-	}
-	for _, p := range mgmtPrefixes {
-		if strings.HasPrefix(path, p) {
-			return true
-		}
-	}
-	return false
 }
 
 // AuthMiddleware validates JWTs against a Keycloak realm.
@@ -474,7 +448,7 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			if err == nil && validated.Valid {
 				verified = true
 				if claims, ok := validated.Claims.(jwt.MapClaims); ok {
-					jc := &JWTClaims{}
+					jc := &JWTClaims{Role: RoleEndUser}
 					if sub, ok := claims["sub"].(string); ok {
 						jc.Sub = sub
 					}
@@ -550,17 +524,6 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			}
 			writeAuthError(w, http.StatusUnauthorized, "unauthorized: "+msg)
 			return
-		}
-
-		// Admin authorization for management endpoints
-		if isManagementEndpoint(r.URL.Path) {
-			claims := GetClaims(r.Context())
-			if claims == nil || !claims.IsAdmin {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(`{"success":false,"error":"forbidden: admin access required"}`))
-				return
-			}
 		}
 
 		next.ServeHTTP(w, r)

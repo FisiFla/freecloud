@@ -75,61 +75,61 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		// Sensitive write endpoints get the stricter rate limit.
 		r.Group(func(r chi.Router) {
 			r.Use(mutateLimiter.Middleware)
-			r.Post("/api/v1/onboard", h.Onboard)
-			r.Post("/api/v1/onboard/bulk", h.BulkOnboard)  // C1
-			r.Post("/api/v1/offboard/{userId}", h.Offboard)
-			r.Post("/api/v1/apps/create", h.CreateApp)
-			r.Post("/api/v1/apps/{appId}/assign", h.AssignApp)
+			r.With(middleware.RequirePermission(middleware.PermOnboardOffboard)).Post("/api/v1/onboard", h.Onboard)
+			r.With(middleware.RequirePermission(middleware.PermOnboardOffboard)).Post("/api/v1/onboard/bulk", h.BulkOnboard) // C1
+			r.With(middleware.RequirePermission(middleware.PermOnboardOffboard)).Post("/api/v1/offboard/{userId}", h.Offboard)
+			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/create", h.CreateApp)
+			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/{appId}/assign", h.AssignApp)
 
 			// A4 — user profile update
-			r.Patch("/api/v1/users/{id}", h.PatchUser)
+			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Patch("/api/v1/users/{id}", h.PatchUser)
 			// A5 — admin password reset
-			r.Post("/api/v1/users/{id}/reset-password", h.ResetPassword)
+			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Post("/api/v1/users/{id}/reset-password", h.ResetPassword)
 
-			// A3 — group management (admin-gated via isManagementEndpoint)
-			r.Post("/api/v1/groups", h.CreateGroup)
-			r.Post("/api/v1/users/{id}/groups", h.AssignUserToGroup)
-			r.Delete("/api/v1/users/{id}/groups/{groupId}", h.UnassignUserFromGroup)
-			r.Post("/api/v1/users/{id}/roles", h.AssignRealmRoleToUser)
+			// A3 — group and role management
+			r.With(middleware.RequirePermission(middleware.PermManageGroups)).Post("/api/v1/groups", h.CreateGroup)
+			r.With(middleware.RequirePermission(middleware.PermManageGroups)).Post("/api/v1/users/{id}/groups", h.AssignUserToGroup)
+			r.With(middleware.RequirePermission(middleware.PermManageGroups)).Delete("/api/v1/users/{id}/groups/{groupId}", h.UnassignUserFromGroup)
+			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Post("/api/v1/users/{id}/roles", h.AssignRealmRoleToUser)
 
-			r.Post("/api/v1/users/{id}/require-mfa", h.RequireMFA)  // C2
-			// B1: admin-only remote lock (distinct from wipe which runs in offboard)
-			r.Post("/api/v1/devices/{id}/lock", h.RemoteLock)
+			r.With(middleware.RequirePermission(middleware.PermManageMFA)).Post("/api/v1/users/{id}/require-mfa", h.RequireMFA) // C2
+			// B1: remote lock (distinct from wipe which runs in offboard)
+			r.With(middleware.RequirePermission(middleware.PermManageDevices)).Post("/api/v1/devices/{id}/lock", h.RemoteLock)
 
-			// A3: per-app access policy (admin-only write)
-			r.Put("/api/v1/apps/{appId}/policy", h.UpsertAppAccessPolicy)
+			// A3: per-app access policy write
+			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Put("/api/v1/apps/{appId}/policy", h.UpsertAppAccessPolicy)
 
 			// B2: Fleet team management (team-scoped MDM policies)
-			r.Post("/api/v1/teams", h.CreateTeam)
-			r.Post("/api/v1/teams/{id}/policies", h.AssignTeamPolicy)
-			r.Post("/api/v1/teams/{id}/hosts", h.MoveHostToTeam)
+			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Post("/api/v1/teams", h.CreateTeam)
+			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Post("/api/v1/teams/{id}/policies", h.AssignTeamPolicy)
+			r.With(middleware.RequirePermission(middleware.PermManageDevices)).Post("/api/v1/teams/{id}/hosts", h.MoveHostToTeam)
 		})
 
-		r.Post("/api/v1/auth/device-check", h.DeviceCheck)
-		r.Get("/api/v1/apps", h.ListApps)
-		// A3: per-app access policy (read)
-		r.Get("/api/v1/apps/{appId}/policy", h.GetAppAccessPolicy)
-		r.Get("/api/v1/audit-logs", h.ListAuditLogs)
-		r.Get("/api/v1/audit-logs/export", h.ExportAuditLogs)  // C4
-		r.Get("/api/v1/users", h.ListUsers)
-		r.Get("/api/v1/users/{id}", h.GetUser)
+		r.With(middleware.RequirePermission(middleware.PermSelfService)).Post("/api/v1/auth/device-check", h.DeviceCheck)
+		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps", h.ListApps)
+		// A3: per-app access policy read
+		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/{appId}/policy", h.GetAppAccessPolicy)
+		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs", h.ListAuditLogs)
+		r.With(middleware.RequirePermission(middleware.PermExportAuditLogs)).Get("/api/v1/audit-logs/export", h.ExportAuditLogs) // C4
+		r.With(middleware.RequirePermission(middleware.PermReadUsers)).Get("/api/v1/users", h.ListUsers)
+		r.With(middleware.RequirePermission(middleware.PermReadUsers)).Get("/api/v1/users/{id}", h.GetUser)
 
-		// A3 — read-only group/role endpoints (admin-gated via isManagementEndpoint)
-		r.Get("/api/v1/groups", h.ListGroups)
-		r.Get("/api/v1/roles", h.ListRealmRoles)
+		// A3 — read-only group/role endpoints
+		r.With(middleware.RequirePermission(middleware.PermReadGroups)).Get("/api/v1/groups", h.ListGroups)
+		r.With(middleware.RequirePermission(middleware.PermReadGroups)).Get("/api/v1/roles", h.ListRealmRoles)
 
-		r.Get("/api/v1/users/{id}/mfa-status", h.GetMFAStatus)  // C2
+		r.With(middleware.RequirePermission(middleware.PermReadUsers)).Get("/api/v1/users/{id}/mfa-status", h.GetMFAStatus) // C2
 		// B2: software inventory for a user's devices
-		r.Get("/api/v1/users/{id}/devices/software", h.GetDeviceSoftware)
+		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/users/{id}/devices/software", h.GetDeviceSoftware)
 		// B3: compliance posture
-		r.Get("/api/v1/users/{id}/devices/compliance", h.GetUserCompliance)
-		r.Get("/api/v1/compliance", h.GetOrgCompliance)
-		// B2: list policies and teams (read-only, no mutation gate)
-		r.Get("/api/v1/policies", h.ListPolicies)
-		r.Get("/api/v1/teams", h.ListTeams)
+		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/users/{id}/devices/compliance", h.GetUserCompliance)
+		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/compliance", h.GetOrgCompliance)
+		// B2: list policies and teams
+		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/policies", h.ListPolicies)
+		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/teams", h.ListTeams)
 
-		// Admin: drift / reconciliation report (read-only).
-		r.Get("/api/v1/admin/drift", h.GetDrift)
+		// Admin: drift / reconciliation report.
+		r.With(middleware.RequirePermission(middleware.PermManageUsers)).Get("/api/v1/admin/drift", h.GetDrift)
 
 		// C2: API token management (super-admin only).
 		r.Group(func(r chi.Router) {
@@ -167,7 +167,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.Patch("/api/v1/portal/access-requests/{id}", h.AdminDecideAccessRequest)
 		})
 
-		// D2: analytics time-series snapshots (read-only).
-		r.Get("/api/v1/analytics/snapshots", h.GetAnalyticsSnapshots)
+		// D2: analytics time-series snapshots.
+		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/analytics/snapshots", h.GetAnalyticsSnapshots)
 	})
 }

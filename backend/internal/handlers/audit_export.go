@@ -16,7 +16,7 @@ import (
 // exports everything matching the filter).
 //
 // Route: GET /api/v1/audit-logs/export?format=csv|json&actor=...&action=...
-// Admin-gated via the prefix /api/v1/audit-logs/ in isManagementEndpoint.
+// Permission-gated via PermExportAuditLogs in routes.go.
 func (h *Handler) ExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 

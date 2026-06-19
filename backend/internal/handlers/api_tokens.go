@@ -41,11 +41,11 @@ type ListAPITokensResponse struct {
 	Tokens []APITokenResponse `json:"tokens"`
 }
 
-var validTokenRoles = map[string]bool{
-	"super-admin": true,
-	"helpdesk":    true,
-	"auditor":     true,
-	"read-only":   true,
+var validTokenRoles = map[middleware.Role]bool{
+	middleware.RoleSuperAdmin: true,
+	middleware.RoleHelpdesk:   true,
+	middleware.RoleAuditor:    true,
+	middleware.RoleReadOnly:   true,
 }
 
 // CreateAPIToken handles POST /api/v1/api-tokens.
@@ -62,8 +62,11 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	} else if len(req.Name) > 100 {
 		valErrs = append(valErrs, ValidationError{Field: "name", Message: "name must be ≤ 100 characters"})
 	}
-	if !validTokenRoles[req.Role] {
+	role, ok := middleware.RoleFromString(req.Role)
+	if !ok || !validTokenRoles[role] {
 		valErrs = append(valErrs, ValidationError{Field: "role", Message: "role must be super-admin, helpdesk, auditor, or read-only"})
+	} else {
+		req.Role = string(role)
 	}
 	if req.ServiceIdentity == "" {
 		valErrs = append(valErrs, ValidationError{Field: "serviceIdentity", Message: "serviceIdentity is required"})
@@ -153,7 +156,9 @@ func (h *Handler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 		var createdAt time.Time
 		var expiresAt *time.Time
 		if err := rows.Scan(&t.ID, &t.Name, &t.Role, &t.ServiceIdentity, &createdAt, &expiresAt); err != nil {
-			continue
+			h.logger.Error("failed to scan api token row", zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "internal error")
+			return
 		}
 		t.CreatedAt = createdAt.Format(time.RFC3339)
 		if expiresAt != nil {
@@ -161,6 +166,11 @@ func (h *Handler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 			t.ExpiresAt = &s
 		}
 		tokens = append(tokens, t)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("failed to iterate api token rows", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
 	}
 	respondJSON(w, http.StatusOK, ListAPITokensResponse{Tokens: tokens})
 }

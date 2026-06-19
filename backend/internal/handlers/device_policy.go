@@ -49,7 +49,7 @@ type AssignPolicyResponse struct {
 }
 
 // ListPolicies returns all global policies from FleetDM.
-// Route: GET /api/v1/policies (admin-gated).
+// Route: GET /api/v1/policies (requires PermReadCompliance).
 func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -64,7 +64,7 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 }
 
 // ListTeams returns all Fleet teams.
-// Route: GET /api/v1/teams (admin-gated).
+// Route: GET /api/v1/teams (requires PermReadCompliance).
 func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -79,7 +79,7 @@ func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreateTeam creates a new Fleet team.
-// Route: POST /api/v1/teams (admin-gated, audited).
+// Route: POST /api/v1/teams (requires PermManagePolicies, audited).
 func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 	var req CreateTeamRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -119,7 +119,7 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 }
 
 // AssignTeamPolicy assigns a global policy to a Fleet team.
-// Route: POST /api/v1/teams/{id}/policies (admin-gated, audited).
+// Route: POST /api/v1/teams/{id}/policies (requires PermManagePolicies, audited).
 func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
 	teamIDStr := chi.URLParam(r, "id")
 	if teamIDStr == "" {
@@ -178,7 +178,7 @@ func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 // MoveHostToTeam moves one or more hosts to a Fleet team (host→team→policy chain).
-// Route: POST /api/v1/teams/{id}/hosts (admin-gated, audited).
+// Route: POST /api/v1/teams/{id}/hosts (requires PermManageDevices, audited).
 func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 	teamIDStr := chi.URLParam(r, "id")
 	if teamIDStr == "" {
