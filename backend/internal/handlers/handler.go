@@ -11,7 +11,9 @@ import (
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
+	"github.com/FisiFla/freecloud/backend/internal/notify"
 	"github.com/FisiFla/freecloud/backend/internal/reconcile"
+	"github.com/FisiFla/freecloud/backend/internal/snapshot"
 )
 
 // DBPool is the subset of *pgxpool.Pool the handlers use. Depending on an
@@ -40,8 +42,18 @@ type Handler struct {
 	// Defaults to a middleware that rejects all requests (fail closed).
 	scimBearerMW func(http.Handler) http.Handler
 
+	// accessEvalBearerMW authenticates POST /api/v1/access/evaluate requests.
+	// Set via SetAccessEvalToken. Defaults to fail-closed (rejects all).
+	accessEvalBearerMW func(http.Handler) http.Handler
+
 	// reconciler is optional — nil when RECONCILE_INTERVAL=0 or not yet wired.
 	reconciler *reconcile.Reconciler
+
+	// notifier fires event notifications (D1). Nil means notifications are disabled.
+	notifier notify.Notifier
+
+	// snapshotter serves the analytics series endpoint (D2). Nil means disabled.
+	snapshotter *snapshot.Snapshotter
 }
 
 // SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment
@@ -61,6 +73,8 @@ func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetCl
 	// Default SCIM middleware: fail closed — rejects all requests until a token
 	// is configured via SetSCIMBearerToken.
 	h.scimBearerMW = SCIMBearerMiddleware("")
+	// Default access-eval middleware: fail closed until SetAccessEvalToken is called.
+	h.accessEvalBearerMW = accessEvalBearerMiddleware("")
 	return h
 }
 
@@ -70,10 +84,26 @@ func (h *Handler) SetSCIMBearerToken(token string) {
 	h.scimBearerMW = SCIMBearerMiddleware(token)
 }
 
+// SetAccessEvalToken configures the access-evaluation bearer-token middleware.
+// Must be called at startup before the server starts accepting requests.
+func (h *Handler) SetAccessEvalToken(token string) {
+	h.accessEvalBearerMW = accessEvalBearerMiddleware(token)
+}
+
 // SetReconciler wires the reconciliation job into the handler so it can
 // serve the drift report endpoint (D1).
 func (h *Handler) SetReconciler(r *reconcile.Reconciler) {
 	h.reconciler = r
+}
+
+// SetNotifier wires the event notifier (D1 / FCEX2-17).
+func (h *Handler) SetNotifier(n notify.Notifier) {
+	h.notifier = n
+}
+
+// SetSnapshotter wires the analytics snapshotter (D2 / FCEX2-18).
+func (h *Handler) SetSnapshotter(s *snapshot.Snapshotter) {
+	h.snapshotter = s
 }
 
 // Health returns a simple health check response.

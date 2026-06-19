@@ -205,7 +205,7 @@ export interface ComplianceResponse {
   devices: DeviceHostPosture[];
 }
 
-// B4
+// B4 (kept for global policy listing)
 export interface Policy {
   id: string;
   name: string;
@@ -215,10 +215,22 @@ export interface Policy {
   teamId?: string;
 }
 
-export interface AssignPolicyResponse {
-  deviceId: string;
+// B2: Fleet teams
+export interface FleetTeam {
+  id: number;
+  name: string;
+  description?: string;
+}
+
+export interface AssignTeamPolicyResponse {
+  teamId: number;
   policyId: string;
   assigned: boolean;
+}
+
+export interface MoveHostResponse {
+  teamId: number;
+  moved: number;
 }
 
 // Backend API envelope
@@ -480,13 +492,67 @@ export async function getOrgCompliance(): Promise<ComplianceResponse> {
   return request<ComplianceResponse>("GET", `/api/v1/compliance`);
 }
 
-// B4: Policies
+// D2: Analytics snapshots
+export interface SnapshotRow {
+  id: number;
+  capturedAt: string;
+  complianceRate: number;
+  enrolledDevices: number;
+  mfaCoveragePct: number;
+  appCount: number;
+  onboardCount: number;
+  offboardCount: number;
+}
+
+export async function getAnalyticsSnapshots(limit?: number): Promise<SnapshotRow[]> {
+  const qs = limit ? `?limit=${limit}` : "";
+  return request<SnapshotRow[]>("GET", `/api/v1/analytics/snapshots${qs}`);
+}
+
+// B4 / B2: Policies
 export async function listPolicies(): Promise<{ policies: Policy[] }> {
   return request<{ policies: Policy[] }>("GET", "/api/v1/policies");
 }
 
-export async function assignDevicePolicy(deviceId: string, policyId: string): Promise<AssignPolicyResponse> {
-  return request<AssignPolicyResponse>("POST", `/api/v1/devices/${deviceId}/policies`, { policyId });
+// B2: Fleet team management
+export async function listTeams(): Promise<{ teams: FleetTeam[] }> {
+  return request<{ teams: FleetTeam[] }>("GET", "/api/v1/teams");
+}
+
+export async function createTeam(name: string, description?: string): Promise<FleetTeam> {
+  return request<FleetTeam>("POST", "/api/v1/teams", { name, description });
+}
+
+export async function assignPolicyToTeam(teamId: number, policyId: string): Promise<AssignTeamPolicyResponse> {
+  return request<AssignTeamPolicyResponse>("POST", `/api/v1/teams/${teamId}/policies`, { policyId });
+}
+
+export async function moveHostToTeam(teamId: number, hostIds: string[]): Promise<MoveHostResponse> {
+  return request<MoveHostResponse>("POST", `/api/v1/teams/${teamId}/hosts`, { hostIds });
+}
+
+// A3: per-app access policy (conditional access)
+export interface AppAccessPolicy {
+  appId: string;
+  requireEnrolled: boolean;
+  requireDiskEncrypted: boolean;
+  requireNoCriticalVulns: boolean;
+  maxOsAgeDays?: number;
+  updatedAt?: string;
+}
+
+export async function getAppPolicy(appId: string): Promise<AppAccessPolicy> {
+  return request<AppAccessPolicy>("GET", `/api/v1/apps/${appId}/policy`);
+}
+
+export async function upsertAppPolicy(
+  appId: string,
+  policy: Omit<AppAccessPolicy, "appId" | "updatedAt">,
+): Promise<AppAccessPolicy> {
+  return request<AppAccessPolicy>("PUT", `/api/v1/apps/${appId}/policy`, {
+    appId,
+    ...policy,
+  });
 }
 
 // C2 (Epic C): API token management

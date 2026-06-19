@@ -40,6 +40,11 @@ var migrations = []migration{
 		statement: Migration004,
 	},
 	{
+		id:        5,
+		name:      "app_access_policies",
+		statement: Migration005,
+	},
+	{
 		id:        15,
 		name:      "api_tokens",
 		statement: Migration015,
@@ -53,6 +58,21 @@ var migrations = []migration{
 		id:        17,
 		name:      "access_requests",
 		statement: Migration017,
+	},
+	{
+		id:        20,
+		name:      "analytics_snapshots",
+		statement: Migration020,
+	},
+	{
+		id:        21,
+		name:      "siem_cursor",
+		statement: Migration021,
+	},
+	{
+		id:        22,
+		name:      "audit_logs_seq",
+		statement: Migration022,
 	},
 }
 
@@ -170,6 +190,21 @@ CREATE TABLE IF NOT EXISTS scim_resource_versions (
 CREATE INDEX IF NOT EXISTS idx_scim_resource_versions_updated_at ON scim_resource_versions(updated_at);
 `
 
+// Migration005 adds per-app posture requirements for the conditional access
+// feature (A3). Each connected app can independently require that the
+// authenticating device be enrolled, disk-encrypted, free of critical
+// vulnerabilities, and/or running a sufficiently recent OS.
+const Migration005 = `
+CREATE TABLE IF NOT EXISTS app_access_policies (
+    app_id                  UUID PRIMARY KEY REFERENCES connected_apps(id) ON DELETE CASCADE,
+    require_enrolled        BOOLEAN NOT NULL DEFAULT false,
+    require_disk_encrypted  BOOLEAN NOT NULL DEFAULT false,
+    require_no_critical_vulns BOOLEAN NOT NULL DEFAULT false,
+    max_os_age_days         INTEGER,
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`
+
 // Migration015 creates the api_tokens table for C2 service-account API tokens.
 // Only the SHA-256 hash of the token is stored; the plaintext is shown once at
 // creation time and never persisted.
@@ -237,6 +272,41 @@ CREATE TABLE IF NOT EXISTS access_requests (
 
 CREATE INDEX IF NOT EXISTS idx_access_requests_requester ON access_requests(requester_id);
 CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status);
+`
+
+// Migration020 creates the analytics_snapshots time-series table (D2 / FCEX2-18).
+const Migration020 = `
+CREATE TABLE IF NOT EXISTS analytics_snapshots (
+    id               BIGSERIAL PRIMARY KEY,
+    captured_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    compliance_rate  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    enrolled_devices INTEGER NOT NULL DEFAULT 0,
+    mfa_coverage_pct DOUBLE PRECISION NOT NULL DEFAULT 0,
+    app_count        INTEGER NOT NULL DEFAULT 0,
+    onboard_count    INTEGER NOT NULL DEFAULT 0,
+    offboard_count   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_analytics_snapshots_captured_at ON analytics_snapshots(captured_at DESC);
+`
+
+// Migration021 creates the SIEM streaming cursor table (D3 / FCEX2-19).
+// A single row (id=1) holds the monotonic seq of the last audit_log entry
+// successfully delivered to the external sink.
+const Migration021 = `
+CREATE TABLE IF NOT EXISTS siem_cursor (
+    id       INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    last_seq BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO siem_cursor (id, last_seq) VALUES (1, 0) ON CONFLICT DO NOTHING;
+`
+
+// Migration022 adds a BIGSERIAL seq column to audit_logs used as a durable
+// monotonic cursor by the SIEM streamer (D3 / FCEX2-19). Existing rows receive
+// seq values via the DEFAULT sequence; new inserts get auto-assigned values.
+const Migration022 = `
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS seq BIGSERIAL;
+CREATE INDEX IF NOT EXISTS idx_audit_logs_seq ON audit_logs(seq);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

@@ -37,10 +37,42 @@ type Config struct {
 	// SCIMBearerToken authenticates inbound SCIM 2.0 provisioning requests.
 	// Must be a high-entropy secret (e.g. 32+ random bytes hex-encoded).
 	// Required in production — Validate() rejects an empty value outside dev/test.
-	SCIMBearerToken      string
+	SCIMBearerToken string
+
+	// AccessEvalToken authenticates POST /api/v1/access/evaluate calls from the
+	// Keycloak authenticator SPI (or any other service that needs to gate SSO on
+	// device posture). Must be a high-entropy secret. Required in production.
+	AccessEvalToken string
 
 	// Reconciliation job (D1 / FCEXP-21)
 	ReconcileInterval time.Duration // 0 means disabled
+
+	// D1 — Event notifications (FCEX2-17)
+	NotifyEmail     bool
+	SMTPHost        string
+	SMTPPort        string
+	SMTPFrom        string
+	SMTPTo          string // comma-separated
+	SMTPPassword    string
+	NotifySlack     bool
+	SlackWebhookURL string
+	NotifyWebhook   bool
+	WebhookURL      string
+	WebhookSecret   string
+	// Per-event toggles (all default true)
+	NotifyEventOffboard   bool
+	NotifyEventDrift      bool
+	NotifyEventCompliance bool
+
+	// D2 — Analytics snapshot job (FCEX2-18)
+	SnapshotInterval time.Duration // 0 means disabled
+
+	// D3 — SIEM streaming (FCEX2-19)
+	SIEMSyslogAddr string
+	SIEMSyslogNet  string
+	SIEMHTTPUrl    string
+	SIEMHTTPToken  string
+	SIEMInterval   time.Duration // 0 means disabled
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -56,8 +88,35 @@ func Load() *Config {
 		FleetURL:             getEnv("FLEET_URL", "http://localhost:8082"),
 		FleetAPIToken:        getEnv("FLEET_API_TOKEN", ""),
 		FleetWebhookSecret:   getEnv("FLEET_WEBHOOK_SECRET", ""),
-		SCIMBearerToken:      getEnv("SCIM_BEARER_TOKEN", ""),
-		ReconcileInterval:    parseDuration(getEnv("RECONCILE_INTERVAL", "15m")),
+		SCIMBearerToken:   getEnv("SCIM_BEARER_TOKEN", ""),
+		AccessEvalToken:   getEnv("ACCESS_EVAL_TOKEN", ""),
+		ReconcileInterval: parseDuration(getEnv("RECONCILE_INTERVAL", "15m")),
+
+		// D1 — Notifications
+		NotifyEmail:           parseBool(getEnv("NOTIFY_EMAIL", "false")),
+		SMTPHost:              getEnv("SMTP_HOST", ""),
+		SMTPPort:              getEnv("SMTP_PORT", "587"),
+		SMTPFrom:              getEnv("SMTP_FROM", ""),
+		SMTPTo:                getEnv("SMTP_TO", ""),
+		SMTPPassword:          getEnv("SMTP_PASSWORD", ""),
+		NotifySlack:           parseBool(getEnv("NOTIFY_SLACK", "false")),
+		SlackWebhookURL:       getEnv("SLACK_WEBHOOK_URL", ""),
+		NotifyWebhook:         parseBool(getEnv("NOTIFY_WEBHOOK", "false")),
+		WebhookURL:            getEnv("WEBHOOK_URL", ""),
+		WebhookSecret:         getEnv("WEBHOOK_SECRET", ""),
+		NotifyEventOffboard:   parseBool(getEnv("NOTIFY_EVENT_OFFBOARD", "true")),
+		NotifyEventDrift:      parseBool(getEnv("NOTIFY_EVENT_DRIFT", "true")),
+		NotifyEventCompliance: parseBool(getEnv("NOTIFY_EVENT_COMPLIANCE", "true")),
+
+		// D2 — Snapshot job
+		SnapshotInterval: parseDuration(getEnv("SNAPSHOT_INTERVAL", "1h")),
+
+		// D3 — SIEM streaming
+		SIEMSyslogAddr: getEnv("SIEM_SYSLOG_ADDR", ""),
+		SIEMSyslogNet:  getEnv("SIEM_SYSLOG_NET", "udp"),
+		SIEMHTTPUrl:    getEnv("SIEM_HTTP_URL", ""),
+		SIEMHTTPToken:  getEnv("SIEM_HTTP_TOKEN", ""),
+		SIEMInterval:   parseDuration(getEnv("SIEM_INTERVAL", "5s")),
 	}
 }
 
@@ -116,6 +175,9 @@ func (c *Config) Validate() error {
 	if c.SCIMBearerToken == "" {
 		add("SCIM_BEARER_TOKEN must be set (used to authenticate inbound SCIM provisioning requests)")
 	}
+	if c.AccessEvalToken == "" {
+		add("ACCESS_EVAL_TOKEN must be set (used to authenticate access evaluation requests)")
+	}
 	if c.DatabaseURL == "" || c.DatabaseURL == defaultDatabaseURL {
 		add("DATABASE_URL must be set to a real database, not the insecure default")
 	} else if strings.Contains(c.DatabaseURL, "sslmode=disable") {
@@ -131,6 +193,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("insecure configuration for %s environment: %s", env, strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// parseBool parses a boolean environment variable. Returns false on invalid values.
+func parseBool(s string) bool {
+	return s == "true" || s == "1" || s == "yes"
 }
 
 func getEnv(key, fallback string) string {
