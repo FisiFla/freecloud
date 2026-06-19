@@ -77,5 +77,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Get("/api/v1/compliance", h.GetOrgCompliance)
 		// B4: list policies
 		r.Get("/api/v1/policies", h.ListPolicies)
+
+		// Admin: drift / reconciliation report (read-only).
+		r.Get("/api/v1/admin/drift", h.GetDrift)
 	})
 }

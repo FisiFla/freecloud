@@ -21,6 +21,7 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/handlers"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/FisiFla/freecloud/backend/internal/reconcile"
 )
 
 func main() {
@@ -88,9 +89,19 @@ func main() {
 	// Initialize FleetDM client
 	fleetClient := fleet.NewClient(cfg.FleetURL, cfg.FleetAPIToken)
 
+	// Lifecycle context — cancelled when the shutdown signal arrives.
+	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
+	defer lifecycleCancel()
+
+	// Start the Keycloak↔DB reconciliation job (FCEXP-21).
+	// RECONCILE_INTERVAL=0 disables it; the default is 15m.
+	rec := reconcile.New(kcClient, pool, logger)
+	rec.Start(lifecycleCtx, cfg.ReconcileInterval)
+
 	// Create handler
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
 	handler.SetFleetWebhookSecret(cfg.FleetWebhookSecret)
+	handler.SetReconciler(rec)
 
 	// Initialize JWT auth middleware
 	authMW := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)
@@ -176,6 +187,8 @@ func main() {
 	<-quit
 
 	logger.Info("shutting down server...")
+	// Stop background jobs (reconciler, etc.) before draining HTTP.
+	lifecycleCancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()

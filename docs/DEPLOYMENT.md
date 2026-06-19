@@ -65,18 +65,21 @@ network or behind authentication if you add scraping.
 Postgres holds the authoritative user↔Keycloak mappings, the audit log, **and**
 Keycloak's own realm data, so back up the whole cluster.
 
-```bash
-# Backup (whole cluster: freecloud + keycloak DBs)
-docker compose -f docker/docker-compose.prod.yml --env-file .env.prod \
-  exec -T postgres pg_dumpall -U "$POSTGRES_USER" > freecloud-$(date +%F).sql
+Quick reference:
 
-# Restore into a fresh postgres volume
-cat freecloud-YYYY-MM-DD.sql | docker compose -f docker/docker-compose.prod.yml \
-  --env-file .env.prod exec -T postgres psql -U "$POSTGRES_USER" -d postgres
+```bash
+# Backup
+DATABASE_URL=postgres://user:pass@host:5432/freecloud \
+  scripts/backup.sh /var/backups/freecloud/
+
+# Verify a backup (restore to scratch DB + assert row counts)
+DATABASE_URL=postgres://... SCRATCH_DATABASE_URL=postgres://scratch.../postgres \
+  scripts/verify-restore.sh
 ```
 
-Schedule the backup from host cron (daily) and copy the dump off-host. **Test a
-restore periodically** — an untested backup is not a backup.
+For the full runbook (restore steps, cron scheduling, retention policy) see
+[docs/BACKUP_RESTORE.md](BACKUP_RESTORE.md). **Test a restore periodically** —
+an untested backup is not a backup.
 
 ## Upgrades
 
@@ -106,4 +109,21 @@ restore the pre-upgrade backup (migrations are forward-only).
 This release targets a **single backend instance**. The rate limiter is
 in-memory and migrations run on startup without a distributed lock; running
 multiple backend replicas requires a shared (e.g. Redis) rate limiter and an
-advisory-lock around migrations first.
+advisory-lock around migrations first. See
+[docs/adr/0003-single-instance.md](adr/0003-single-instance.md) for the full
+rationale.
+
+## Observability
+
+The backend exposes `/metrics` for Prometheus scraping. An optional Prometheus +
+Grafana stack is available as a Compose overlay:
+
+```bash
+docker compose \
+  -f docker/docker-compose.prod.yml \
+  -f docker/docker-compose.observability.yml \
+  --env-file .env.prod up -d
+```
+
+See [docs/OBSERVABILITY.md](OBSERVABILITY.md) for metrics reference, dashboard,
+and alert rules.

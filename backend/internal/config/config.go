@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // defaultDatabaseURL is the insecure local-dev DSN. Validate() rejects it (and
@@ -33,6 +34,9 @@ type Config struct {
 	FleetURL             string
 	FleetAPIToken        string
 	FleetWebhookSecret   string
+
+	// Reconciliation job (D1 / FCEXP-21)
+	ReconcileInterval time.Duration // 0 means disabled
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -48,7 +52,22 @@ func Load() *Config {
 		FleetURL:             getEnv("FLEET_URL", "http://localhost:8082"),
 		FleetAPIToken:        getEnv("FLEET_API_TOKEN", ""),
 		FleetWebhookSecret:   getEnv("FLEET_WEBHOOK_SECRET", ""),
+		ReconcileInterval:    parseDuration(getEnv("RECONCILE_INTERVAL", "15m")),
 	}
+}
+
+// parseDuration parses a duration string. An empty string or "0" disables the
+// reconciliation job. Invalid values fall back to the sane default of 15 minutes
+// rather than panicking at startup.
+func parseDuration(s string) time.Duration {
+	if s == "" || s == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < 0 {
+		return 15 * time.Minute
+	}
+	return d
 }
 
 // Validate enforces that no insecure default reaches a non-development

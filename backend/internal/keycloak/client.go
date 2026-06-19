@@ -37,6 +37,10 @@ type KeycloakClientInterface interface {
 	// C3: Self-service password reset.
 	// SendPasswordResetEmail triggers an execute-actions email with UPDATE_PASSWORD.
 	SendPasswordResetEmail(ctx context.Context, userID string) error
+
+	// ListUsers returns all enabled users in the realm. Used by the reconciliation
+	// job to detect Keycloak↔DB drift.
+	ListUsers(ctx context.Context) ([]gocloak.User, error)
 }
 
 // CreateUserResult holds the outcome of a CreateUser operation.
@@ -502,4 +506,36 @@ func (k *KeycloakClient) SendPasswordResetEmail(ctx context.Context, userID stri
 	}
 	zap.L().Info("sent password reset email", zap.String("user_id", userID))
 	return nil
+}
+
+// ListUsers returns all users in the realm. Used by the reconciliation job.
+// Pagination is handled internally using Keycloak's offset/limit params.
+func (k *KeycloakClient) ListUsers(ctx context.Context) ([]gocloak.User, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	const pageSize = 100
+	var all []gocloak.User
+	first := 0
+	for {
+		page, err := k.client.GetUsers(ctx, token, k.realm, gocloak.GetUsersParams{
+			First: gocloak.IntP(first),
+			Max:   gocloak.IntP(pageSize),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list keycloak users (offset %d): %w", first, err)
+		}
+		for _, u := range page {
+			if u != nil {
+				all = append(all, *u)
+			}
+		}
+		if len(page) < pageSize {
+			break
+		}
+		first += pageSize
+	}
+	return all, nil
 }

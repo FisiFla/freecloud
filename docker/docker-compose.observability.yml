@@ -1,0 +1,58 @@
+# docker-compose.observability.yml
+#
+# Observability add-on: Prometheus + Grafana.
+# Overlay this on top of the production stack:
+#
+#   docker compose \
+#     -f docker/docker-compose.prod.yml \
+#     -f docker/docker-compose.observability.yml \
+#     --env-file .env.prod \
+#     up -d
+#
+# Prometheus scrapes the backend's /metrics endpoint on the internal network.
+# Grafana is exposed on port 3100 (change GF_PORT in .env.prod to override).
+# The dashboard and alert rules are provisioned automatically from
+# docker/observability/.
+#
+# Network note: both services join the same Docker network as the backend so
+# Prometheus can reach backend:8080 without exposing /metrics publicly.
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    restart: unless-stopped
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    networks:
+      - freecloud_internal
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    ports:
+      - "${GF_PORT:-3100}:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana-provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - freecloud_internal
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  freecloud_internal:
+    external: true
