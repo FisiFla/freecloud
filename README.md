@@ -1,6 +1,6 @@
 # FreeCloud
 
-Unified, open-source alternative to JumpCloud. A single pane of glass over Keycloak (Identity Provider / SSO / SCIM) and FleetDM (Device Management / MDM).
+Unified, open-source identity and device management. A single pane of glass over Keycloak (Identity Provider / SSO / SCIM) and FleetDM (Device Management / MDM).
 
 ## Architecture
 

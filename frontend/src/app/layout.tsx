@@ -11,7 +11,7 @@ const inter = Inter({ subsets: ["latin"] });
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "FreeCloud — Unified JumpCloud Alternative",
+  title: "FreeCloud — Unified Identity & Device Management",
   description: "FreeCloud Dashboard",
 };
 
