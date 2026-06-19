@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,19 +14,205 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/jackc/pgx/v5"
 )
+
+// Role is the internal RBAC role resolved from Keycloak realm roles.
+type Role string
+
+const (
+	RoleSuperAdmin Role = "super-admin"
+	RoleHelpdesk   Role = "helpdesk"
+	RoleAuditor    Role = "auditor"
+	RoleReadOnly   Role = "read-only"
+	RoleEndUser    Role = "end-user"
+)
+
+// Permission is a capability checked at the handler level.
+type Permission string
+
+const (
+	PermManageUsers     Permission = "manage:users"
+	PermOnboardOffboard Permission = "onboard:offboard"
+	PermReadUsers       Permission = "read:users"
+	PermManageApps      Permission = "manage:apps"
+	PermReadApps        Permission = "read:apps"
+	PermReadAuditLogs   Permission = "read:audit-logs"
+	PermExportAuditLogs Permission = "export:audit-logs"
+	PermManageGroups    Permission = "manage:groups"
+	PermReadGroups      Permission = "read:groups"
+	PermManageDevices   Permission = "manage:devices"
+	PermReadCompliance  Permission = "read:compliance"
+	PermManagePolicies  Permission = "manage:policies"
+	PermManageMFA       Permission = "manage:mfa"
+	PermManageAPITokens Permission = "manage:api-tokens"
+	PermSelfService     Permission = "self:service"
+	PermManageCampaigns Permission = "manage:campaigns"
+	PermReviewCampaigns Permission = "review:campaigns"
+)
+
+// permissionMatrix maps each permission to the roles that hold it.
+var permissionMatrix = map[Permission][]Role{
+	PermManageUsers:     {RoleSuperAdmin},
+	PermOnboardOffboard: {RoleSuperAdmin, RoleHelpdesk},
+	PermReadUsers:       {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermManageApps:      {RoleSuperAdmin},
+	PermReadApps:        {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermReadAuditLogs:   {RoleSuperAdmin, RoleAuditor},
+	PermExportAuditLogs: {RoleSuperAdmin, RoleAuditor},
+	PermManageGroups:    {RoleSuperAdmin},
+	PermReadGroups:      {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermManageDevices:   {RoleSuperAdmin, RoleHelpdesk},
+	PermReadCompliance:  {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermManagePolicies:  {RoleSuperAdmin},
+	PermManageMFA:       {RoleSuperAdmin, RoleHelpdesk},
+	PermManageAPITokens: {RoleSuperAdmin},
+	PermSelfService:     {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly, RoleEndUser},
+	PermManageCampaigns: {RoleSuperAdmin},
+	PermReviewCampaigns: {RoleSuperAdmin, RoleAuditor},
+}
+
+// roleHasPermission checks whether a role holds a permission.
+func roleHasPermission(role Role, perm Permission) bool {
+	for _, r := range permissionMatrix[perm] {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
 
 // JWTClaims holds the claims we extract from the validated JWT.
 type JWTClaims struct {
 	Sub               string `json:"sub"`
 	PreferredUsername string `json:"preferred_username"`
 	Email             string `json:"email"`
-	IsAdmin           bool   `json:"-"`
+	IsAdmin           bool   `json:"-"` // kept for back-compat; true when Role == RoleSuperAdmin
+	Role              Role   `json:"-"` // resolved RBAC role
 }
 
 type claimsKeyType struct{}
 
 var claimsKey = claimsKeyType{}
+
+// HasPermission returns true when the claims in ctx hold the given permission.
+// Returns false (deny) when ctx has no claims.
+func HasPermission(ctx context.Context, perm Permission) bool {
+	claims := GetClaims(ctx)
+	if claims == nil {
+		return false
+	}
+	return roleHasPermission(claims.Role, perm)
+}
+
+// RequirePermission returns a middleware that allows the request only if the
+// authenticated actor holds the given permission. Fail-closed: no claims → 403.
+func RequirePermission(perm Permission) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !HasPermission(r.Context(), perm) {
+				writeAuthError(w, http.StatusForbidden, "forbidden: insufficient permissions")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// resolveRole maps a slice of Keycloak realm role names to our internal Role.
+// Fail-closed: unknown roles → end-user. Ordered by privilege so the highest wins.
+func resolveRole(roles []string) Role {
+	roleSet := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		roleSet[r] = true
+	}
+	switch {
+	case roleSet["admin"] || roleSet["freecloud-admin"]:
+		return RoleSuperAdmin
+	case roleSet["freecloud-helpdesk"]:
+		return RoleHelpdesk
+	case roleSet["freecloud-auditor"]:
+		return RoleAuditor
+	case roleSet["freecloud-readonly"]:
+		return RoleReadOnly
+	default:
+		return RoleEndUser
+	}
+}
+
+// TokenDB is the minimal interface the API-token middleware needs for lookups.
+type TokenDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// APITokenMiddleware wraps AuthMiddleware and also accepts fc_ prefixed API tokens.
+// An API token has format "fc_<64 hex chars>"; only its SHA-256 hash is stored.
+type APITokenMiddleware struct {
+	*AuthMiddleware
+	db TokenDB
+}
+
+// NewAPITokenMiddleware returns an APITokenMiddleware wrapping the given AuthMiddleware.
+func NewAPITokenMiddleware(auth *AuthMiddleware, db TokenDB) *APITokenMiddleware {
+	return &APITokenMiddleware{AuthMiddleware: auth, db: db}
+}
+
+// Middleware overrides AuthMiddleware.Middleware to also accept fc_ API tokens.
+func (a *APITokenMiddleware) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/health") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "" && strings.HasPrefix(strings.TrimPrefix(authHeader, "Bearer "), "fc_") {
+			a.handleAPIToken(w, r, next)
+			return
+		}
+		// Fall through to standard JWT validation.
+		a.AuthMiddleware.Middleware(next).ServeHTTP(w, r)
+	})
+}
+
+func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenStr)))
+
+	if a.db == nil {
+		writeAuthError(w, http.StatusInternalServerError, "auth service temporarily unavailable")
+		return
+	}
+
+	var role string
+	var revokedAt *time.Time
+	var expiresAt *time.Time
+	err := a.db.QueryRow(r.Context(),
+		`SELECT role, revoked_at, expires_at FROM api_tokens WHERE token_hash = $1`,
+		hash,
+	).Scan(&role, &revokedAt, &expiresAt)
+	if err != nil {
+		writeAuthError(w, http.StatusUnauthorized, "unauthorized: invalid API token")
+		return
+	}
+	if revokedAt != nil {
+		writeAuthError(w, http.StatusUnauthorized, "unauthorized: token has been revoked")
+		return
+	}
+	if expiresAt != nil && time.Now().After(*expiresAt) {
+		writeAuthError(w, http.StatusUnauthorized, "unauthorized: token has expired")
+		return
+	}
+
+	resolved := resolveRole([]string{role})
+	claims := &JWTClaims{
+		Sub:               "api-token",
+		PreferredUsername: "api-token",
+		IsAdmin:           resolved == RoleSuperAdmin,
+		Role:              resolved,
+	}
+	ctx := context.WithValue(r.Context(), claimsKey, claims)
+	next.ServeHTTP(w, r.WithContext(ctx))
+}
 
 // GetClaims retrieves JWT claims from the request context, if present.
 func GetClaims(ctx context.Context) *JWTClaims {
@@ -325,15 +512,19 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 							return
 						}
 					}
-					// Check for admin role
+					// Extract realm roles and resolve RBAC role.
 					if realmAccess, ok := claims["realm_access"].(map[string]interface{}); ok {
 						if roles, ok := realmAccess["roles"].([]interface{}); ok {
+							var roleStrs []string
 							for _, r := range roles {
-								if role, ok := r.(string); ok && (role == "admin" || role == "freecloud-admin") {
-									jc.IsAdmin = true
-									break
+								if role, ok := r.(string); ok {
+									roleStrs = append(roleStrs, role)
+									if role == "admin" || role == "freecloud-admin" {
+										jc.IsAdmin = true
+									}
 								}
 							}
+							jc.Role = resolveRole(roleStrs)
 						}
 					}
 					ctx := context.WithValue(r.Context(), claimsKey, jc)
