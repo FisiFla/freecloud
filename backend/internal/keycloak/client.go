@@ -49,6 +49,17 @@ type KeycloakClientInterface interface {
 	// ListUsers returns all enabled users in the realm. Used by the reconciliation
 	// job to detect Keycloak↔DB drift.
 	ListUsers(ctx context.Context) ([]gocloak.User, error)
+
+	// B1: SCIM Group operations.
+
+	// GetGroupByID fetches a single group by its Keycloak ID.
+	GetGroupByID(ctx context.Context, groupID string) (*gocloak.Group, error)
+	// ListGroupMembers returns the users that belong to a group.
+	ListGroupMembers(ctx context.Context, groupID string) ([]*gocloak.User, error)
+	// RenameGroup changes a group's display name.
+	RenameGroup(ctx context.Context, groupID, newName string) error
+	// DeleteGroup removes a group from the realm.
+	DeleteGroup(ctx context.Context, groupID string) error
 }
 
 // CreateUserResult holds the outcome of a CreateUser operation.
@@ -775,4 +786,56 @@ func (k *KeycloakClient) ListUsers(ctx context.Context) ([]gocloak.User, error) 
 		first += pageSize
 	}
 	return all, nil
+}
+
+// GetGroupByID fetches a single Keycloak group by its ID.
+func (k *KeycloakClient) GetGroupByID(ctx context.Context, groupID string) (*gocloak.Group, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	g, err := k.client.GetGroup(ctx, token, k.realm, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("get group %s: %w", groupID, err)
+	}
+	return g, nil
+}
+
+// ListGroupMembers returns the users that belong to a group.
+func (k *KeycloakClient) ListGroupMembers(ctx context.Context, groupID string) ([]*gocloak.User, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	members, err := k.client.GetGroupMembers(ctx, token, k.realm, groupID, gocloak.GetGroupsParams{})
+	if err != nil {
+		return nil, fmt.Errorf("list members of group %s: %w", groupID, err)
+	}
+	return members, nil
+}
+
+// RenameGroup changes a group's display name.
+func (k *KeycloakClient) RenameGroup(ctx context.Context, groupID, newName string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.UpdateGroup(ctx, token, k.realm, gocloak.Group{ID: &groupID, Name: &newName}); err != nil {
+		return fmt.Errorf("rename group %s: %w", groupID, err)
+	}
+	zap.L().Info("renamed group", zap.String("group_id", groupID), zap.String("name", newName))
+	return nil
+}
+
+// DeleteGroup removes a group from the realm.
+func (k *KeycloakClient) DeleteGroup(ctx context.Context, groupID string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.DeleteGroup(ctx, token, k.realm, groupID); err != nil {
+		return fmt.Errorf("delete group %s: %w", groupID, err)
+	}
+	zap.L().Info("deleted group", zap.String("group_id", groupID))
+	return nil
 }

@@ -34,6 +34,11 @@ type fakeKeycloak struct {
 	setRequiredActionFn      func(ctx context.Context, userID, action string) error
 	sendPasswordResetEmailFn func(ctx context.Context, userID string) error
 	listUsersFn              func(ctx context.Context) ([]gocloak.User, error)
+	// B1: SCIM group operations
+	getGroupByIDFn      func(ctx context.Context, groupID string) (*gocloak.Group, error)
+	listGroupMembersFn  func(ctx context.Context, groupID string) ([]*gocloak.User, error)
+	renameGroupFn       func(ctx context.Context, groupID, newName string) error
+	deleteGroupFn       func(ctx context.Context, groupID string) error
 }
 
 func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -151,4 +156,25 @@ func (f *fakeKeycloak) SendPasswordResetEmail(ctx context.Context, userID string
 func (f *fakeKeycloak) ListUsers(ctx context.Context) ([]gocloak.User, error) {
 	if f.listUsersFn != nil { return f.listUsersFn(ctx) }
 	return nil, nil
+}
+
+func (f *fakeKeycloak) GetGroupByID(ctx context.Context, groupID string) (*gocloak.Group, error) {
+	if f.getGroupByIDFn != nil { return f.getGroupByIDFn(ctx, groupID) }
+	name := "fake-group"
+	return &gocloak.Group{ID: &groupID, Name: &name}, nil
+}
+
+func (f *fakeKeycloak) ListGroupMembers(ctx context.Context, groupID string) ([]*gocloak.User, error) {
+	if f.listGroupMembersFn != nil { return f.listGroupMembersFn(ctx, groupID) }
+	return []*gocloak.User{}, nil
+}
+
+func (f *fakeKeycloak) RenameGroup(ctx context.Context, groupID, newName string) error {
+	if f.renameGroupFn != nil { return f.renameGroupFn(ctx, groupID, newName) }
+	return nil
+}
+
+func (f *fakeKeycloak) DeleteGroup(ctx context.Context, groupID string) error {
+	if f.deleteGroupFn != nil { return f.deleteGroupFn(ctx, groupID) }
+	return nil
 }
