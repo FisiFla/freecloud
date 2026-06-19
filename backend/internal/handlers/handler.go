@@ -34,6 +34,10 @@ type Handler struct {
 	// fleetWebhookSecret authenticates Fleet enrollment callbacks (HMAC-SHA256).
 	// Empty means the callback rejects everything (fail closed).
 	fleetWebhookSecret string
+
+	// scimBearerMW is the SCIM bearer-token middleware. Set via SetSCIMBearerToken.
+	// Defaults to a middleware that rejects all requests (fail closed).
+	scimBearerMW func(http.Handler) http.Handler
 }
 
 // SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment
@@ -44,12 +48,22 @@ func (h *Handler) SetFleetWebhookSecret(secret string) {
 
 // NewHandler creates a new Handler.
 func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetClientInterface, logger *zap.Logger) *Handler {
-	return &Handler{
+	h := &Handler{
 		db:       db,
 		keycloak: kc,
 		fleet:    fc,
 		logger:   logger,
 	}
+	// Default SCIM middleware: fail closed — rejects all requests until a token
+	// is configured via SetSCIMBearerToken.
+	h.scimBearerMW = SCIMBearerMiddleware("")
+	return h
+}
+
+// SetSCIMBearerToken configures the SCIM bearer-token middleware. Must be
+// called at startup before the server starts accepting requests.
+func (h *Handler) SetSCIMBearerToken(token string) {
+	h.scimBearerMW = SCIMBearerMiddleware(token)
 }
 
 // Health returns a simple health check response.

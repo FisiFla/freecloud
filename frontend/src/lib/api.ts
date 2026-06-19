@@ -46,6 +46,15 @@ export interface CreateAppRequest {
   redirectURIs: string[];
   baseURL: string;
 }
+export interface CreateAppResponse {
+  id: string;
+  name: string;
+  keycloakClientId: string;
+  // SAML SP metadata — populated when protocol === "SAML"
+  samlEntityId?: string;
+  samlAcsUrl?: string;
+}
+
 export interface App {
   id: string;
   keycloakClientId: string;
@@ -54,6 +63,26 @@ export interface App {
   baseUrl?: string;
   enabled: boolean;
   createdAt?: string;
+}
+
+// A3 — Groups & Roles
+export interface Group {
+  id: string;
+  name: string;
+}
+
+export interface RealmRole {
+  id: string;
+  name: string;
+}
+
+// A4 — User profile update
+export interface PatchUserRequest {
+  firstName?: string;
+  lastName?: string;
+  department?: string;
+  role?: string;
+  enabled?: boolean;
 }
 
 export interface AuditLogFilters {
@@ -249,4 +278,39 @@ export async function healthKeycloak(): Promise<{status: string}> {
 
 export async function healthFleet(): Promise<{status: string}> {
   return request<{status: string}>("GET", "/api/v1/health/fleetdm");
+}
+
+// A3 — Group & role management
+export async function listGroups(): Promise<Group[]> {
+  return request<Group[]>("GET", "/api/v1/groups");
+}
+
+export async function createGroup(name: string): Promise<Group> {
+  return request<Group>("POST", "/api/v1/groups", { name });
+}
+
+export async function assignUserToGroup(userId: string, groupId: string): Promise<void> {
+  return request<void>("POST", `/api/v1/users/${userId}/groups`, { groupId });
+}
+
+export async function unassignUserFromGroup(userId: string, groupId: string): Promise<void> {
+  return request<void>("DELETE", `/api/v1/users/${userId}/groups/${groupId}`);
+}
+
+export async function listRealmRoles(): Promise<RealmRole[]> {
+  return request<RealmRole[]>("GET", "/api/v1/roles");
+}
+
+export async function assignRoleToUser(userId: string, roleId: string, roleName: string): Promise<void> {
+  return request<void>("POST", `/api/v1/users/${userId}/roles`, { roleId, roleName });
+}
+
+// A4 — User profile update
+export async function patchUser(userId: string, req: PatchUserRequest): Promise<User> {
+  return request<User>("PATCH", `/api/v1/users/${userId}`, req);
+}
+
+// A5 — Password reset
+export async function resetPassword(userId: string): Promise<{ sent: boolean }> {
+  return request<{ sent: boolean }>("POST", `/api/v1/users/${userId}/reset-password`);
 }

@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle } from "lucide-react";
+import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle, Pencil, KeyRound } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { offboardUser, getUser } from "@/lib/api";
-import type { OffboardResponse, Device } from "@/lib/api";
+import { offboardUser, getUser, patchUser, resetPassword } from "@/lib/api";
+import type { OffboardResponse, Device, PatchUserRequest } from "@/lib/api";
 import { useApiReady } from "../../providers";
 
 interface EmployeeDetail {
@@ -33,6 +33,21 @@ export default function EmployeeDetailPage() {
   const [deprovisioned, setDeprovisioned] = useState(false);
   const [offboardResult, setOffboardResult] = useState<OffboardResponse | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  // A4 — edit form
+  const [showEdit, setShowEdit] = useState(false);
+  const [editFirst, setEditFirst] = useState("");
+  const [editLast, setEditLast] = useState("");
+  const [editDept, setEditDept] = useState("");
+  const [editRole, setEditRole] = useState("");
+  const [editEnabled, setEditEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // A5 — password reset
+  const [resetSending, setResetSending] = useState(false);
+  const [resetMessage, setResetMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     if (!apiReady) return;
@@ -63,6 +78,63 @@ export default function EmployeeDetailPage() {
     };
     fetchData();
   }, [userId, apiReady]);
+
+  const openEdit = () => {
+    if (!employee) return;
+    setEditFirst(employee.firstName);
+    setEditLast(employee.lastName);
+    setEditDept(employee.department);
+    setEditRole(employee.role);
+    setEditEnabled(!employee.disabled);
+    setSaveError(null);
+    setSaveSuccess(false);
+    setShowEdit(true);
+  };
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!employee) return;
+    setSaving(true);
+    setSaveError(null);
+    setSaveSuccess(false);
+    const patch: PatchUserRequest = {};
+    if (editFirst !== employee.firstName) patch.firstName = editFirst;
+    if (editLast !== employee.lastName) patch.lastName = editLast;
+    if (editDept !== employee.department) patch.department = editDept;
+    if (editRole !== employee.role) patch.role = editRole;
+    if (editEnabled === employee.disabled) patch.enabled = editEnabled;
+    try {
+      const updated = await patchUser(userId, patch);
+      setEmployee({
+        id: String(updated.id || ""),
+        firstName: String(updated.firstName || ""),
+        lastName: String(updated.lastName || ""),
+        email: String(updated.email || employee.email),
+        department: String(updated.department || ""),
+        role: String(updated.role || ""),
+        disabled: Boolean(updated.disabled),
+      });
+      setSaveSuccess(true);
+      setTimeout(() => { setShowEdit(false); setSaveSuccess(false); }, 1200);
+    } catch (err: unknown) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    setResetSending(true);
+    setResetMessage(null);
+    try {
+      await resetPassword(userId);
+      setResetMessage({ type: "success", text: "Password reset email sent." });
+    } catch (err: unknown) {
+      setResetMessage({ type: "error", text: err instanceof Error ? err.message : "Failed to send reset email." });
+    } finally {
+      setResetSending(false);
+    }
+  };
 
   const handleDeprovision = async () => {
     setDeprovisioning(true);
@@ -223,9 +295,18 @@ export default function EmployeeDetailPage() {
                 {employee.lastName[0]}
               </div>
               <div className="flex-1">
-                <h1 className="text-xl font-bold text-slate-800">
-                  {employee.firstName} {employee.lastName}
-                </h1>
+                <div className="flex items-center justify-between">
+                  <h1 className="text-xl font-bold text-slate-800">
+                    {employee.firstName} {employee.lastName}
+                  </h1>
+                  <button
+                    onClick={openEdit}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit
+                  </button>
+                </div>
                 <div className="mt-3 space-y-2 text-sm text-slate-500">
                   <div className="flex items-center gap-2">
                     <Mail className="h-4 w-4" />
@@ -233,25 +314,125 @@ export default function EmployeeDetailPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <Briefcase className="h-4 w-4" />
-                    {employee.role}
+                    {employee.role || <span className="text-slate-300">No role set</span>}
                   </div>
                   <div className="flex items-center gap-2">
                     <Building2 className="h-4 w-4" />
-                    {employee.department}
+                    {employee.department || <span className="text-slate-300">No department set</span>}
                   </div>
                 </div>
-                <span
-                  className={`mt-3 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                    employee.disabled || employee.role.includes("(DISABLED)")
-                      ? "bg-amber-50 text-amber-700"
-                      : "bg-emerald-50 text-emerald-700"
-                  }`}
-                >
-                  {employee.disabled || employee.role.includes("(DISABLED)") ? "Disabled" : "Active"}
-                </span>
+                <div className="mt-3 flex items-center gap-3">
+                  <span
+                    className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                      employee.disabled || employee.role.includes("(DISABLED)")
+                        ? "bg-amber-50 text-amber-700"
+                        : "bg-emerald-50 text-emerald-700"
+                    }`}
+                  >
+                    {employee.disabled || employee.role.includes("(DISABLED)") ? "Disabled" : "Active"}
+                  </span>
+                  {/* A5 — password reset */}
+                  <button
+                    onClick={handlePasswordReset}
+                    disabled={resetSending || employee.disabled}
+                    className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <KeyRound className="h-3.5 w-3.5" />
+                    {resetSending ? "Sending..." : "Send Password Reset"}
+                  </button>
+                </div>
+                {resetMessage && (
+                  <p className={`mt-2 text-xs ${resetMessage.type === "success" ? "text-emerald-600" : "text-red-600"}`}>
+                    {resetMessage.text}
+                  </p>
+                )}
               </div>
             </div>
           </div>
+
+          {/* A4 — Inline edit form */}
+          {showEdit && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              <div className="fixed inset-0 bg-black/40" onClick={() => setShowEdit(false)} />
+              <div className="relative w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
+                <h3 className="text-lg font-semibold text-slate-800">Edit Employee</h3>
+                <form onSubmit={handleSave} className="mt-4 space-y-4">
+                  {saveError && (
+                    <p className="text-sm text-red-600">{saveError}</p>
+                  )}
+                  {saveSuccess && (
+                    <p className="text-sm text-emerald-600">Saved successfully!</p>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700">First Name</label>
+                      <input
+                        type="text"
+                        value={editFirst}
+                        onChange={(e) => setEditFirst(e.target.value)}
+                        required
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-700">Last Name</label>
+                      <input
+                        type="text"
+                        value={editLast}
+                        onChange={(e) => setEditLast(e.target.value)}
+                        required
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700">Department</label>
+                    <input
+                      type="text"
+                      value={editDept}
+                      onChange={(e) => setEditDept(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-700">Role</label>
+                    <input
+                      type="text"
+                      value={editRole}
+                      onChange={(e) => setEditRole(e.target.value)}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <label className="text-sm font-medium text-slate-700">Account enabled</label>
+                    <button
+                      type="button"
+                      onClick={() => setEditEnabled((v) => !v)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${editEnabled ? "bg-indigo-600" : "bg-slate-300"}`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${editEnabled ? "translate-x-6" : "translate-x-1"}`} />
+                    </button>
+                  </div>
+                  <div className="flex justify-end gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowEdit(false)}
+                      className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={saving}
+                      className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {saving ? "Saving..." : "Save Changes"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
 
           {/* Devices */}
           <div className="mt-6">

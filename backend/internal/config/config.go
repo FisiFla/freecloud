@@ -33,6 +33,10 @@ type Config struct {
 	FleetURL             string
 	FleetAPIToken        string
 	FleetWebhookSecret   string
+	// SCIMBearerToken authenticates inbound SCIM 2.0 provisioning requests.
+	// Must be a high-entropy secret (e.g. 32+ random bytes hex-encoded).
+	// Required in production — Validate() rejects an empty value outside dev/test.
+	SCIMBearerToken      string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -48,6 +52,7 @@ func Load() *Config {
 		FleetURL:             getEnv("FLEET_URL", "http://localhost:8082"),
 		FleetAPIToken:        getEnv("FLEET_API_TOKEN", ""),
 		FleetWebhookSecret:   getEnv("FLEET_WEBHOOK_SECRET", ""),
+		SCIMBearerToken:      getEnv("SCIM_BEARER_TOKEN", ""),
 	}
 }
 
@@ -88,6 +93,9 @@ func (c *Config) Validate() error {
 	}
 	if c.FleetWebhookSecret == "" {
 		add("FLEET_WEBHOOK_SECRET must be set (used to authenticate Fleet enrollment callbacks)")
+	}
+	if c.SCIMBearerToken == "" {
+		add("SCIM_BEARER_TOKEN must be set (used to authenticate inbound SCIM provisioning requests)")
 	}
 	if c.DatabaseURL == "" || c.DatabaseURL == defaultDatabaseURL {
 		add("DATABASE_URL must be set to a real database, not the insecure default")

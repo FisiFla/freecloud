@@ -34,6 +34,11 @@ var migrations = []migration{
 		name:      "device_text_ids_and_enrollment_tokens",
 		statement: Migration003,
 	},
+	{
+		id:        4,
+		name:      "scim_resource_versions",
+		statement: Migration004,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -134,6 +139,20 @@ CREATE TABLE IF NOT EXISTS enrollment_tokens (
 );
 
 CREATE INDEX IF NOT EXISTS idx_enrollment_tokens_user_id ON enrollment_tokens(user_id);
+`
+
+// Migration004 adds scim_resource_versions to track SCIM ETag/meta.version
+// and meta.lastModified per resource (keyed by keycloak_user_id). SCIM requires
+// version tracking for optimistic concurrency (If-Match / ETag); storing it
+// in Postgres keeps it durable and prevents version skew on restarts.
+const Migration004 = `
+CREATE TABLE IF NOT EXISTS scim_resource_versions (
+    user_id    UUID PRIMARY KEY REFERENCES users(keycloak_user_id) ON DELETE CASCADE,
+    version    BIGINT NOT NULL DEFAULT 1,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_scim_resource_versions_updated_at ON scim_resource_versions(updated_at);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

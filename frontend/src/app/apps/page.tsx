@@ -6,7 +6,7 @@ import SlideOver from "@/components/SlideOver";
 import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
 import { listApps, createApp, listUsers, assignAppToUser } from "@/lib/api";
-import type { App, User } from "@/lib/api";
+import type { App, User, CreateAppResponse } from "@/lib/api";
 import { useApiReady } from "../providers";
 
 export default function AppsPage() {
@@ -22,6 +22,7 @@ export default function AppsPage() {
   const [newBaseUrl, setNewBaseUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [samlMetadata, setSamlMetadata] = useState<{ entityId: string; acsUrl: string } | null>(null);
 
   // Assign dialog state
   const [assignAppId, setAssignAppId] = useState<string | null>(null);
@@ -63,19 +64,33 @@ export default function AppsPage() {
     e.preventDefault();
     setSubmitting(true);
     setSubmitError(null);
+    setSamlMetadata(null);
     try {
       const created = await createApp({
         name: newName,
         protocol: newProtocol,
         redirectURIs: newRedirectUris.split("\n").map((s) => s.trim()).filter(Boolean),
         baseURL: newBaseUrl,
-      });
-      setApps((prev) => [...prev, created]);
-      setShowAdd(false);
-      setNewName("");
-      setNewProtocol("OIDC");
-      setNewRedirectUris("");
-      setNewBaseUrl("");
+      }) as CreateAppResponse & { enabled?: boolean; createdAt?: string };
+      // Add to list (cast to App shape for display)
+      setApps((prev) => [...prev, {
+        id: created.id,
+        name: created.name,
+        keycloakClientId: created.keycloakClientId,
+        protocol: newProtocol,
+        baseUrl: newBaseUrl,
+        enabled: true,
+      }]);
+      // Surface SAML SP metadata so the admin can configure the SP
+      if (newProtocol === "SAML" && created.samlEntityId) {
+        setSamlMetadata({ entityId: created.samlEntityId, acsUrl: created.samlAcsUrl ?? "" });
+      } else {
+        setShowAdd(false);
+        setNewName("");
+        setNewProtocol("OIDC");
+        setNewRedirectUris("");
+        setNewBaseUrl("");
+      }
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : "Failed to create app");
     } finally {
@@ -190,7 +205,7 @@ export default function AppsPage() {
       </div>
 
       {/* Add App Slide Over */}
-      <SlideOver isOpen={showAdd} onClose={() => setShowAdd(false)} title="Add Application">
+      <SlideOver isOpen={showAdd} onClose={() => { setShowAdd(false); setSamlMetadata(null); setNewName(""); setNewProtocol("OIDC"); setNewRedirectUris(""); setNewBaseUrl(""); }} title="Add Application">
         <form onSubmit={handleAddApp} className="space-y-5">
           {submitError && (
             <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -269,6 +284,13 @@ export default function AppsPage() {
             />
           </div>
 
+          {newProtocol === "SAML" && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+              <p className="font-medium">SAML SP Metadata</p>
+              <p className="mt-1">After creation, copy the <strong>Entity ID</strong> and <strong>ACS URL</strong> into your Service Provider configuration. The Entity ID defaults to the Base URL; the ACS URL is the first Redirect URI you enter above.</p>
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={submitting}
@@ -277,6 +299,27 @@ export default function AppsPage() {
             {submitting ? "Creating..." : "Create Application"}
           </button>
         </form>
+
+        {/* SAML SP metadata panel shown after successful creation */}
+        {samlMetadata && (
+          <div className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4 space-y-3">
+            <p className="text-sm font-semibold text-emerald-800">Application created — copy these into your SP configuration:</p>
+            <div>
+              <p className="text-xs font-medium text-emerald-700">SP Entity ID</p>
+              <code className="block mt-1 rounded bg-white px-2 py-1 text-xs text-slate-700 border border-emerald-200 break-all">{samlMetadata.entityId}</code>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-emerald-700">ACS URL (POST binding)</p>
+              <code className="block mt-1 rounded bg-white px-2 py-1 text-xs text-slate-700 border border-emerald-200 break-all">{samlMetadata.acsUrl || "—"}</code>
+            </div>
+            <button
+              onClick={() => { setSamlMetadata(null); setShowAdd(false); setNewName(""); setNewProtocol("OIDC"); setNewRedirectUris(""); setNewBaseUrl(""); }}
+              className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+            >
+              Done
+            </button>
+          </div>
+        )}
       </SlideOver>
 
       {/* Assign dialog modal */}
