@@ -50,6 +50,13 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Delete("/scim/v2/Groups/{id}", h.SCIMDeleteGroup)
 	})
 
+	// A1: access evaluation — bearer-token authenticated, outside the user-JWT group.
+	// Called by the Keycloak authenticator SPI (or any service) to gate SSO on posture.
+	r.Group(func(r chi.Router) {
+		r.Use(h.accessEvalBearerMW)
+		r.Post("/api/v1/access/evaluate", h.EvaluateAccess)
+	})
+
 	// C3: self-service password reset — public, no JWT. Rate-limited to
 	// prevent email flooding. Returns a fixed message to avoid user enumeration.
 	forgotLimiter := middleware.NewRateLimiter(10, time.Minute)
@@ -88,6 +95,10 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.Post("/api/v1/users/{id}/require-mfa", h.RequireMFA)  // C2
 			// B1: admin-only remote lock (distinct from wipe which runs in offboard)
 			r.Post("/api/v1/devices/{id}/lock", h.RemoteLock)
+
+			// A3: per-app access policy (admin-only write)
+			r.Put("/api/v1/apps/{appId}/policy", h.UpsertAppAccessPolicy)
+
 			// B2: Fleet team management (team-scoped MDM policies)
 			r.Post("/api/v1/teams", h.CreateTeam)
 			r.Post("/api/v1/teams/{id}/policies", h.AssignTeamPolicy)
@@ -96,6 +107,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 		r.Post("/api/v1/auth/device-check", h.DeviceCheck)
 		r.Get("/api/v1/apps", h.ListApps)
+		// A3: per-app access policy (read)
+		r.Get("/api/v1/apps/{appId}/policy", h.GetAppAccessPolicy)
 		r.Get("/api/v1/audit-logs", h.ListAuditLogs)
 		r.Get("/api/v1/audit-logs/export", h.ExportAuditLogs)  // C4
 		r.Get("/api/v1/users", h.ListUsers)

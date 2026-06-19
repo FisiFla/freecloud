@@ -1,0 +1,278 @@
+package handlers
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/FisiFla/freecloud/backend/internal/fleet"
+	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
+)
+
+// ---- Bearer middleware tests ----
+
+func TestAccessEvalBearerMiddlewareRejectsEmpty(t *testing.T) {
+	mw := accessEvalBearerMiddleware("")
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", nil)
+	req.Header.Set("Authorization", "Bearer something")
+	rec := httptest.NewRecorder()
+	mw(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("empty token: expected 503, got %d", rec.Code)
+	}
+}
+
+func TestAccessEvalBearerMiddlewareMissingHeader(t *testing.T) {
+	mw := accessEvalBearerMiddleware("secret")
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", nil)
+	rec := httptest.NewRecorder()
+	mw(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("missing header: expected 401, got %d", rec.Code)
+	}
+}
+
+func TestAccessEvalBearerMiddlewareWrongToken(t *testing.T) {
+	mw := accessEvalBearerMiddleware("correct")
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	rec := httptest.NewRecorder()
+	mw(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("wrong token: expected 401, got %d", rec.Code)
+	}
+}
+
+func TestAccessEvalBearerMiddlewareAccepts(t *testing.T) {
+	mw := accessEvalBearerMiddleware("correct")
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", nil)
+	req.Header.Set("Authorization", "Bearer correct")
+	rec := httptest.NewRecorder()
+	mw(next).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("correct token: expected 200, got %d", rec.Code)
+	}
+}
+
+// ---- EvaluateAccess handler tests ----
+
+// evalResponse decodes an AccessEvalResponse from the recorder.
+func evalResponse(t *testing.T, rec *httptest.ResponseRecorder) AccessEvalResponse {
+	t.Helper()
+	var env struct {
+		Success bool               `json:"success"`
+		Data    AccessEvalResponse `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&env); err != nil {
+		t.Fatalf("failed to decode response: %v (body: %s)", err, rec.Body.String())
+	}
+	return env.Data
+}
+
+func TestAccessEvalMissingUserID(t *testing.T) {
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: ""})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false for empty userId")
+	}
+	if len(resp.Reasons) == 0 {
+		t.Error("expected at least one reason")
+	}
+}
+
+func TestAccessEvalNilDB(t *testing.T) {
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false when DB is nil")
+	}
+}
+
+func TestAccessEvalUserNotFound(t *testing.T) {
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			// user lookup returns no rows
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false for missing user")
+	}
+	if len(resp.Reasons) == 0 {
+		t.Error("expected deny reason for missing user")
+	}
+}
+
+func TestAccessEvalNoDevices(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	callCount := 0
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			// user exists
+			return fakeRow{scanFn: func(dest ...any) error {
+				if s, ok := dest[0].(*string); ok {
+					*s = userID
+				}
+				return nil
+			}}
+		},
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			callCount++
+			// device mapping query returns zero rows
+			return &fakeQueryRows{}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false when user has no devices")
+	}
+	found := false
+	for _, r := range resp.Reasons {
+		if r == "no enrolled device found for user" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'no enrolled device' reason, got: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalFleetError(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const devID = "dev-001"
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error {
+				if s, ok := dest[0].(*string); ok {
+					*s = userID
+				}
+				return nil
+			}}
+		},
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			return &fakeQueryRows{rows: [][]interface{}{{devID}}}, nil
+		},
+	}
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			return nil, errors.New("fleet unreachable")
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false when fleet returns error")
+	}
+	if len(resp.Reasons) == 0 {
+		t.Error("expected deny reason for fleet error")
+	}
+}
+
+func TestAccessEvalAllow(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const devID = "dev-clean"
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error {
+				if s, ok := dest[0].(*string); ok {
+					*s = userID
+				}
+				return nil
+			}}
+		},
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			return &fakeQueryRows{rows: [][]interface{}{{devID}}}, nil
+		},
+	}
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			return &fleet.SecurityState{FirewallEnabled: true, DiskEncrypted: true}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if !resp.Allow {
+		t.Errorf("expected allow=true for clean device, got reasons: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalDenyDiskEncryption(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const devID = "dev-noenc"
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error {
+				if s, ok := dest[0].(*string); ok {
+					*s = userID
+				}
+				return nil
+			}}
+		},
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			return &fakeQueryRows{rows: [][]interface{}{{devID}}}, nil
+		},
+	}
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			return &fleet.SecurityState{FirewallEnabled: true, DiskEncrypted: false}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false when disk not encrypted")
+	}
+	if len(resp.Reasons) == 0 {
+		t.Error("expected deny reason for disk encryption failure")
+	}
+}

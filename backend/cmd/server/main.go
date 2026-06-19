@@ -102,6 +102,7 @@ func main() {
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
 	handler.SetFleetWebhookSecret(cfg.FleetWebhookSecret)
 	handler.SetSCIMBearerToken(cfg.SCIMBearerToken)
+	handler.SetAccessEvalToken(cfg.AccessEvalToken)
 	handler.SetReconciler(rec)
 
 	// Initialize JWT auth middleware

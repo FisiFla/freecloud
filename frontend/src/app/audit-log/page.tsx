@@ -15,6 +15,8 @@ const actionOptions = [
   "offboard",
   "app_create",
   "app_assign",
+  "access_eval",
+  "app_policy_upsert",
 ];
 
 const PAGE_SIZE = 100;
