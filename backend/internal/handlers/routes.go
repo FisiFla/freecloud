@@ -54,5 +54,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Get("/api/v1/audit-logs", h.ListAuditLogs)
 		r.Get("/api/v1/users", h.ListUsers)
 		r.Get("/api/v1/users/{id}", h.GetUser)
+
+		// Admin: drift / reconciliation report (read-only).
+		r.Get("/api/v1/admin/drift", h.GetDrift)
 	})
 }

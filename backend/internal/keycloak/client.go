@@ -24,6 +24,9 @@ type KeycloakClientInterface interface {
 	AssignUserToClient(ctx context.Context, userID, clientID string) error
 	GetUserGroups(ctx context.Context, userID string) ([]*gocloak.Group, error)
 	Ping(ctx context.Context) error
+	// ListUsers returns all enabled users in the realm. Used by the reconciliation
+	// job to detect Keycloak↔DB drift.
+	ListUsers(ctx context.Context) ([]gocloak.User, error)
 }
 
 // CreateUserResult holds the outcome of a CreateUser operation.
@@ -403,4 +406,36 @@ func (k *KeycloakClient) GetUserGroups(ctx context.Context, userID string) ([]*g
 func (k *KeycloakClient) Ping(ctx context.Context) error {
 	_, err := k.login(ctx)
 	return err
+}
+
+// ListUsers returns all users in the realm. Used by the reconciliation job.
+// Pagination is handled internally using Keycloak's offset/limit params.
+func (k *KeycloakClient) ListUsers(ctx context.Context) ([]gocloak.User, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	const pageSize = 100
+	var all []gocloak.User
+	first := 0
+	for {
+		page, err := k.client.GetUsers(ctx, token, k.realm, gocloak.GetUsersParams{
+			First: gocloak.IntP(first),
+			Max:   gocloak.IntP(pageSize),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list keycloak users (offset %d): %w", first, err)
+		}
+		for _, u := range page {
+			if u != nil {
+				all = append(all, *u)
+			}
+		}
+		if len(page) < pageSize {
+			break
+		}
+		first += pageSize
+	}
+	return all, nil
 }

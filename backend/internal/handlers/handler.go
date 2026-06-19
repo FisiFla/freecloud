@@ -11,6 +11,7 @@ import (
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
+	"github.com/FisiFla/freecloud/backend/internal/reconcile"
 )
 
 // DBPool is the subset of *pgxpool.Pool the handlers use. Depending on an
@@ -34,6 +35,9 @@ type Handler struct {
 	// fleetWebhookSecret authenticates Fleet enrollment callbacks (HMAC-SHA256).
 	// Empty means the callback rejects everything (fail closed).
 	fleetWebhookSecret string
+
+	// reconciler is optional — nil when RECONCILE_INTERVAL=0 or not yet wired.
+	reconciler *reconcile.Reconciler
 }
 
 // SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment

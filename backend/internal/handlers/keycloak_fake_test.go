@@ -21,6 +21,7 @@ type fakeKeycloak struct {
 	assignUserToClientFn  func(ctx context.Context, userID, clientID string) error
 	getUserGroupsFn       func(ctx context.Context, userID string) ([]*gocloak.Group, error)
 	pingFn                func(ctx context.Context) error
+	listUsersFn           func(ctx context.Context) ([]gocloak.User, error)
 }
 
 func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -73,4 +74,9 @@ func (f *fakeKeycloak) GetUserGroups(ctx context.Context, userID string) ([]*goc
 func (f *fakeKeycloak) Ping(ctx context.Context) error {
 	if f.pingFn != nil { return f.pingFn(ctx) }
 	return nil
+}
+
+func (f *fakeKeycloak) ListUsers(ctx context.Context) ([]gocloak.User, error) {
+	if f.listUsersFn != nil { return f.listUsersFn(ctx) }
+	return nil, nil
 }
