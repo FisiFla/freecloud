@@ -458,7 +458,7 @@ type fakeTokenDB struct {
 }
 
 func (db fakeTokenDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	return fakeTokenRow{role: db.role, err: db.err}
+	return fakeTokenRow(db)
 }
 
 type fakeTokenRow struct {
