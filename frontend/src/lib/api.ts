@@ -101,6 +101,30 @@ export interface HealthStatus {
   status: string;
 }
 
+// C1: Bulk onboarding
+export interface BulkOnboardRowResult {
+  row: number;
+  email: string;
+  status: "succeeded" | "skipped-duplicate" | "failed";
+  reason?: string;
+}
+
+export interface BulkOnboardResponse {
+  total: number;
+  succeeded: number;
+  skipped: number;
+  failed: number;
+  results: BulkOnboardRowResult[];
+}
+
+// C2: MFA status
+export interface MFAStatus {
+  userId: string;
+  otpEnabled: boolean;
+  otpPending: boolean;
+  webAuthnEnabled: boolean;
+}
+
 // Backend API envelope
 interface ApiEnvelope<T> {
   success: boolean;
@@ -237,6 +261,61 @@ export async function listAuditLogs(filters?: AuditLogFilters): Promise<AuditLog
   if (filters?.offset) params.set("offset", String(filters.offset));
   const qs = params.toString();
   return request<AuditLogEntry[]>("GET", `/api/v1/audit-logs${qs ? `?${qs}` : ""}`);
+}
+
+// C1: Bulk CSV onboarding
+export async function bulkOnboardEmployees(
+  file: File,
+): Promise<BulkOnboardResponse> {
+  const form = new FormData();
+  form.append("file", file);
+  const url = `${getBaseUrl()}/api/v1/onboard/bulk`;
+  const headers: Record<string, string> = {};
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+  const res = await fetch(url, { method: "POST", headers, body: form });
+  const text = await res.text();
+  let json: ApiEnvelope<BulkOnboardResponse>;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new ApiError(`HTTP ${res.status}: ${text || res.statusText}`);
+  }
+  if (!json.success && res.status !== 207) {
+    throw new ApiError(json.error || `Request failed with status ${res.status}`);
+  }
+  return json.data as BulkOnboardResponse;
+}
+
+// C2: MFA status
+export async function getMFAStatus(userId: string): Promise<MFAStatus> {
+  return request<MFAStatus>("GET", `/api/v1/users/${userId}/mfa-status`);
+}
+
+export async function requireMFA(
+  userId: string,
+  type: "totp" | "webauthn",
+): Promise<{ userId: string; action: string; set: boolean }> {
+  return request("POST", `/api/v1/users/${userId}/require-mfa`, { type });
+}
+
+// C3: Forgot password (public — no auth token needed, but we pass one if present)
+export async function forgotPassword(email: string): Promise<{ message: string }> {
+  return request<{ message: string }>("POST", "/api/v1/auth/forgot-password", { email });
+}
+
+// C4: Audit log export — opens a browser download
+export function downloadAuditLogs(
+  format: "csv" | "json",
+  filters?: { actor?: string; action?: string },
+): void {
+  const params = new URLSearchParams({ format });
+  if (filters?.actor) params.set("actor", filters.actor);
+  if (filters?.action) params.set("action", filters.action);
+  const base = getBaseUrl();
+  const url = `${base}/api/v1/audit-logs/export?${params.toString()}`;
+  // Open in current tab — browser will treat it as a download due to
+  // Content-Disposition: attachment on the backend response.
+  window.location.href = url;
 }
 
 export async function healthCheck(): Promise<HealthStatus> {

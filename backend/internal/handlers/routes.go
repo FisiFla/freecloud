@@ -33,6 +33,14 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	// JWT auth group.
 	r.Post("/api/v1/fleet/enrollment-callback", h.FleetEnrollmentCallback)
 
+	// C3: self-service password reset — public, no JWT. Rate-limited to
+	// prevent email flooding. Returns a fixed message to avoid user enumeration.
+	forgotLimiter := middleware.NewRateLimiter(10, time.Minute)
+	r.Group(func(r chi.Router) {
+		r.Use(forgotLimiter.Middleware)
+		r.Post("/api/v1/auth/forgot-password", h.ForgotPassword)
+	})
+
 	// Rate limiter for mutating endpoints: 20 requests / minute / client.
 	mutateLimiter := middleware.NewRateLimiter(20, time.Minute)
 
@@ -44,15 +52,19 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Group(func(r chi.Router) {
 			r.Use(mutateLimiter.Middleware)
 			r.Post("/api/v1/onboard", h.Onboard)
+			r.Post("/api/v1/onboard/bulk", h.BulkOnboard)  // C1
 			r.Post("/api/v1/offboard/{userId}", h.Offboard)
 			r.Post("/api/v1/apps/create", h.CreateApp)
 			r.Post("/api/v1/apps/{appId}/assign", h.AssignApp)
+			r.Post("/api/v1/users/{id}/require-mfa", h.RequireMFA)  // C2
 		})
 
 		r.Post("/api/v1/auth/device-check", h.DeviceCheck)
 		r.Get("/api/v1/apps", h.ListApps)
 		r.Get("/api/v1/audit-logs", h.ListAuditLogs)
+		r.Get("/api/v1/audit-logs/export", h.ExportAuditLogs)  // C4
 		r.Get("/api/v1/users", h.ListUsers)
 		r.Get("/api/v1/users/{id}", h.GetUser)
+		r.Get("/api/v1/users/{id}/mfa-status", h.GetMFAStatus)  // C2
 	})
 }
