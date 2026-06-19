@@ -37,7 +37,12 @@ type Config struct {
 	// SCIMBearerToken authenticates inbound SCIM 2.0 provisioning requests.
 	// Must be a high-entropy secret (e.g. 32+ random bytes hex-encoded).
 	// Required in production — Validate() rejects an empty value outside dev/test.
-	SCIMBearerToken      string
+	SCIMBearerToken string
+
+	// AccessEvalToken authenticates POST /api/v1/access/evaluate calls from the
+	// Keycloak authenticator SPI (or any other service that needs to gate SSO on
+	// device posture). Must be a high-entropy secret. Required in production.
+	AccessEvalToken string
 
 	// Reconciliation job (D1 / FCEXP-21)
 	ReconcileInterval time.Duration // 0 means disabled
@@ -84,6 +89,7 @@ func Load() *Config {
 		FleetAPIToken:        getEnv("FLEET_API_TOKEN", ""),
 		FleetWebhookSecret:   getEnv("FLEET_WEBHOOK_SECRET", ""),
 		SCIMBearerToken:   getEnv("SCIM_BEARER_TOKEN", ""),
+		AccessEvalToken:   getEnv("ACCESS_EVAL_TOKEN", ""),
 		ReconcileInterval: parseDuration(getEnv("RECONCILE_INTERVAL", "15m")),
 
 		// D1 — Notifications
@@ -168,6 +174,9 @@ func (c *Config) Validate() error {
 	}
 	if c.SCIMBearerToken == "" {
 		add("SCIM_BEARER_TOKEN must be set (used to authenticate inbound SCIM provisioning requests)")
+	}
+	if c.AccessEvalToken == "" {
+		add("ACCESS_EVAL_TOKEN must be set (used to authenticate access evaluation requests)")
 	}
 	if c.DatabaseURL == "" || c.DatabaseURL == defaultDatabaseURL {
 		add("DATABASE_URL must be set to a real database, not the insecure default")

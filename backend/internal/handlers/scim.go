@@ -91,6 +91,7 @@ type scimPatchRequest struct {
 
 const (
 	scimUserSchema     = "urn:ietf:params:scim:schemas:core:2.0:User"
+	scimGroupSchema    = "urn:ietf:params:scim:schemas:core:2.0:Group"
 	scimListSchema     = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
 	scimPatchSchema    = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 	scimErrorSchema    = "urn:ietf:params:scim:api:messages:2.0:Error"
@@ -602,9 +603,359 @@ func (h *Handler) SCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// SCIMGroupsStub returns 501 — Groups support is deferred.
-func (h *Handler) SCIMGroupsStub(w http.ResponseWriter, r *http.Request) {
-	scimRespondError(w, http.StatusNotImplemented, "/scim/v2/Groups is not yet implemented", "")
+// ---- SCIM Group types ----
+
+// scimGroupMember is a SCIM Group member reference (RFC 7643 §4.2).
+type scimGroupMember struct {
+	Value   string `json:"value"`
+	Display string `json:"display,omitempty"`
+	Ref     string `json:"$ref,omitempty"`
+}
+
+// SCIMGroup is the SCIM Group resource (RFC 7643 §4.2).
+type SCIMGroup struct {
+	Schemas     []string          `json:"schemas"`
+	ID          string            `json:"id,omitempty"`
+	ExternalID  string            `json:"externalId,omitempty"`
+	DisplayName string            `json:"displayName"`
+	Members     []scimGroupMember `json:"members"`
+	Meta        scimMeta          `json:"meta,omitempty"`
+}
+
+// scimGroupListResponse is the SCIM ListResponse for Groups.
+type scimGroupListResponse struct {
+	Schemas      []string    `json:"schemas"`
+	TotalResults int         `json:"totalResults"`
+	StartIndex   int         `json:"startIndex"`
+	ItemsPerPage int         `json:"itemsPerPage"`
+	Resources    []SCIMGroup `json:"Resources"`
+}
+
+// scimGroupFromKC converts a Keycloak group (with optional members) to a SCIMGroup.
+func scimGroupFromKC(id, name string, members []scimGroupMember) SCIMGroup {
+	return SCIMGroup{
+		Schemas:     []string{scimGroupSchema},
+		ID:          id,
+		DisplayName: name,
+		Members:     members,
+		Meta:        scimMeta{ResourceType: "Group"},
+	}
+}
+
+// SCIMListGroups handles GET /scim/v2/Groups
+func (h *Handler) SCIMListGroups(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	startIndex := 1
+	if v := r.URL.Query().Get("startIndex"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			startIndex = n
+		}
+	}
+
+	filterRaw := r.URL.Query().Get("filter")
+	var displayNameFilter string
+	if filterRaw != "" {
+		f := parseSCIMFilter(filterRaw)
+		if f != nil && f.op == "eq" && strings.EqualFold(f.attr, "displayname") {
+			displayNameFilter = f.value
+		}
+	}
+
+	kcGroups, err := h.keycloak.ListGroups(ctx)
+	if err != nil {
+		h.logger.Error("scim list groups: keycloak failed", zap.Error(err))
+		scimRespondError(w, http.StatusInternalServerError, "internal error", "")
+		return
+	}
+
+	var groups []SCIMGroup
+	for _, g := range kcGroups {
+		if g.ID == nil || g.Name == nil {
+			continue
+		}
+		if displayNameFilter != "" && !strings.EqualFold(*g.Name, displayNameFilter) {
+			continue
+		}
+		groups = append(groups, scimGroupFromKC(*g.ID, *g.Name, []scimGroupMember{}))
+	}
+	if groups == nil {
+		groups = []SCIMGroup{}
+	}
+
+	// Pagination (SCIM uses 1-based startIndex)
+	offset := startIndex - 1
+	if offset < 0 {
+		offset = 0
+	}
+	total := len(groups)
+	if offset < len(groups) {
+		groups = groups[offset:]
+	} else {
+		groups = []SCIMGroup{}
+	}
+
+	scimRespond(w, http.StatusOK, scimGroupListResponse{
+		Schemas:      []string{scimListSchema},
+		TotalResults: total,
+		StartIndex:   startIndex,
+		ItemsPerPage: len(groups),
+		Resources:    groups,
+	})
+}
+
+// SCIMGetGroup handles GET /scim/v2/Groups/{id}
+func (h *Handler) SCIMGetGroup(w http.ResponseWriter, r *http.Request) {
+	groupID := chi.URLParam(r, "id")
+	if groupID == "" {
+		scimRespondError(w, http.StatusBadRequest, "id is required", "invalidValue")
+		return
+	}
+	ctx := r.Context()
+
+	g, err := h.keycloak.GetGroupByID(ctx, groupID)
+	if err != nil {
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+			scimRespondError(w, http.StatusNotFound, "group not found", "")
+			return
+		}
+		h.logger.Error("scim get group: keycloak failed", zap.String("group_id", groupID), zap.Error(err))
+		scimRespondError(w, http.StatusInternalServerError, "internal error", "")
+		return
+	}
+	if g.ID == nil || g.Name == nil {
+		scimRespondError(w, http.StatusInternalServerError, "incomplete group data", "")
+		return
+	}
+
+	members, err := h.keycloak.ListGroupMembers(ctx, groupID)
+	if err != nil {
+		h.logger.Warn("scim get group: failed to list members", zap.String("group_id", groupID), zap.Error(err))
+		members = nil
+	}
+
+	scimMembers := make([]scimGroupMember, 0, len(members))
+	for _, m := range members {
+		if m.ID == nil {
+			continue
+		}
+		display := ""
+		if m.Email != nil {
+			display = *m.Email
+		}
+		scimMembers = append(scimMembers, scimGroupMember{Value: *m.ID, Display: display})
+	}
+
+	grp := scimGroupFromKC(*g.ID, *g.Name, scimMembers)
+	scimRespond(w, http.StatusOK, grp)
+}
+
+// SCIMCreateGroup handles POST /scim/v2/Groups
+func (h *Handler) SCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
+	var req SCIMGroup
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		scimRespondError(w, http.StatusBadRequest, "invalid JSON", "invalidValue")
+		return
+	}
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	if req.DisplayName == "" {
+		scimRespondError(w, http.StatusBadRequest, "displayName is required", "invalidValue")
+		return
+	}
+	ctx := r.Context()
+
+	groupID, err := h.keycloak.CreateGroup(ctx, req.DisplayName)
+	if err != nil {
+		h.logger.Error("scim create group: keycloak failed", zap.String("name", req.DisplayName), zap.Error(err))
+		scimRespondError(w, http.StatusInternalServerError, "failed to create group", "")
+		return
+	}
+
+	// Add initial members if provided
+	for _, m := range req.Members {
+		if m.Value == "" {
+			continue
+		}
+		if err := h.keycloak.AddUserToGroup(ctx, m.Value, groupID); err != nil {
+			h.logger.Warn("scim create group: failed to add initial member",
+				zap.String("group_id", groupID), zap.String("user_id", m.Value), zap.Error(err))
+		}
+	}
+
+	grp := scimGroupFromKC(groupID, req.DisplayName, req.Members)
+	if grp.Members == nil {
+		grp.Members = []scimGroupMember{}
+	}
+	scimRespond(w, http.StatusCreated, grp)
+}
+
+// SCIMPatchGroup handles PATCH /scim/v2/Groups/{id}
+// Supports: displayName replace, members add/remove.
+func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
+	groupID := chi.URLParam(r, "id")
+	if groupID == "" {
+		scimRespondError(w, http.StatusBadRequest, "id is required", "invalidValue")
+		return
+	}
+
+	var patch scimPatchRequest
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		scimRespondError(w, http.StatusBadRequest, "invalid JSON", "invalidValue")
+		return
+	}
+	ctx := r.Context()
+
+	// Verify group exists
+	g, err := h.keycloak.GetGroupByID(ctx, groupID)
+	if err != nil {
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+			scimRespondError(w, http.StatusNotFound, "group not found", "")
+			return
+		}
+		scimRespondError(w, http.StatusInternalServerError, "internal error", "")
+		return
+	}
+	if g.ID == nil || g.Name == nil {
+		scimRespondError(w, http.StatusInternalServerError, "incomplete group data", "")
+		return
+	}
+
+	displayName := *g.Name
+
+	for _, op := range patch.Operations {
+		opLow := strings.ToLower(op.Op)
+		pathLow := strings.ToLower(op.Path)
+
+		switch {
+		case (opLow == "replace" || opLow == "add") && (pathLow == "displayname" || pathLow == ""):
+			// Replace displayName (direct or object)
+			if pathLow == "displayname" {
+				if s, ok := op.Value.(string); ok {
+					displayName = strings.TrimSpace(s)
+				}
+			} else if m, ok := op.Value.(map[string]interface{}); ok {
+				if v, ok := m["displayName"].(string); ok {
+					displayName = strings.TrimSpace(v)
+				}
+			}
+
+		case (opLow == "add") && pathLow == "members":
+			// Add members: value is []{"value": userID}
+			userIDs := extractMemberValues(op.Value)
+			for _, uid := range userIDs {
+				if err := h.keycloak.AddUserToGroup(ctx, uid, groupID); err != nil {
+					h.logger.Warn("scim patch group: add member failed",
+						zap.String("group_id", groupID), zap.String("user_id", uid), zap.Error(err))
+				}
+			}
+
+		case (opLow == "remove") && pathLow == "members":
+			// Remove members: value may be []{"value": userID} or empty (remove all, not supported)
+			userIDs := extractMemberValues(op.Value)
+			for _, uid := range userIDs {
+				if err := h.keycloak.RemoveUserFromGroup(ctx, uid, groupID); err != nil {
+					h.logger.Warn("scim patch group: remove member failed",
+						zap.String("group_id", groupID), zap.String("user_id", uid), zap.Error(err))
+				}
+			}
+
+		case (opLow == "replace") && pathLow == "members":
+			// Replace all members: first remove all, then add new set
+			existing, _ := h.keycloak.ListGroupMembers(ctx, groupID)
+			for _, m := range existing {
+				if m.ID == nil {
+					continue
+				}
+				if err := h.keycloak.RemoveUserFromGroup(ctx, *m.ID, groupID); err != nil {
+					h.logger.Warn("scim patch group: remove existing member failed",
+						zap.String("group_id", groupID), zap.String("user_id", *m.ID), zap.Error(err))
+				}
+			}
+			userIDs := extractMemberValues(op.Value)
+			for _, uid := range userIDs {
+				if err := h.keycloak.AddUserToGroup(ctx, uid, groupID); err != nil {
+					h.logger.Warn("scim patch group: add replacement member failed",
+						zap.String("group_id", groupID), zap.String("user_id", uid), zap.Error(err))
+				}
+			}
+		}
+	}
+
+	// Rename if displayName changed
+	if displayName != *g.Name && displayName != "" {
+		if err := h.keycloak.RenameGroup(ctx, groupID, displayName); err != nil {
+			h.logger.Error("scim patch group: rename failed",
+				zap.String("group_id", groupID), zap.String("name", displayName), zap.Error(err))
+			scimRespondError(w, http.StatusInternalServerError, "failed to rename group", "")
+			return
+		}
+	}
+
+	// Return current state
+	members, _ := h.keycloak.ListGroupMembers(ctx, groupID)
+	scimMembers := make([]scimGroupMember, 0, len(members))
+	for _, m := range members {
+		if m.ID == nil {
+			continue
+		}
+		display := ""
+		if m.Email != nil {
+			display = *m.Email
+		}
+		scimMembers = append(scimMembers, scimGroupMember{Value: *m.ID, Display: display})
+	}
+
+	grp := scimGroupFromKC(groupID, displayName, scimMembers)
+	scimRespond(w, http.StatusOK, grp)
+}
+
+// SCIMDeleteGroup handles DELETE /scim/v2/Groups/{id}
+func (h *Handler) SCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
+	groupID := chi.URLParam(r, "id")
+	if groupID == "" {
+		scimRespondError(w, http.StatusBadRequest, "id is required", "invalidValue")
+		return
+	}
+	ctx := r.Context()
+
+	// Verify existence
+	if _, err := h.keycloak.GetGroupByID(ctx, groupID); err != nil {
+		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
+			scimRespondError(w, http.StatusNotFound, "group not found", "")
+			return
+		}
+		scimRespondError(w, http.StatusInternalServerError, "internal error", "")
+		return
+	}
+
+	if err := h.keycloak.DeleteGroup(ctx, groupID); err != nil {
+		h.logger.Error("scim delete group: keycloak failed", zap.String("group_id", groupID), zap.Error(err))
+		scimRespondError(w, http.StatusInternalServerError, "failed to delete group", "")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// extractMemberValues extracts user IDs from a SCIM members PATCH value.
+// Handles: []interface{}{map{"value": uid}}, or a single map{"value": uid}.
+func extractMemberValues(v interface{}) []string {
+	var out []string
+	switch arr := v.(type) {
+	case []interface{}:
+		for _, item := range arr {
+			if m, ok := item.(map[string]interface{}); ok {
+				if uid, ok := m["value"].(string); ok && uid != "" {
+					out = append(out, uid)
+				}
+			}
+		}
+	case map[string]interface{}:
+		if uid, ok := arr["value"].(string); ok && uid != "" {
+			out = append(out, uid)
+		}
+	}
+	return out
 }
 
 // isNotFound checks if a pgx error is a not-found (ErrNoRows) condition.

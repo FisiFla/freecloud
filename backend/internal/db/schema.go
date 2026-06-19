@@ -40,6 +40,11 @@ var migrations = []migration{
 		statement: Migration004,
 	},
 	{
+		id:        5,
+		name:      "app_access_policies",
+		statement: Migration005,
+	},
+	{
 		id:        20,
 		name:      "analytics_snapshots",
 		statement: Migration020,
@@ -168,6 +173,21 @@ CREATE TABLE IF NOT EXISTS scim_resource_versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_scim_resource_versions_updated_at ON scim_resource_versions(updated_at);
+`
+
+// Migration005 adds per-app posture requirements for the conditional access
+// feature (A3). Each connected app can independently require that the
+// authenticating device be enrolled, disk-encrypted, free of critical
+// vulnerabilities, and/or running a sufficiently recent OS.
+const Migration005 = `
+CREATE TABLE IF NOT EXISTS app_access_policies (
+    app_id                  UUID PRIMARY KEY REFERENCES connected_apps(id) ON DELETE CASCADE,
+    require_enrolled        BOOLEAN NOT NULL DEFAULT false,
+    require_disk_encrypted  BOOLEAN NOT NULL DEFAULT false,
+    require_no_critical_vulns BOOLEAN NOT NULL DEFAULT false,
+    max_os_age_days         INTEGER,
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 `
 
 // Migration020 creates the analytics_snapshots time-series table (D2 / FCEX2-18).

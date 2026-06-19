@@ -42,9 +42,19 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Get("/scim/v2/Users/{id}", h.SCIMGetUser)
 		r.Patch("/scim/v2/Users/{id}", h.SCIMPatchUser)
 		r.Delete("/scim/v2/Users/{id}", h.SCIMDeleteUser)
-		// Groups deferred — return 501 for all methods.
-		r.HandleFunc("/scim/v2/Groups", h.SCIMGroupsStub)
-		r.HandleFunc("/scim/v2/Groups/{id}", h.SCIMGroupsStub)
+		// B1: SCIM Groups resource (RFC 7644)
+		r.Get("/scim/v2/Groups", h.SCIMListGroups)
+		r.Post("/scim/v2/Groups", h.SCIMCreateGroup)
+		r.Get("/scim/v2/Groups/{id}", h.SCIMGetGroup)
+		r.Patch("/scim/v2/Groups/{id}", h.SCIMPatchGroup)
+		r.Delete("/scim/v2/Groups/{id}", h.SCIMDeleteGroup)
+	})
+
+	// A1: access evaluation — bearer-token authenticated, outside the user-JWT group.
+	// Called by the Keycloak authenticator SPI (or any service) to gate SSO on posture.
+	r.Group(func(r chi.Router) {
+		r.Use(h.accessEvalBearerMW)
+		r.Post("/api/v1/access/evaluate", h.EvaluateAccess)
 	})
 
 	// C3: self-service password reset — public, no JWT. Rate-limited to
@@ -85,12 +95,20 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.Post("/api/v1/users/{id}/require-mfa", h.RequireMFA)  // C2
 			// B1: admin-only remote lock (distinct from wipe which runs in offboard)
 			r.Post("/api/v1/devices/{id}/lock", h.RemoteLock)
-			// B4: assign a policy to a device
-			r.Post("/api/v1/devices/{id}/policies", h.AssignDevicePolicy)
+
+			// A3: per-app access policy (admin-only write)
+			r.Put("/api/v1/apps/{appId}/policy", h.UpsertAppAccessPolicy)
+
+			// B2: Fleet team management (team-scoped MDM policies)
+			r.Post("/api/v1/teams", h.CreateTeam)
+			r.Post("/api/v1/teams/{id}/policies", h.AssignTeamPolicy)
+			r.Post("/api/v1/teams/{id}/hosts", h.MoveHostToTeam)
 		})
 
 		r.Post("/api/v1/auth/device-check", h.DeviceCheck)
 		r.Get("/api/v1/apps", h.ListApps)
+		// A3: per-app access policy (read)
+		r.Get("/api/v1/apps/{appId}/policy", h.GetAppAccessPolicy)
 		r.Get("/api/v1/audit-logs", h.ListAuditLogs)
 		r.Get("/api/v1/audit-logs/export", h.ExportAuditLogs)  // C4
 		r.Get("/api/v1/users", h.ListUsers)
@@ -106,8 +124,9 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		// B3: compliance posture
 		r.Get("/api/v1/users/{id}/devices/compliance", h.GetUserCompliance)
 		r.Get("/api/v1/compliance", h.GetOrgCompliance)
-		// B4: list policies
+		// B2: list policies and teams (read-only, no mutation gate)
 		r.Get("/api/v1/policies", h.ListPolicies)
+		r.Get("/api/v1/teams", h.ListTeams)
 
 		// Admin: drift / reconciliation report (read-only).
 		r.Get("/api/v1/admin/drift", h.GetDrift)
