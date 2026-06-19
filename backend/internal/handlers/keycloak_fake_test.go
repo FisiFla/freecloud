@@ -11,20 +11,21 @@ import (
 var _ keycloak.KeycloakClientInterface = (*fakeKeycloak)(nil)
 
 type fakeKeycloak struct {
-	createUserFn               func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error)
-	deleteUserFn               func(ctx context.Context, userID string) error
-	disableUserFn              func(ctx context.Context, userID string) error
-	logoutSessionsFn           func(ctx context.Context, userID string) error
-	getUserSessionsFn          func(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error)
-	createClientFn             func(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
-	deleteClientFn             func(ctx context.Context, clientID string) error
-	assignUserToClientFn       func(ctx context.Context, userID, clientID string) error
-	getUserGroupsFn            func(ctx context.Context, userID string) ([]*gocloak.Group, error)
-	pingFn                     func(ctx context.Context) error
-	getUserCredentialsFn       func(ctx context.Context, userID string) ([]string, error)
-	getUserRequiredActionsFn   func(ctx context.Context, userID string) ([]string, error)
-	setRequiredActionFn        func(ctx context.Context, userID, action string) error
-	sendPasswordResetEmailFn   func(ctx context.Context, userID string) error
+	createUserFn             func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error)
+	deleteUserFn             func(ctx context.Context, userID string) error
+	disableUserFn            func(ctx context.Context, userID string) error
+	logoutSessionsFn         func(ctx context.Context, userID string) error
+	getUserSessionsFn        func(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error)
+	createClientFn           func(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
+	deleteClientFn           func(ctx context.Context, clientID string) error
+	assignUserToClientFn     func(ctx context.Context, userID, clientID string) error
+	getUserGroupsFn          func(ctx context.Context, userID string) ([]*gocloak.Group, error)
+	pingFn                   func(ctx context.Context) error
+	getUserCredentialsFn     func(ctx context.Context, userID string) ([]string, error)
+	getUserRequiredActionsFn func(ctx context.Context, userID string) ([]string, error)
+	setRequiredActionFn      func(ctx context.Context, userID, action string) error
+	sendPasswordResetEmailFn func(ctx context.Context, userID string) error
+	listUsersFn              func(ctx context.Context) ([]gocloak.User, error)
 }
 
 func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -97,4 +98,9 @@ func (f *fakeKeycloak) SetRequiredAction(ctx context.Context, userID, action str
 func (f *fakeKeycloak) SendPasswordResetEmail(ctx context.Context, userID string) error {
 	if f.sendPasswordResetEmailFn != nil { return f.sendPasswordResetEmailFn(ctx, userID) }
 	return nil
+}
+
+func (f *fakeKeycloak) ListUsers(ctx context.Context) ([]gocloak.User, error) {
+	if f.listUsersFn != nil { return f.listUsersFn(ctx) }
+	return nil, nil
 }
