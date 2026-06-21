@@ -75,10 +75,13 @@ func TestE2E_PostureEnforcement_NoUserDenied(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("access/evaluate: expected 200 JSON response, got %d: %s", status, resp)
 	}
-	var result accessEvalResp
-	if err := json.Unmarshal(resp, &result); err != nil {
+	var env struct {
+		Data accessEvalResp `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &env); err != nil {
 		t.Fatalf("parse response: %v (body: %s)", err, resp)
 	}
+	result := env.Data
 	if result.Allow {
 		t.Errorf("unknown user: expected deny, got allow (reasons: %v)", result.Reasons)
 	}
@@ -137,10 +140,13 @@ func TestE2E_PostureEnforcement_CompliantDeviceAllowed(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("access/evaluate (compliant device): expected 200, got %d: %s", status, resp)
 	}
-	var result accessEvalResp
-	if err := json.Unmarshal(resp, &result); err != nil {
+	var env struct {
+		Data accessEvalResp `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &env); err != nil {
 		t.Fatalf("parse response: %v (body: %s)", err, resp)
 	}
+	result := env.Data
 	if !result.Allow {
 		t.Errorf("compliant device (host-001): expected allow, got deny (reasons: %v)", result.Reasons)
 	}
@@ -153,11 +159,10 @@ func TestE2E_PostureEnforcement_CompliantDeviceAllowed(t *testing.T) {
 // TestE2E_PostureEnforcement_NonCompliantDeviceDenied proves that a device whose
 // posture returns a violation (non-empty reasons from FleetDM) is denied.
 //
-// The FleetDM mock normally returns all-compliant posture.  We force a non-
-// compliant result by evaluating with the special host ID "host-noncompliant"
-// which the mock maps to a host with firewall=false (if FLEET_MOCK_NONCOMPLIANT_HOSTS
-// is set on the fleetdm-e2e container) OR by providing a host ID that is not
-// known to FleetDM (which causes a 404 → "device posture unavailable" reason).
+// The FleetDM mock returns compliant posture (disk_encryption+firewall=true) only
+// for host-001.  Any other host ID gets the non-compliant defaults (both false),
+// which causes the backend to deny with "firewall disabled" / "disk not encrypted"
+// reasons, proving fail-closed enforcement is active.
 func TestE2E_PostureEnforcement_NonCompliantDeviceDenied(t *testing.T) {
 	waitReady(t, 30*time.Second)
 
@@ -181,9 +186,10 @@ func TestE2E_PostureEnforcement_NonCompliantDeviceDenied(t *testing.T) {
 	}
 	t.Logf("created user id=%s", created.ID)
 
-	// 2. Evaluate with an unknown host ID — the FleetDM mock returns 404 for
-	// unknown hosts, which the backend treats as "device posture unavailable"
-	// and denies access (fail-closed).
+	// 2. Evaluate with a non-compliant host ID — the FleetDM mock returns
+	// disk_encryption=false and firewall=false for any host other than "host-001",
+	// so the backend will deny access with firewall/disk violation reasons
+	// (fail-closed enforcement).
 	unknownHost := "host-unknown-e2e-99999"
 	body := map[string]string{
 		"userId":   created.ID,
@@ -193,24 +199,31 @@ func TestE2E_PostureEnforcement_NonCompliantDeviceDenied(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("access/evaluate (unknown device): expected 200, got %d: %s", status, resp)
 	}
-	var result accessEvalResp
-	if err := json.Unmarshal(resp, &result); err != nil {
+	var env struct {
+		Data accessEvalResp `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &env); err != nil {
 		t.Fatalf("parse response: %v (body: %s)", err, resp)
 	}
+	result := env.Data
 	if result.Allow {
 		t.Errorf("unknown device: expected deny (fail-closed), got allow (reasons: %v)", result.Reasons)
 	}
 	if len(result.Reasons) == 0 {
 		t.Error("unknown device: expected at least one denial reason")
 	}
-	hasUnavailable := false
+	// The mock returns disk_encryption=false and firewall=false for unknown hosts
+	// (non-compliant defaults), so reasons will contain "firewall disabled" and/or
+	// "disk not encrypted". Either proves fail-closed enforcement is active.
+	hasViolation := false
 	for _, r := range result.Reasons {
-		if strings.Contains(r, "unavailable") || strings.Contains(r, "posture") {
-			hasUnavailable = true
+		if strings.Contains(r, "firewall") || strings.Contains(r, "disk") ||
+			strings.Contains(r, "unavailable") || strings.Contains(r, "posture") {
+			hasViolation = true
 		}
 	}
-	if !hasUnavailable {
-		t.Errorf("unknown device denial reasons don't mention posture unavailability: %v", result.Reasons)
+	if !hasViolation {
+		t.Errorf("unknown device denial reasons don't mention a posture violation: %v", result.Reasons)
 	}
 	t.Logf("unknown device → deny, reasons: %v", result.Reasons)
 
@@ -253,10 +266,13 @@ func TestE2E_PostureEnforcement_NoEnrolledDeviceDenied(t *testing.T) {
 	if status != 200 {
 		t.Fatalf("access/evaluate (no device): expected 200, got %d: %s", status, resp)
 	}
-	var result accessEvalResp
-	if err := json.Unmarshal(resp, &result); err != nil {
+	var env struct {
+		Data accessEvalResp `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &env); err != nil {
 		t.Fatalf("parse response: %v (body: %s)", err, resp)
 	}
+	result := env.Data
 	if result.Allow {
 		t.Errorf("no enrolled device: expected deny, got allow")
 	}

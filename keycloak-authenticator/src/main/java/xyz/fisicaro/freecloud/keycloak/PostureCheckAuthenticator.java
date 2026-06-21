@@ -123,13 +123,23 @@ public class PostureCheckAuthenticator implements Authenticator {
             return;
         }
 
-        if (!json.containsKey("allow")) {
-            // Missing field — fail closed
+        // The backend wraps every response in an envelope: {"success":bool,"data":{...}}.
+        // The access-evaluation payload (allow/reasons) lives under "data".
+        JsonObject data = null;
+        try {
+            if (json.containsKey("data")) {
+                data = json.getJsonObject("data");
+            }
+        } catch (Exception e) {
+            data = null;
+        }
+        if (data == null || !data.containsKey("allow")) {
+            // Missing/unexpected response shape — fail closed
             context.failure(AuthenticationFlowError.INTERNAL_ERROR);
             return;
         }
 
-        boolean allow = json.getBoolean("allow", false);
+        boolean allow = data.getBoolean("allow", false);
         if (allow) {
             context.success();
             return;
@@ -137,8 +147,8 @@ public class PostureCheckAuthenticator implements Authenticator {
 
         // Denied — extract reasons
         List<String> reasonList = new ArrayList<>();
-        if (json.containsKey("reasons")) {
-            JsonArray arr = json.getJsonArray("reasons");
+        if (data.containsKey("reasons")) {
+            JsonArray arr = data.getJsonArray("reasons");
             if (arr != null) {
                 for (int i = 0; i < arr.size(); i++) {
                     reasonList.add(arr.getString(i));
