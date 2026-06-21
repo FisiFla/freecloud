@@ -33,6 +33,15 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	// JWT auth group.
 	r.Post("/api/v1/fleet/enrollment-callback", h.FleetEnrollmentCallback)
 
+	// A3 (FCEX3-7): Device-identity cookie — browser-facing, unauthenticated.
+	// Called after Fleet enrollment to set the freecloud-device-id cookie that
+	// the Keycloak SPI reads during login.  Rate-limited to 20 req/min.
+	deviceCookieLimiter := middleware.NewRateLimiter(20, time.Minute)
+	r.Group(func(r chi.Router) {
+		r.Use(deviceCookieLimiter.Middleware)
+		r.Post("/api/v1/enrollment/device-identity", h.SetDeviceIdentityCookie)
+	})
+
 	// SCIM 2.0 provisioning — bearer-token authenticated, outside the user-JWT group.
 	// SCIMBearerToken is injected by SetupSCIM (called from main after config load).
 	r.Group(func(r chi.Router) {

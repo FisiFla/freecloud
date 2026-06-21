@@ -74,6 +74,11 @@ var migrations = []migration{
 		name:      "audit_logs_seq",
 		statement: Migration022,
 	},
+	{
+		id:        23,
+		name:      "enrollment_tokens_used_by_host_id",
+		statement: Migration023,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -307,6 +312,16 @@ INSERT INTO siem_cursor (id, last_seq) VALUES (1, 0) ON CONFLICT DO NOTHING;
 const Migration022 = `
 ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS seq BIGSERIAL;
 CREATE INDEX IF NOT EXISTS idx_audit_logs_seq ON audit_logs(seq);
+`
+
+// Migration023 adds a used_by_host_id column to enrollment_tokens so the
+// FleetDM enrollment callback can record which device consumed a given token.
+// This enables the device-identity cookie endpoint (A3 / FCEX3-7) to look up
+// the enrolled fleet_host_id from an enrollment token without re-querying
+// users_devices_mapping — the token row itself becomes the link.
+const Migration023 = `
+ALTER TABLE enrollment_tokens ADD COLUMN IF NOT EXISTS used_by_host_id TEXT
+    REFERENCES devices(fleet_host_id) ON DELETE SET NULL;
 `
 
 // RunMigrations applies any pending migrations in order, recording each in
