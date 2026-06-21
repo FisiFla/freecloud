@@ -101,6 +101,13 @@ func (h *Handler) UpsertAppAccessPolicy(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if req.MaxOsAgeDays != nil {
+		respondValidationErrors(w, []ValidationError{{
+			Field:   "maxOsAgeDays",
+			Message: "max OS age policies are not supported until Fleet provides OS age posture data",
+		}})
+		return
+	}
 
 	ctx := r.Context()
 

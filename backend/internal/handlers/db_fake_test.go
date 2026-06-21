@@ -28,10 +28,10 @@ type fakeQueryRows struct {
 	err  error
 }
 
-func (r *fakeQueryRows) Next() bool          { return r.idx < len(r.rows) }
-func (r *fakeQueryRows) Err() error          { return r.err }
-func (r *fakeQueryRows) Close()              {}
-func (r *fakeQueryRows) CommandTag() pgconn.CommandTag { return pgconn.CommandTag{} }
+func (r *fakeQueryRows) Next() bool                                   { return r.idx < len(r.rows) }
+func (r *fakeQueryRows) Err() error                                   { return r.err }
+func (r *fakeQueryRows) Close()                                       {}
+func (r *fakeQueryRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (r *fakeQueryRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *fakeQueryRows) Values() ([]interface{}, error)               { return nil, nil }
 func (r *fakeQueryRows) RawValues() [][]byte                          { return nil }
@@ -105,7 +105,7 @@ type fakeTx struct {
 }
 
 func (tx *fakeTx) Begin(ctx context.Context) (pgx.Tx, error) {
-	return nil, errors.New("fakeTx.Begin not implemented")
+	return tx, nil
 }
 
 func (tx *fakeTx) Commit(ctx context.Context) error {

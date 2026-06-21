@@ -104,6 +104,11 @@ var migrations = []migration{
 		name:      "approval_requests_executing_status",
 		statement: Migration032,
 	},
+	{
+		id:        33,
+		name:      "audit_chain_anchors",
+		statement: Migration033,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -447,6 +452,20 @@ ALTER TABLE approval_requests DROP CONSTRAINT IF EXISTS approval_requests_status
 ALTER TABLE approval_requests
     ADD CONSTRAINT approval_requests_status_check
     CHECK (status IN ('pending', 'executing', 'approved', 'rejected'));
+`
+
+// Migration033 stores the retained-chain anchor used after audit retention
+// pruning. When old audit rows are deleted from the start of the chain,
+// VerifyChain starts from this recorded predecessor hash instead of requiring
+// the first surviving row to look like a genesis row.
+const Migration033 = `
+CREATE TABLE IF NOT EXISTS audit_chain_anchors (
+    id            INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    first_seq     BIGINT NOT NULL,
+    prev_hash     TEXT NOT NULL,
+    pruned_before TIMESTAMPTZ NOT NULL,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

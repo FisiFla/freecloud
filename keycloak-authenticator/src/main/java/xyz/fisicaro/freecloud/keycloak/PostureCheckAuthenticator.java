@@ -9,9 +9,11 @@ import jakarta.ws.rs.core.Response;
 import org.keycloak.authentication.AuthenticationFlowContext;
 import org.keycloak.authentication.AuthenticationFlowError;
 import org.keycloak.authentication.Authenticator;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.models.RealmModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.sessions.AuthenticationSessionModel;
 
 import java.io.StringReader;
 import java.net.URI;
@@ -85,6 +87,14 @@ public class PostureCheckAuthenticator implements Authenticator {
         }
 
         String userId = context.getUser().getId();
+        String appId = "";
+        AuthenticationSessionModel authSession = context.getAuthenticationSession();
+        if (authSession != null) {
+            ClientModel client = authSession.getClient();
+            if (client != null && client.getId() != null) {
+                appId = client.getId();
+            }
+        }
 
         String deviceId = "";
         Map<String, Cookie> cookies = context.getHttpRequest().getHttpHeaders().getCookies();
@@ -94,7 +104,8 @@ public class PostureCheckAuthenticator implements Authenticator {
         }
 
         String requestBody = Json.createObjectBuilder()
-            .add("userId",   userId)
+            .add("userId", userId)
+            .add("appId", appId)
             .add("deviceId", deviceId)
             .build()
             .toString();

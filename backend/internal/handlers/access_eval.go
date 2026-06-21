@@ -24,8 +24,9 @@ import (
 type AccessEvalRequest struct {
 	// UserID is the Keycloak user UUID whose posture should be evaluated.
 	UserID string `json:"userId"`
-	// AppID is the connected_apps.id to load per-app policy for. Optional —
-	// if empty, only global posture checks apply.
+	// AppID is either connected_apps.id or connected_apps.keycloak_client_id.
+	// The Keycloak SPI sends the Keycloak client UUID during browser login.
+	// Optional — if empty, only global posture checks apply.
 	AppID string `json:"appId,omitempty"`
 	// DeviceID is an explicit FleetDM host ID to evaluate. If empty, all
 	// devices enrolled for the user are checked.
@@ -43,6 +44,7 @@ type appPolicy struct {
 	RequireEnrolled        bool
 	RequireDiskEncrypted   bool
 	RequireNoCriticalVulns bool
+	MaxOsAgeDays           *int
 }
 
 // accessEvalBearerMiddleware mirrors SCIMBearerMiddleware: an empty token
@@ -82,6 +84,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.UserID = strings.TrimSpace(req.UserID)
+	req.AppID = strings.TrimSpace(req.AppID)
 	req.DeviceID = strings.TrimSpace(req.DeviceID)
 	if req.UserID == "" {
 		h.auditAccessDecision("", req.AppID, false, []string{"missing or invalid user identifier"})
@@ -191,16 +194,22 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	policy := appPolicy{}
 	if req.AppID != "" {
 		var reqEnrolled, reqDisk, reqVulns bool
+		var maxOsAgeDays *int
 		err := h.db.QueryRow(ctx,
-			`SELECT require_enrolled, require_disk_encrypted, require_no_critical_vulns
-			 FROM app_access_policies WHERE app_id = $1`,
+			`SELECT p.require_enrolled, p.require_disk_encrypted, p.require_no_critical_vulns,
+				        p.max_os_age_days
+				 FROM app_access_policies p
+				 INNER JOIN connected_apps a ON a.id = p.app_id
+				 WHERE p.app_id::TEXT = $1 OR a.keycloak_client_id = $1
+				 LIMIT 1`,
 			req.AppID,
-		).Scan(&reqEnrolled, &reqDisk, &reqVulns)
+		).Scan(&reqEnrolled, &reqDisk, &reqVulns, &maxOsAgeDays)
 		if err == nil {
 			policy = appPolicy{
 				RequireEnrolled:        reqEnrolled,
 				RequireDiskEncrypted:   reqDisk,
 				RequireNoCriticalVulns: reqVulns,
+				MaxOsAgeDays:           maxOsAgeDays,
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			h.logger.Error("access eval: failed to load app policy",
@@ -255,6 +264,9 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		if policy.RequireNoCriticalVulns && (len(state.Vulnerabilities) > 0 || state.UnknownVulns) {
 			reasons = append(reasons, "app policy requires no critical vulnerabilities on device "+devID)
+		}
+		if policy.MaxOsAgeDays != nil {
+			reasons = append(reasons, "app policy max OS age is configured but not supported by available Fleet posture data")
 		}
 	}
 

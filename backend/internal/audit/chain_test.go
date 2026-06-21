@@ -66,6 +66,35 @@ func (d *fakeDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row 
 	}
 	return fakeRow{} // pgx.ErrNoRows
 }
+func (d *fakeDB) Begin(ctx context.Context) (pgx.Tx, error) {
+	return &fakeTx{db: d}, nil
+}
+
+type fakeTx struct {
+	db *fakeDB
+}
+
+func (tx *fakeTx) Begin(ctx context.Context) (pgx.Tx, error) { return tx, nil }
+func (tx *fakeTx) Commit(ctx context.Context) error          { return nil }
+func (tx *fakeTx) Rollback(ctx context.Context) error        { return nil }
+func (tx *fakeTx) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
+	return 0, nil
+}
+func (tx *fakeTx) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults { return nil }
+func (tx *fakeTx) LargeObjects() pgx.LargeObjects                               { return pgx.LargeObjects{} }
+func (tx *fakeTx) Prepare(ctx context.Context, name, sql string) (*pgconn.StatementDescription, error) {
+	return nil, nil
+}
+func (tx *fakeTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return tx.db.Exec(ctx, sql, args...)
+}
+func (tx *fakeTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return tx.db.Query(ctx, sql, args...)
+}
+func (tx *fakeTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return tx.db.QueryRow(ctx, sql, args...)
+}
+func (tx *fakeTx) Conn() *pgx.Conn { return nil }
 
 // buildChain constructs a realistic sequence of entries (actorID, action, ...) and
 // returns them as ChainEntry values with correct hashes computed in order.
@@ -184,6 +213,37 @@ func TestVerifyChainDeletedMiddleRow(t *testing.T) {
 	}
 	if res.FirstBreakSeq != 3 {
 		t.Errorf("expected break at seq=3, got %d", res.FirstBreakSeq)
+	}
+}
+
+func TestVerifyChainPrunedPrefixWithAnchor(t *testing.T) {
+	raw := []ChainEntry{
+		{Seq: 1, ID: "a", ActorID: "alice", Action: "onboard", TargetType: "user", TargetID: "u1", Details: "{}"},
+		{Seq: 2, ID: "b", ActorID: "bob", Action: "offboard", TargetType: "user", TargetID: "u2", Details: "{}"},
+		{Seq: 3, ID: "c", ActorID: "alice", Action: "login", TargetType: "user", TargetID: "u1", Details: "{}"},
+	}
+	chain := buildChain(raw)
+	retained := []ChainEntry{chain[1], chain[2]}
+
+	db := &fakeDB{
+		queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+			return chainRows(retained), nil
+		},
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error {
+				*dest[0].(*int64) = retained[0].Seq
+				*dest[1].(*string) = retained[0].PrevHash
+				return nil
+			}}
+		},
+	}
+
+	res, err := VerifyChain(context.Background(), db)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.OK {
+		t.Fatalf("expected OK=true for anchored retained chain, got false: %s", res.Error)
 	}
 }
 

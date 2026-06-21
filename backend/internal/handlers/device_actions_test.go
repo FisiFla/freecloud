@@ -115,6 +115,14 @@ func TestRemoteLock_AuditWritten(t *testing.T) {
 			return pgconn.CommandTag{}, nil
 		},
 	}
+	db.beginFn = func(_ context.Context) (pgx.Tx, error) {
+		return &fakeTx{
+			execFn: db.execFn,
+			queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			},
+		}, nil
+	}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/lock", nil)

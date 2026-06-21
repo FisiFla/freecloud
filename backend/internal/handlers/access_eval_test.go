@@ -403,6 +403,111 @@ func TestAccessEvalPolicyLookupErrorDenies(t *testing.T) {
 	}
 }
 
+func TestAccessEvalLoadsPolicyByKeycloakClientID(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const keycloakClientID = "kc-client-uuid"
+	const devID = "dev-noenc"
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM users "):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = userID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM users_devices_mapping"):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = devID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM app_access_policies"):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*bool)) = false
+					*(dest[1].(*bool)) = true
+					*(dest[2].(*bool)) = false
+					*(dest[3].(**int)) = nil
+					return nil
+				}}
+			default:
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+	}
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			return &fleet.SecurityState{FirewallEnabled: true, DiskEncrypted: false}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, AppID: keycloakClientID, DeviceID: devID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	foundPolicyReason := false
+	for _, reason := range resp.Reasons {
+		if reason == "app policy requires disk encryption on device "+devID {
+			foundPolicyReason = true
+			break
+		}
+	}
+	if !foundPolicyReason {
+		t.Fatalf("expected app-policy disk encryption reason, got: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalLegacyMaxOSAgePolicyFailsClosed(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const appID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	const devID = "dev-clean"
+	maxAge := 90
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM users "):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = userID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM users_devices_mapping"):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = devID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM app_access_policies"):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*bool)) = false
+					*(dest[1].(*bool)) = false
+					*(dest[2].(*bool)) = false
+					*(dest[3].(**int)) = &maxAge
+					return nil
+				}}
+			default:
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+	}
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			return &fleet.SecurityState{FirewallEnabled: true, DiskEncrypted: true}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, AppID: appID, DeviceID: devID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Fatal("expected allow=false for legacy max OS age policy")
+	}
+	if len(resp.Reasons) != 1 || resp.Reasons[0] != "app policy max OS age is configured but not supported by available Fleet posture data" {
+		t.Fatalf("unexpected reasons: %v", resp.Reasons)
+	}
+}
+
 func TestAccessEvalDenyDiskEncryption(t *testing.T) {
 	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	const devID = "dev-noenc"

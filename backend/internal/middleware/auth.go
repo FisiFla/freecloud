@@ -203,13 +203,15 @@ func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	var id string
 	var role string
+	var serviceIdentity string
 	var revokedAt *time.Time
 	var expiresAt *time.Time
 	err := a.db.QueryRow(r.Context(),
-		`SELECT role, revoked_at, expires_at FROM api_tokens WHERE token_hash = $1`,
+		`SELECT id::TEXT, role, service_identity, revoked_at, expires_at FROM api_tokens WHERE token_hash = $1`,
 		hash,
-	).Scan(&role, &revokedAt, &expiresAt)
+	).Scan(&id, &role, &serviceIdentity, &revokedAt, &expiresAt)
 	if err != nil {
 		writeAuthError(w, http.StatusUnauthorized, "unauthorized: invalid API token")
 		return
@@ -229,8 +231,8 @@ func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	claims := &JWTClaims{
-		Sub:               "api-token",
-		PreferredUsername: "api-token",
+		Sub:               "api-token:" + id,
+		PreferredUsername: "api-token:" + serviceIdentity,
 		IsAdmin:           resolved == RoleSuperAdmin,
 		Role:              resolved,
 	}

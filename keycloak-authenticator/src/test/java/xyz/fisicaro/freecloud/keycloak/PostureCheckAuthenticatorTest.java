@@ -8,13 +8,19 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.keycloak.authentication.AuthenticationFlowContext;
 import org.keycloak.authentication.AuthenticationFlowError;
 import org.keycloak.forms.login.LoginFormsProvider;
+import org.keycloak.models.ClientModel;
 import org.keycloak.models.UserModel;
+import org.keycloak.sessions.AuthenticationSessionModel;
 
 import jakarta.ws.rs.core.HttpHeaders;
+import jakarta.ws.rs.core.Cookie;
 import jakarta.ws.rs.core.Response;
 
 import java.util.Collections;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -28,6 +34,8 @@ class PostureCheckAuthenticatorTest {
     @Mock Response response;
     @Mock org.keycloak.http.HttpRequest httpRequest;
     @Mock HttpHeaders httpHeaders;
+    @Mock AuthenticationSessionModel authSession;
+    @Mock ClientModel client;
 
     @BeforeEach
     void setUp() {
@@ -77,6 +85,31 @@ class PostureCheckAuthenticatorTest {
         auth.authenticate(context);
         verify(context).success();
         verify(context, never()).failure(any(), any());
+    }
+
+    @Test
+    void testSendsClientAndDeviceContext() {
+        when(context.getAuthenticationSession()).thenReturn(authSession);
+        when(authSession.getClient()).thenReturn(client);
+        when(client.getId()).thenReturn("kc-client-uuid");
+        when(httpHeaders.getCookies()).thenReturn(Map.of(
+            "freecloud-device-id", new Cookie("freecloud-device-id", "host-123")
+        ));
+        AtomicReference<String> capturedBody = new AtomicReference<>("");
+
+        PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
+            "http://localhost:9999/no-server", "token", true,
+            (url, token, body) -> {
+                capturedBody.set(body);
+                return new BackendResponse(200, "{\"data\":{\"allow\":true}}");
+            }
+        );
+        auth.authenticate(context);
+
+        verify(context).success();
+        assertTrue(capturedBody.get().contains("\"userId\":\"user-123\""));
+        assertTrue(capturedBody.get().contains("\"appId\":\"kc-client-uuid\""));
+        assertTrue(capturedBody.get().contains("\"deviceId\":\"host-123\""));
     }
 
     @Test

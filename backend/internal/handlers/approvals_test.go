@@ -119,7 +119,7 @@ func TestDecideApprovalRejectAudited(t *testing.T) {
 			}}
 		},
 		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-			if len(args) > 0 {
+			if len(args) >= 2 {
 				if s, ok := args[1].(string); ok && s == "approval.rejected" {
 					auditInserted = true
 				}
@@ -129,6 +129,14 @@ func TestDecideApprovalRejectAudited(t *testing.T) {
 			}
 			return pgconn.CommandTag{}, nil
 		},
+	}
+	db.beginFn = func(_ context.Context) (pgx.Tx, error) {
+		return &fakeTx{
+			execFn: db.execFn,
+			queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			},
+		}, nil
 	}
 
 	kc := &keycloakNotCalledFake{fakeKeycloak: &fakeKeycloak{}, t: t}
