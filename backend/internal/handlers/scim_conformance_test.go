@@ -264,6 +264,14 @@ func newUserCRUDRouter(t *testing.T) (chi.Router, *Handler, func() map[string]in
 			}
 			return pgconn.CommandTag{}, nil
 		},
+		// SCIMCreateUser persists via persistOnboard, which runs its INSERTs
+		// inside a transaction — the fake must provide a working tx.
+		beginFn: func(ctx context.Context) (pgx.Tx, error) {
+			return &fakeTx{
+				execFn:   func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) { return pgconn.CommandTag{}, nil },
+				commitFn: func(ctx context.Context) error { return nil },
+			}, nil
+		},
 	}
 
 	h := NewHandler(db, kc, &fakeFleet{}, zap.NewNop())
@@ -430,8 +438,8 @@ func TestSCIMConformance_Users_GetNotFound(t *testing.T) {
 
 	r2 := chi.NewRouter()
 	r2.Group(func(r chi.Router) {
-		r2.Use(h.scimBearerMW)
-		r2.Get("/scim/v2/Users/{id}", h.SCIMGetUser)
+		r.Use(h.scimBearerMW)
+		r.Get("/scim/v2/Users/{id}", h.SCIMGetUser)
 	})
 
 	req := authedRequest(t, http.MethodGet, "/scim/v2/Users/nonexistent", nil)
