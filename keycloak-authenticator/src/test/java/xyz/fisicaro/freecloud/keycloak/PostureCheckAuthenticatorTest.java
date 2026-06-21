@@ -72,7 +72,7 @@ class PostureCheckAuthenticatorTest {
     void testAllowResponse() {
         PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
             "http://localhost:9999/no-server", "token", true,
-            (url, token, body) -> new BackendResponse(200, "{\"allow\":true}")
+            (url, token, body) -> new BackendResponse(200, "{\"data\":{\"allow\":true}}")
         );
         auth.authenticate(context);
         verify(context).success();
@@ -83,7 +83,7 @@ class PostureCheckAuthenticatorTest {
     void testDenyResponse() {
         PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
             "http://localhost:9999/no-server", "token", true,
-            (url, token, body) -> new BackendResponse(200, "{\"allow\":false,\"reasons\":[\"firewall disabled\"]}")
+            (url, token, body) -> new BackendResponse(200, "{\"data\":{\"allow\":false,\"reasons\":[\"firewall disabled\"]}}")
         );
         auth.authenticate(context);
         verify(context).failure(eq(AuthenticationFlowError.ACCESS_DENIED), any(Response.class));
