@@ -23,6 +23,7 @@ type KeycloakClientInterface interface {
 	CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
 	DeleteClient(ctx context.Context, clientID string) error
 	AssignUserToClient(ctx context.Context, userID, clientID string) error
+	UnassignUserFromClient(ctx context.Context, userID, clientID string) error
 	GetUserGroups(ctx context.Context, userID string) ([]*gocloak.Group, error)
 	ListGroups(ctx context.Context) ([]*gocloak.Group, error)
 	CreateGroup(ctx context.Context, name string) (string, error)
@@ -64,10 +65,10 @@ type KeycloakClientInterface interface {
 
 // CreateUserResult holds the outcome of a CreateUser operation.
 type CreateUserResult struct {
-	User         *gocloak.User
-	PasswordSet  bool
+	User           *gocloak.User
+	PasswordSet    bool
 	ResetEmailSent bool
-	SetupWarning string
+	SetupWarning   string
 }
 
 // tokenExpiryBuffer is how long before actual expiry a cached admin token is
@@ -540,27 +541,27 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 
 		client.Attributes = &map[string]string{
 			// NameID format: persistent is the most interoperable default.
-			"saml_name_id_format":                                "persistent",
+			"saml_name_id_format": "persistent",
 			// SP entity ID
-			"saml_sp_entity_id":                                  entityID,
+			"saml_sp_entity_id": entityID,
 			// ACS URL (POST binding)
-			"saml.assertion.consumer.service.post.binding.url":   acsURL,
-			"saml_assertion_consumer_url_post":                   acsURL,
+			"saml.assertion.consumer.service.post.binding.url": acsURL,
+			"saml_assertion_consumer_url_post":                 acsURL,
 			// Signing
-			"saml.server.signature":                              "true",
-			"saml.assertion.signature":                           "true",
-			"saml.client.signature":                              "false",
+			"saml.server.signature":    "true",
+			"saml.assertion.signature": "true",
+			"saml.client.signature":    "false",
 			// Token details
-			"saml.authnstatement":                                "true",
-			"saml.onetimeuse.condition":                          "false",
-			"saml.server.signature.keyinfo.ext":                  "false",
-			"saml.force.post.binding":                            "true",
-			"saml.multivalued.roles":                             "false",
-			"saml.encrypt":                                       "false",
+			"saml.authnstatement":               "true",
+			"saml.onetimeuse.condition":         "false",
+			"saml.server.signature.keyinfo.ext": "false",
+			"saml.force.post.binding":           "true",
+			"saml.multivalued.roles":            "false",
+			"saml.encrypt":                      "false",
 			// Logout
-			"saml.server.signature.logout":                       "true",
+			"saml.server.signature.logout": "true",
 			// Session
-			"saml_assertion_lifespan":                            "3600",
+			"saml_assertion_lifespan": "3600",
 		}
 		client.ProtocolMappers = samlProtocolMappers()
 	}
@@ -617,6 +618,31 @@ func (k *KeycloakClient) AssignUserToClient(ctx context.Context, userID, clientI
 	}
 
 	logger.Info("assigned user to client",
+		zap.String("user_id", userID),
+		zap.String("client_id", clientID),
+	)
+	return nil
+}
+
+// UnassignUserFromClient removes the FreeCloud client role mapping from a user.
+func (k *KeycloakClient) UnassignUserFromClient(ctx context.Context, userID, clientID string) error {
+	logger := zap.L()
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+
+	roleName := "user"
+	clientRole, err := k.client.GetClientRole(ctx, token, k.realm, clientID, roleName)
+	if err != nil {
+		return fmt.Errorf("get client role: %w", err)
+	}
+
+	if err := k.client.DeleteClientRolesFromUser(ctx, token, k.realm, clientID, userID, []gocloak.Role{*clientRole}); err != nil {
+		return fmt.Errorf("unassign user %s from client %s: %w", userID, clientID, err)
+	}
+
+	logger.Info("unassigned user from client",
 		zap.String("user_id", userID),
 		zap.String("client_id", clientID),
 	)

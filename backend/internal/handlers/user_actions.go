@@ -4,7 +4,6 @@ package handlers
 // A5 — POST  /api/v1/users/{id}/reset-password : admin-triggered password reset
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -92,8 +91,8 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 	// Load current values from DB to merge
 	var (
 		curFirstName, curLastName, curDepartment, curRole string
-		curDisabled                                        bool
-		curCreatedAt, curUpdatedAt                         time.Time
+		curDisabled                                       bool
+		curCreatedAt, curUpdatedAt                        time.Time
 	)
 	err := h.db.QueryRow(ctx,
 		`SELECT first_name, last_name, COALESCE(department,''), COALESCE(role,''),
@@ -153,16 +152,12 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 
 	// Audit log (detached context)
 	actorID := middleware.GetActorID(ctx)
-	auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, _ = h.db.Exec(auditCtx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "user_update", "user", userID,
-		map[string]interface{}{
-			"first_name": newFirst, "last_name": newLast,
-			"department": newDept, "role": newRole, "enabled": newEnabled,
-		})
+	if err := h.writeAuditEntryDetached(actorID, "user_update", "user", userID, map[string]interface{}{
+		"first_name": newFirst, "last_name": newLast,
+		"department": newDept, "role": newRole, "enabled": newEnabled,
+	}); err != nil {
+		h.logger.Warn("failed to write user update audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusOK, User{
 		ID:             userID,
@@ -213,13 +208,11 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	// Audit log (detached context — this is a privileged security action)
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "user_password_reset", "user", userID,
-			map[string]interface{}{"triggered_by": actorID})
+		if err := h.writeAuditEntryDetached(actorID, "user_password_reset", "user", userID, map[string]interface{}{
+			"triggered_by": actorID,
+		}); err != nil {
+			h.logger.Warn("failed to write password reset audit log", zap.Error(err))
+		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"sent": true})

@@ -400,7 +400,9 @@ func (h *Handler) SCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := h.persistOnboard(persistCtx, kcUserID, onboardReq, "scim-provisioner", `{"source":"scim"}`, ""); err != nil {
+	if err := h.persistOnboard(persistCtx, kcUserID, onboardReq, "scim-provisioner", map[string]interface{}{
+		"source": "scim",
+	}, ""); err != nil {
 		h.logger.Error("scim create: persist failed", zap.String("kc_user_id", kcUserID), zap.Error(err))
 		scimRespondError(w, http.StatusInternalServerError, "failed to persist user", "")
 		return
@@ -617,14 +619,11 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 		 ON CONFLICT (user_id) DO UPDATE SET version = $2, updated_at = NOW()`,
 		userID, newVersion)
 
-	// Write audit log (detached context)
-	auditCtx, acancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer acancel()
-	_, _ = h.db.Exec(auditCtx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		"scim-provisioner", "scim_patch_user", "user", userID,
-		map[string]interface{}{"disabled": disabled})
+	if err := h.writeAuditEntryDetached("scim-provisioner", "scim_patch_user", "user", userID, map[string]interface{}{
+		"disabled": disabled,
+	}); err != nil {
+		h.logger.Warn("failed to write SCIM patch audit log", zap.Error(err))
+	}
 
 	updatedAt = time.Now()
 	u := scimUserFromRow(userID, email, firstName, lastName, disabled, createdAt, updatedAt, newVersion)
@@ -667,14 +666,11 @@ func (h *Handler) SCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 	_, _ = h.db.Exec(ctx,
 		`UPDATE users SET disabled=true, updated_at=NOW() WHERE keycloak_user_id=$1`, userID)
 
-	// Audit (detached context)
-	auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, _ = h.db.Exec(auditCtx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		"scim-provisioner", "scim_delete_user", "user", userID,
-		map[string]interface{}{"email": email})
+	if err := h.writeAuditEntryDetached("scim-provisioner", "scim_delete_user", "user", userID, map[string]interface{}{
+		"email": email,
+	}); err != nil {
+		h.logger.Warn("failed to write SCIM delete audit log", zap.Error(err))
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -135,6 +135,17 @@ func TestSetDeviceIdentityCookie_Success(t *testing.T) {
 	if c.SameSite != http.SameSiteLaxMode {
 		t.Errorf("cookie SameSite: got %v, want Lax", c.SameSite)
 	}
+	var resp APIResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	data, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		t.Fatalf("response data type = %T, want object", resp.Data)
+	}
+	if _, ok := data["hostId"]; ok {
+		t.Fatal("response body must not expose hostId")
+	}
 }
 
 func TestSafePrefix(t *testing.T) {

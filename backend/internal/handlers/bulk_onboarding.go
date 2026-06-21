@@ -206,13 +206,13 @@ func (h *Handler) onboardOne(ctx context.Context, req OnboardRequest, actorID st
 
 	// Step 3: Persist.
 	if h.db != nil {
-		auditDetails, _ := json.Marshal(map[string]interface{}{
+		auditDetails := map[string]interface{}{
 			"email": req.Email, "department": req.Department, "role": req.Role,
 			"source": "bulk_onboard",
-		})
+		}
 		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, string(auditDetails), enrollmentToken); persistErr != nil {
+		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, auditDetails, enrollmentToken); persistErr != nil {
 			return fmt.Errorf("persist: %w", persistErr)
 		}
 	}

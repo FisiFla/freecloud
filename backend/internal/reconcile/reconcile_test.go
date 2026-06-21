@@ -34,18 +34,19 @@ func (f *fakeKC) GetUserSessions(_ context.Context, _ string) ([]*gocloak.UserSe
 func (f *fakeKC) CreateClient(_ context.Context, _, _ string, _ []string, _ string) (string, error) {
 	return "", nil
 }
-func (f *fakeKC) DeleteClient(_ context.Context, _ string) error           { return nil }
-func (f *fakeKC) AssignUserToClient(_ context.Context, _, _ string) error  { return nil }
+func (f *fakeKC) DeleteClient(_ context.Context, _ string) error              { return nil }
+func (f *fakeKC) AssignUserToClient(_ context.Context, _, _ string) error     { return nil }
+func (f *fakeKC) UnassignUserFromClient(_ context.Context, _, _ string) error { return nil }
 func (f *fakeKC) GetUserGroups(_ context.Context, _ string) ([]*gocloak.Group, error) {
 	return nil, nil
 }
 func (f *fakeKC) UpdateUser(_ context.Context, _, _, _, _ string, _ bool) error { return nil }
-func (f *fakeKC) SendPasswordReset(_ context.Context, _ string) error             { return nil }
-func (f *fakeKC) ListGroups(_ context.Context) ([]*gocloak.Group, error)          { return nil, nil }
-func (f *fakeKC) CreateGroup(_ context.Context, _ string) (string, error)         { return "", nil }
-func (f *fakeKC) AddUserToGroup(_ context.Context, _, _ string) error             { return nil }
-func (f *fakeKC) RemoveUserFromGroup(_ context.Context, _, _ string) error        { return nil }
-func (f *fakeKC) ListRealmRoles(_ context.Context) ([]*gocloak.Role, error)       { return nil, nil }
+func (f *fakeKC) SendPasswordReset(_ context.Context, _ string) error           { return nil }
+func (f *fakeKC) ListGroups(_ context.Context) ([]*gocloak.Group, error)        { return nil, nil }
+func (f *fakeKC) CreateGroup(_ context.Context, _ string) (string, error)       { return "", nil }
+func (f *fakeKC) AddUserToGroup(_ context.Context, _, _ string) error           { return nil }
+func (f *fakeKC) RemoveUserFromGroup(_ context.Context, _, _ string) error      { return nil }
+func (f *fakeKC) ListRealmRoles(_ context.Context) ([]*gocloak.Role, error)     { return nil, nil }
 func (f *fakeKC) AssignRealmRoleToUser(_ context.Context, _ string, _ []gocloak.Role) error {
 	return nil
 }
@@ -56,17 +57,19 @@ func (f *fakeKC) GetUserCredentials(_ context.Context, _ string) ([]string, erro
 func (f *fakeKC) GetUserRequiredActions(_ context.Context, _ string) ([]string, error) {
 	return nil, nil
 }
-func (f *fakeKC) SetRequiredAction(_ context.Context, _, _ string) error  { return nil }
+func (f *fakeKC) SetRequiredAction(_ context.Context, _, _ string) error   { return nil }
 func (f *fakeKC) SendPasswordResetEmail(_ context.Context, _ string) error { return nil }
 func (f *fakeKC) ListUsers(_ context.Context) ([]gocloak.User, error) {
 	return f.users, f.err
 }
 
 // B1: SCIM group operations (not used by reconciler — satisfy interface)
-func (f *fakeKC) GetGroupByID(_ context.Context, _ string) (*gocloak.Group, error)     { return nil, nil }
-func (f *fakeKC) ListGroupMembers(_ context.Context, _ string) ([]*gocloak.User, error) { return nil, nil }
-func (f *fakeKC) RenameGroup(_ context.Context, _, _ string) error                      { return nil }
-func (f *fakeKC) DeleteGroup(_ context.Context, _ string) error                         { return nil }
+func (f *fakeKC) GetGroupByID(_ context.Context, _ string) (*gocloak.Group, error) { return nil, nil }
+func (f *fakeKC) ListGroupMembers(_ context.Context, _ string) ([]*gocloak.User, error) {
+	return nil, nil
+}
+func (f *fakeKC) RenameGroup(_ context.Context, _, _ string) error { return nil }
+func (f *fakeKC) DeleteGroup(_ context.Context, _ string) error    { return nil }
 
 // fakeRows implements pgx.Rows backed by a string slice.
 type fakeRows struct {
@@ -87,16 +90,16 @@ func (r *fakeRows) Scan(dest ...any) error {
 }
 
 // Satisfy remaining pgx.Rows methods (unused by reconciler).
-func (r *fakeRows) CommandTag() pgconn.CommandTag                      { return pgconn.CommandTag{} }
-func (r *fakeRows) FieldDescriptions() []pgconn.FieldDescription       { return nil }
-func (r *fakeRows) Values() ([]any, error)                             { return nil, nil }
-func (r *fakeRows) RawValues() [][]byte                                { return nil }
-func (r *fakeRows) Conn() *pgx.Conn                                    { return nil }
+func (r *fakeRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *fakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *fakeRows) Values() ([]any, error)                       { return nil, nil }
+func (r *fakeRows) RawValues() [][]byte                          { return nil }
+func (r *fakeRows) Conn() *pgx.Conn                              { return nil }
 
 // fakePool is a DBPool backed by an in-memory slice of user IDs.
 type fakePool struct {
-	ids    []string
-	qerr   error // error to return from Query
+	ids  []string
+	qerr error // error to return from Query
 }
 
 func (p *fakePool) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {

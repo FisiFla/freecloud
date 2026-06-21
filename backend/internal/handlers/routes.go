@@ -129,8 +129,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		// A3: per-app access policy read
 		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/{appId}/policy", h.GetAppAccessPolicy)
 		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs", h.ListAuditLogs)
-		r.With(middleware.RequirePermission(middleware.PermExportAuditLogs)).Get("/api/v1/audit-logs/export", h.ExportAuditLogs)     // C4
-		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs/verify", h.VerifyAuditChain) // C1
+		r.With(middleware.RequirePermission(middleware.PermExportAuditLogs)).Get("/api/v1/audit-logs/export", h.ExportAuditLogs) // C4
+		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs/verify", h.VerifyAuditChain)  // C1
 		r.With(middleware.RequirePermission(middleware.PermReadUsers)).Get("/api/v1/users", h.ListUsers)
 		r.With(middleware.RequirePermission(middleware.PermReadUsers)).Get("/api/v1/users/{id}", h.GetUser)
 
@@ -192,7 +192,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 		// C4 (FCEX3-16) — Approval workflow.
 		// Helpdesk submits a request; super-admin approves/rejects via PermApproveRequests.
-		r.With(middleware.RequirePermission(middleware.PermOnboardOffboard)).Post("/api/v1/approval-requests", h.SubmitApproval)
+		r.With(middleware.RequirePermission(middleware.PermSubmitApprovals)).Post("/api/v1/approval-requests", h.SubmitApproval)
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequirePermission(middleware.PermApproveRequests))
 			r.Get("/api/v1/approval-requests", h.ListApprovalRequests)

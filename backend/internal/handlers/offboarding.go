@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
@@ -126,23 +125,12 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Write immutable audit log
-	details, _ := json.Marshal(map[string]interface{}{
-		"devices_wiped":  devicesWiped,
-		"devices_failed": devicesFailed,
-		"device_ids":     deviceIDs,
-	})
 	if h.db != nil {
-		// Detached context so a client disconnect can't drop the audit record of
-		// this privileged action.
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, auditErr := h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "offboard", "user", userID, details,
-		)
-		if auditErr != nil {
+		if auditErr := h.writeAuditEntryDetached(actorID, "offboard", "user", userID, map[string]interface{}{
+			"devices_wiped":  devicesWiped,
+			"devices_failed": devicesFailed,
+			"device_ids":     deviceIDs,
+		}); auditErr != nil {
 			logger.Warn("failed to write audit log", zap.Error(auditErr))
 			warnings = append(warnings, "failed to write offboard audit log")
 		}

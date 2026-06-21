@@ -143,17 +143,11 @@ func (h *Handler) UpsertAppAccessPolicy(w http.ResponseWriter, r *http.Request) 
 
 	// Audit log.
 	actorID := middleware.GetActorID(r.Context())
-	_, auditErr := h.db.Exec(ctx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "app_policy_upsert", "app", appID,
-		map[string]interface{}{
-			"require_enrolled":          req.RequireEnrolled,
-			"require_disk_encrypted":    req.RequireDiskEncrypted,
-			"require_no_critical_vulns": req.RequireNoCriticalVulns,
-		},
-	)
-	if auditErr != nil {
+	if auditErr := h.writeAuditEntry(ctx, actorID, "app_policy_upsert", "app", appID, map[string]interface{}{
+		"require_enrolled":          req.RequireEnrolled,
+		"require_disk_encrypted":    req.RequireDiskEncrypted,
+		"require_no_critical_vulns": req.RequireNoCriticalVulns,
+	}); auditErr != nil {
 		h.logger.Warn("failed to write audit log", zap.Error(auditErr))
 	}
 

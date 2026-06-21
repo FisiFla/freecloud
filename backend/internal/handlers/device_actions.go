@@ -2,9 +2,7 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -47,16 +45,9 @@ func (h *Handler) RemoteLock(w http.ResponseWriter, r *http.Request) {
 
 	// Detached audit write — client disconnect must not drop the record.
 	if h.db != nil {
-		details, _ := json.Marshal(map[string]interface{}{
+		if err := h.writeAuditEntryDetached(actorID, "device_lock", "device", deviceID, map[string]interface{}{
 			"device_id": deviceID,
-		})
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "device_lock", "device", deviceID, details,
-		); err != nil {
+		}); err != nil {
 			h.logger.Warn("failed to write audit log for remote lock", zap.Error(err))
 		}
 	}

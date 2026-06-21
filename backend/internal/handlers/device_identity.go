@@ -104,7 +104,7 @@ func (h *Handler) SetDeviceIdentityCookie(w http.ResponseWriter, r *http.Request
 		Path:     "/",
 		MaxAge:   int(deviceCookieTTL.Seconds()),
 		HttpOnly: true,
-		Secure:   true,  // Keycloak is served over HTTPS in production
+		Secure:   true, // Keycloak is served over HTTPS in production
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -113,7 +113,6 @@ func (h *Handler) SetDeviceIdentityCookie(w http.ResponseWriter, r *http.Request
 
 	respondJSON(w, http.StatusOK, map[string]string{
 		"status":  "ok",
-		"hostId":  *hostID,
 		"message": "device identity cookie set; proceed to login",
 	})
 }

@@ -6,11 +6,9 @@ package handlers
 // All writes are audited via a detached context.
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/go-chi/chi/v5"
@@ -86,13 +84,11 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "group_create", "group", groupID,
-			map[string]interface{}{"name": req.Name})
+		if err := h.writeAuditEntryDetached(actorID, "group_create", "group", groupID, map[string]interface{}{
+			"name": req.Name,
+		}); err != nil {
+			h.logger.Warn("failed to write group create audit log", zap.Error(err))
+		}
 	}
 
 	respondJSON(w, http.StatusCreated, GroupResponse{ID: groupID, Name: req.Name})
@@ -131,13 +127,11 @@ func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "user_group_assign", "user", userID,
-			map[string]interface{}{"group_id": req.GroupID})
+		if err := h.writeAuditEntryDetached(actorID, "user_group_assign", "user", userID, map[string]interface{}{
+			"group_id": req.GroupID,
+		}); err != nil {
+			h.logger.Warn("failed to write group assignment audit log", zap.Error(err))
+		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"assigned": true})
@@ -165,13 +159,11 @@ func (h *Handler) UnassignUserFromGroup(w http.ResponseWriter, r *http.Request) 
 
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "user_group_unassign", "user", userID,
-			map[string]interface{}{"group_id": groupID})
+		if err := h.writeAuditEntryDetached(actorID, "user_group_unassign", "user", userID, map[string]interface{}{
+			"group_id": groupID,
+		}); err != nil {
+			h.logger.Warn("failed to write group unassignment audit log", zap.Error(err))
+		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"unassigned": true})
@@ -233,13 +225,12 @@ func (h *Handler) AssignRealmRoleToUser(w http.ResponseWriter, r *http.Request) 
 
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "user_role_assign", "user", userID,
-			map[string]interface{}{"role_id": req.RoleID, "role_name": req.RoleName})
+		if err := h.writeAuditEntryDetached(actorID, "user_role_assign", "user", userID, map[string]interface{}{
+			"role_id":   req.RoleID,
+			"role_name": req.RoleName,
+		}); err != nil {
+			h.logger.Warn("failed to write role assignment audit log", zap.Error(err))
+		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"assigned": true})

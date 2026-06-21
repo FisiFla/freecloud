@@ -242,13 +242,11 @@ func (h *Handler) CreateAppFromTemplate(w http.ResponseWriter, r *http.Request) 
 
 	// Write audit log.
 	actorID := middleware.GetActorID(r.Context())
-	_, auditErr := h.db.Exec(ctx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "app_create_from_template", "app", appID,
-		map[string]interface{}{"name": name, "protocol": tmpl.Protocol, "template_id": tmpl.ID},
-	)
-	if auditErr != nil {
+	if auditErr := h.writeAuditEntry(ctx, actorID, "app_create_from_template", "app", appID, map[string]interface{}{
+		"name":        name,
+		"protocol":    tmpl.Protocol,
+		"template_id": tmpl.ID,
+	}); auditErr != nil {
 		h.logger.Warn("failed to write audit log", zap.Error(auditErr))
 	}
 

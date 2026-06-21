@@ -142,11 +142,10 @@ func VerifyChain(ctx context.Context, db DBPool) (VerifyResult, error) {
 		}
 		result.RowsChecked++
 
-		// A row written before Migration028 has empty hashes — treat as a
-		// pre-chain anchor (the migration backfills these, but guard anyway).
 		if e.RowHash == "" {
-			prevHash = ""
-			continue
+			result.FirstBreakSeq = e.Seq
+			result.Error = fmt.Sprintf("seq %d: missing row_hash", e.Seq)
+			return result, nil
 		}
 
 		if e.PrevHash != prevHash {
