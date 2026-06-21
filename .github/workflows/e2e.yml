@@ -29,6 +29,29 @@ jobs:
         run: |
           docker compose -f docker/docker-compose.e2e.yml up -d
 
+      - name: Bootstrap Keycloak realm
+        env:
+          APP_ENV: test
+          ALLOW_DEV_SETUP: "true"
+          CREATE_DEMO_USER: "false"
+          KEYCLOAK_URL: http://localhost:8083
+          KEYCLOAK_ADMIN: admin
+          KEYCLOAK_ADMIN_PASSWORD: admin
+          KEYCLOAK_REALM: freecloud-e2e
+          KEYCLOAK_CLIENT_SECRET: freecloud-secret
+        run: |
+          echo "Waiting for Keycloak admin API at http://localhost:8083..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8083/realms/master >/dev/null 2>&1; then
+              echo "Keycloak ready."
+              break
+            fi
+            echo "  attempt $i/60..."
+            sleep 2
+          done
+          curl -sf http://localhost:8083/realms/master >/dev/null
+          bash backend/cmd/scripts/setup_realm.sh
+
       - name: Wait for backend to be ready
         run: |
           echo "Waiting for backend at http://localhost:8085/healthz..."

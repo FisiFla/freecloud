@@ -286,7 +286,7 @@ func TestE2E_Onboard_EnrollmentCallback_Offboard(t *testing.T) {
 	headers := map[string]string{
 		"X-Fleet-Signature": sig,
 	}
-	status, body := do(t, http.MethodPost, "/api/v1/fleet/enrollment-callback", headers, nil)
+	status, body := do(t, http.MethodPost, "/api/v1/fleet/enrollment-callback", headers, json.RawMessage(payload))
 	// Expect 400 (unknown token) or 200 — not 401/403 (signature check must pass)
 	if status == 401 || status == 403 {
 		t.Fatalf("enrollment callback: HMAC rejected (got %d): %s", status, body)
