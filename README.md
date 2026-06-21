@@ -5,10 +5,76 @@ Unified, open-source identity and device management. A single pane of glass over
 ## Architecture
 
 - **Backend:** Go + Chi router + gocloak (Keycloak admin client)
-- **Frontend:** Next.js 14 (App Router) + TypeScript + Tailwind CSS
+- **Frontend:** Next.js 16 (App Router) + React 19 + TypeScript + Tailwind CSS 4
 - **Database:** PostgreSQL 16
 - **Identity:** Keycloak 25+ (OIDC, SAML, SCIM)
 - **MDM:** FleetDM
+- **Reverse proxy:** Caddy (production TLS termination)
+
+## Architecture
+
+```mermaid
+graph LR
+    Browser --> Caddy
+    Caddy --> Frontend["Next.js Frontend\n:3000"]
+    Caddy --> Backend["Go Backend API\n:8080"]
+    Backend --> Keycloak["Keycloak\n(Identity / SSO / SCIM)\n:8081"]
+    Backend --> FleetDM["FleetDM\n(MDM)\n:8082 (mock) / real"]
+    Backend --> Postgres["PostgreSQL\n:5432"]
+    FleetDM -.->|"enrollment callback\nHMAC-SHA256"| Backend
+```
+
+### Core Flows
+
+**Employee onboarding / offboarding**
+
+```mermaid
+sequenceDiagram
+    actor Admin
+    participant FE as Frontend
+    participant BE as Backend API
+    participant KC as Keycloak
+    participant Fleet as FleetDM
+    participant DB as PostgreSQL
+
+    Admin->>FE: Fill onboard form
+    FE->>BE: POST /api/v1/onboard
+    BE->>DB: Idempotency pre-check (409 if duplicate)
+    BE->>KC: Create user + assign groups/roles
+    BE->>Fleet: Mint enrollment token
+    BE->>DB: Persist user + enrollment_token (single tx)
+    BE-->>FE: enrollmentToken + enrollmentURL
+    Note over Fleet,BE: Device enrolls later
+    Fleet-->>BE: POST /fleet/enrollment-callback (HMAC signed)
+    BE->>DB: Link device ↔ user (consume token)
+
+    Admin->>FE: Trigger offboard
+    FE->>BE: POST /api/v1/offboard/{userId}
+    BE->>KC: Disable account (502 on failure — fail closed)
+    BE->>KC: Terminate all sessions
+    BE->>Fleet: Wipe all linked devices
+    BE->>DB: Record audit entry
+```
+
+**Conditional access (device posture check)**
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant KC as Keycloak
+    participant SPI as Keycloak Authenticator SPI
+    participant BE as Backend API
+    participant Fleet as FleetDM
+
+    User->>KC: SSO login attempt
+    KC->>SPI: Evaluate authenticator
+    SPI->>BE: POST /api/v1/access/evaluate (ACCESS_EVAL_TOKEN)
+    BE->>Fleet: Fetch device posture for user
+    BE->>DB: Load per-app access policy
+    BE-->>SPI: { allowed: true/false, failures: [...] }
+    SPI-->>KC: Grant or deny session
+    KC-->>User: Redirect (success) or access-blocked page
+```
 
 ## Quick Start
 
@@ -62,17 +128,47 @@ freecloud/
 
 ## API Endpoints
 
+A full reference is in [docs/API.md](docs/API.md). Quick summary:
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | /api/v1/onboard | Employee onboarding (Keycloak + FleetDM) |
+| POST | /api/v1/onboard/bulk | Bulk CSV onboarding |
 | POST | /api/v1/offboard/{userId} | Panic button offboarding |
 | POST | /api/v1/auth/device-check | Device posture assessment |
-| POST | /api/v1/apps/create | Register SSO application |
+| POST | /api/v1/auth/forgot-password | Self-service password reset (public) |
+| POST | /api/v1/apps/create | Register SSO application (OIDC or SAML) |
 | POST | /api/v1/apps/{appId}/assign | Assign user to app |
+| GET/PUT | /api/v1/apps/{appId}/policy | Per-app conditional access policy |
 | POST | /api/v1/fleet/enrollment-callback | FleetDM enrollment webhook (HMAC-authenticated) |
 | GET | /api/v1/apps | List connected apps |
+| GET | /api/v1/users | List users |
+| GET/PATCH | /api/v1/users/{id} | Get / update user profile |
+| POST | /api/v1/users/{id}/reset-password | Admin password reset |
+| GET/POST | /api/v1/groups | List / create Keycloak groups |
+| POST/DELETE | /api/v1/users/{id}/groups[/{groupId}] | Assign / unassign user from group |
+| GET/POST | /api/v1/roles, /api/v1/users/{id}/roles | List realm roles / assign to user |
+| GET/POST | /api/v1/users/{id}/mfa-status, /require-mfa | MFA status and enforcement |
+| GET | /api/v1/users/{id}/devices/software | Software inventory per user |
+| GET | /api/v1/users/{id}/devices/compliance | Device compliance posture per user |
+| GET | /api/v1/compliance | Org-wide compliance summary |
+| GET | /api/v1/policies | Fleet policies |
+| GET/POST | /api/v1/teams | Fleet teams |
+| POST | /api/v1/teams/{id}/policies | Assign policy to team |
+| POST | /api/v1/teams/{id}/hosts | Move hosts to team |
+| POST | /api/v1/devices/{id}/lock | Remote device lock |
 | GET | /api/v1/audit-logs | View audit trail |
-| GET | /api/v1/health | Health check |
+| GET | /api/v1/audit-logs/export | Export audit log (CSV or JSON) |
+| GET/POST/DELETE | /api/v1/api-tokens | Manage API tokens (super-admin) |
+| GET/POST | /api/v1/campaigns | Access review campaigns |
+| GET/POST/DELETE | /api/v1/portal/... | Self-service portal |
+| POST | /api/v1/access/evaluate | Posture check for conditional access SPI |
+| GET | /api/v1/admin/drift | Keycloak↔DB reconciliation drift report |
+| GET | /healthz | Liveness probe |
+| GET | /readyz | Readiness probe (DB + Keycloak) |
+| GET | /api/v1/health | Simple health check |
+| GET/GET | /api/v1/health/keycloak, /api/v1/health/fleetdm | Dependency health |
+| GET/POST/PATCH/DELETE | /scim/v2/Users, /scim/v2/Groups | SCIM 2.0 provisioning |
 
 ### FleetDM enrollment callback
 
@@ -144,6 +240,9 @@ APP_ENV=production ALLOW_DEV_SETUP=true CREATE_DEMO_USER=false make kc-setup
 
 ## Documentation
 
+- [docs/QUICKSTART.md](docs/QUICKSTART.md) — zero-to-running in under 5 minutes.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design, data flows, and security model.
+- [docs/API.md](docs/API.md) — full REST API reference and environment variable table.
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, environment
   reference, upgrades, and troubleshooting.
 - [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) — backup scripts, restore

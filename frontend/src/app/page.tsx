@@ -59,12 +59,12 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
-      <p className="mt-1 text-sm text-slate-500">Overview of your FreeCloud instance.</p>
+      <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Dashboard</h1>
+      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Overview of your FreeCloud instance.</p>
 
       {/* Error banner */}
       {error && !loading && (
-        <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="mt-4 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
           <AlertCircle className="h-5 w-5 shrink-0" />
           <span>{error}</span>
         </div>
@@ -77,7 +77,7 @@ export default function DashboardPage() {
           return (
             <div
               key={stat.label}
-              className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md"
+              className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md dark:border-slate-700 dark:bg-slate-900"
             >
               <div className="flex items-center justify-between">
                 <div className={`flex h-12 w-12 items-center justify-center rounded-lg ${stat.color}`}>
@@ -85,20 +85,20 @@ export default function DashboardPage() {
                 </div>
               </div>
               {loading ? (
-                <div className="mt-4 h-8 w-20 animate-pulse rounded bg-slate-200" />
+                <div className="mt-4 h-8 w-20 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
               ) : (
-                <p className="mt-4 text-2xl font-bold text-slate-800">{stat.value}</p>
+                <p className="mt-4 text-2xl font-bold text-slate-800 dark:text-slate-100">{stat.value}</p>
               )}
-              <p className="mt-1 text-sm text-slate-500">{stat.label}</p>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{stat.label}</p>
             </div>
           );
         })}
       </div>
 
       {/* Welcome Card */}
-      <div className="mt-8 rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-800">Welcome to FreeCloud</h2>
-        <p className="mt-2 max-w-2xl text-sm text-slate-500 leading-relaxed">
+      <div className="mt-8 rounded-xl border border-slate-200 bg-white p-8 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Welcome to FreeCloud</h2>
+        <p className="mt-2 max-w-2xl text-sm text-slate-500 leading-relaxed dark:text-slate-400">
           FreeCloud is your unified identity and access management platform. Manage employees,
           applications, devices, and audit logs — all from a single dashboard. Connect your
           identity provider, configure SSO, and automate onboarding &amp; offboarding workflows.

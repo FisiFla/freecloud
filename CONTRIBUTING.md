@@ -47,6 +47,47 @@ cd backend && go install golang.org/x/vuln/cmd/govulncheck@latest && "$(go env G
   `//go:build integration` test exercised by `make test-db`.
 - Match the surrounding code style; keep changes surgical.
 
+## Design Tokens & Shared Components
+
+Frontend contributors should be aware of:
+
+- **CSS entry point:** `frontend/src/app/globals.css` — imports Tailwind CSS 4 via
+  `@import "tailwindcss"` and loads the v3-compat config via `@config`. Add any
+  global CSS resets or base styles here.
+- **Tailwind config:** `frontend/tailwind.config.js` — extend themes (colors,
+  spacing, font families) here, not with inline styles.
+- **Shared components:** `frontend/src/components/`
+  - `Sidebar.tsx` — root layout sidebar; includes the dark mode toggle.
+  - `ConfirmDialog.tsx` — reusable confirmation modal.
+  - `SlideOver.tsx` — slide-over panel for forms.
+  - `EmptyState.tsx` — consistent empty-state placeholder.
+  - `ErrorBanner.tsx` — error message display.
+  - `LoadingRows.tsx` — skeleton loader for table rows.
+- **Dark mode:** class-based (`dark:` Tailwind variants). The toggle lives in
+  `Sidebar.tsx` and persists the user's preference to `localStorage` under the key
+  `theme`. Both modes must meet **WCAG AA contrast** (4.5:1 for body text, 3:1 for
+  large text / UI components). Test both when touching colors.
+- **Accessibility:** use semantic HTML elements, add `aria-label` attributes to
+  icon-only controls, and verify keyboard navigation (Tab order, focus rings, modal
+  trap) for any new interactive component.
+
+## Project Structure
+
+The documentation lives in `docs/`:
+
+| File | Contents |
+|---|---|
+| `docs/QUICKSTART.md` | Zero-to-running guide for new contributors |
+| `docs/ARCHITECTURE.md` | System design, data flows, security model, DB schema |
+| `docs/API.md` | Full REST endpoint and environment variable reference |
+| `docs/DEPLOYMENT.md` | Production deployment runbook |
+| `docs/BACKUP_RESTORE.md` | Backup and restore runbook |
+| `docs/OBSERVABILITY.md` | Prometheus metrics, Grafana dashboard, alert rules |
+| `docs/adr/` | Architecture Decision Records |
+
+When adding a new endpoint, update `docs/API.md`. When making a significant
+architecture decision, add an ADR under `docs/adr/`.
+
 ## Pull Requests
 
 Open PRs against `main`. CI (`verify` + `db-integration`) must be green. Releases
