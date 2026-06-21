@@ -130,6 +130,7 @@ func (k *KeycloakClient) CreateUser(ctx context.Context, firstName, lastName, em
 	userID := uuid.New().String()
 	user := gocloak.User{
 		ID:        &userID,
+		Username:  &email,
 		FirstName: &firstName,
 		LastName:  &lastName,
 		Email:     &email,
@@ -149,6 +150,7 @@ func (k *KeycloakClient) CreateUser(ctx context.Context, firstName, lastName, em
 	result := &CreateUserResult{
 		User: &gocloak.User{
 			ID:        &created,
+			Username:  &email,
 			FirstName: &firstName,
 			LastName:  &lastName,
 			Email:     &email,
