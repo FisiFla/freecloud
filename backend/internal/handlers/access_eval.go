@@ -13,10 +13,12 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -59,7 +61,7 @@ func accessEvalBearerMiddleware(token string) func(http.Handler) http.Handler {
 				respondError(w, http.StatusUnauthorized, "Bearer token required")
 				return
 			}
-			if strings.TrimPrefix(auth, "Bearer ") != token {
+			if !constantTimeStringEqual(strings.TrimPrefix(auth, "Bearer "), token) {
 				respondError(w, http.StatusUnauthorized, "invalid bearer token")
 				return
 			}
@@ -180,9 +182,21 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 				RequireDiskEncrypted:   reqDisk,
 				RequireNoCriticalVulns: reqVulns,
 			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			h.logger.Error("access eval: failed to load app policy",
+				zap.String("user_id", req.UserID),
+				zap.String("app_id", req.AppID),
+				zap.Error(err),
+			)
+			h.auditAccessDecision(req.UserID, req.AppID, false, []string{"app policy lookup failed"})
+			respondJSON(w, http.StatusOK, AccessEvalResponse{
+				Allow:   false,
+				Reasons: []string{"app policy lookup failed"},
+			})
+			return
 		}
-		// ErrNoRows → zero-value policy (no requirements). Any other error → also
-		// use zero-value policy (fail open for policy load, fail closed for posture).
+		// ErrNoRows → zero-value policy (no requirements), matching the policy
+		// API's documented "no policy row means no posture gate" behavior.
 	}
 
 	// 4. Evaluate posture for every device.

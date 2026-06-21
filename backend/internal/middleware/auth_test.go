@@ -501,6 +501,22 @@ func TestAPITokenMiddlewareStoredRoleAllowsPermission(t *testing.T) {
 	}
 }
 
+func TestAPITokenMiddlewareRequiresBearerScheme(t *testing.T) {
+	base := NewAuthMiddleware("http://localhost:8081", "freecloud", "freecloud-dashboard")
+	apiMW := NewAPITokenMiddleware(base, fakeTokenDB{role: string(RoleSuperAdmin)})
+	handler := apiMW.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("bare API token must not reach the protected handler")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/api-tokens", nil)
+	req.Header.Set("Authorization", "fc_testtoken")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bare API token: expected 401, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestAPITokenMiddlewareStoredRoleDeniesMissingPermission(t *testing.T) {
 	base := NewAuthMiddleware("http://localhost:8081", "freecloud", "freecloud-dashboard")
 	apiMW := NewAPITokenMiddleware(base, fakeTokenDB{role: string(RoleReadOnly)})

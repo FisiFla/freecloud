@@ -37,7 +37,12 @@ SCRATCH_DATABASE_URL=postgres://user:pass@scratch:5432/postgres \
 ## scripts/backup.sh
 
 Calls `pg_dumpall` to produce a single plain-SQL cluster dump that covers both
-databases. The dump is written to `OUTPUT_DIR/freecloud-backup-<timestamp>.sql`.
+databases. The dump is written to `OUTPUT_DIR/freecloud-backup-<timestamp>.sql`
+with owner-only permissions (`0600`).
+
+The dump contains Keycloak realm data, user records, audit logs, API-token hashes,
+and enrollment tokens. Treat it as sensitive production data: encrypt it before
+copying it off-host and restrict access to the backup directory.
 
 **Requirements:** `pg_dumpall` on `PATH` (part of `postgresql-client`).
 
@@ -57,8 +62,8 @@ Schedule via cron (daily is a good minimum):
 0 2 * * *  DATABASE_URL=postgres://... /opt/freecloud/scripts/backup.sh /var/backups/freecloud/
 ```
 
-Copy dumps off-host after creation (S3, rsync to a second machine, etc.). A
-backup that lives only on the same disk as the database is not a backup.
+Copy encrypted dumps off-host after creation (S3, rsync to a second machine,
+etc.). A backup that lives only on the same disk as the database is not a backup.
 
 ## scripts/restore.sh
 
@@ -139,6 +144,9 @@ docker compose restart keycloak
 Keep at minimum:
 - 7 daily dumps on-host
 - 4 weekly dumps off-host (object storage or second machine)
+
+Encrypt off-host copies with your normal secrets tooling, for example age, GPG,
+or object-storage server-side encryption with tightly scoped IAM access.
 
 Purge old dumps from cron after your retention window:
 

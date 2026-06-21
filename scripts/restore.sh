@@ -36,15 +36,18 @@ if [ -z "${RESTORE_DATABASE_URL:-}" ]; then
   exit 1
 fi
 
-_parsed=$(python3 -c "
-import sys, urllib.parse as p
-u = p.urlparse('$RESTORE_DATABASE_URL')
+_parsed=$(RESTORE_DATABASE_URL="$RESTORE_DATABASE_URL" python3 - <<'PY'
+import os
+import urllib.parse as p
+
+u = p.urlparse(os.environ["RESTORE_DATABASE_URL"])
 print(u.hostname or 'localhost')
 print(u.port or 5432)
 print(u.username or 'postgres')
 print(u.password or '')
 print(u.path.lstrip('/') or 'postgres')
-")
+PY
+)
 PGHOST=$(echo "$_parsed" | sed -n '1p')
 PGPORT=$(echo "$_parsed" | sed -n '2p')
 PGUSER=$(echo "$_parsed" | sed -n '3p')

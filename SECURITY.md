@@ -18,12 +18,16 @@ reports within a few days.
   insecure defaults: the default database DSN, `sslmode=disable`, the `admin-cli`
   Keycloak client, a localhost Keycloak URL, or a missing
   `KEYCLOAK_CLIENT_SECRET` / `FLEET_API_TOKEN` / `FLEET_WEBHOOK_SECRET` /
-  `CORS_ORIGIN`. The frontend refuses to start in production with the placeholder
-  `AUTH_SECRET` or a non-`https` API URL.
-- **API authentication.** Every `/api/v1/*` endpoint (except liveness/readiness
-  and the HMAC-authenticated Fleet callback) requires a Keycloak-issued JWT,
-  validated against the realm JWKS with signature, `exp`, issuer, and audience
-  checks. Management endpoints additionally require the `admin` realm role.
+  `SCIM_BEARER_TOKEN` / `ACCESS_EVAL_TOKEN` / `CORS_ORIGIN`. The frontend refuses
+  to start in production with the placeholder `AUTH_SECRET` or a non-`https` API
+  URL.
+- **API authentication.** Authenticated `/api/v1/*` endpoints require a
+  Keycloak-issued JWT, validated against the realm JWKS with signature, `exp`,
+  issuer, and audience checks. Sensitive routes additionally require explicit
+  RBAC permissions. Public/service exceptions are intentionally narrow:
+  liveness/readiness, the rate-limited forgot-password endpoint, the
+  HMAC-authenticated Fleet callback, the dedicated-bearer access-evaluation
+  endpoint, and the dedicated-bearer SCIM surface.
 - **Fleet enrollment webhook.** `POST /api/v1/fleet/enrollment-callback` is
   authenticated by an HMAC-SHA256 signature over the request body keyed by
   `FLEET_WEBHOOK_SECRET` (constant-time compared); an unset secret rejects all

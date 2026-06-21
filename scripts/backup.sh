@@ -8,9 +8,10 @@
 # The dump includes ALL databases in the cluster (freecloud + keycloak).
 #
 # Requires pg_dumpall on PATH (part of the standard postgresql-client package).
-# The dump is plain SQL — safe to inspect, diff, and restore with psql.
+# The dump is plain SQL and contains identity data/secrets. Treat it as sensitive.
 
 set -euo pipefail
+umask 077
 
 OUTPUT_DIR="${1:-.}"
 
@@ -24,14 +25,17 @@ fi
 # Parse host, port, and user from DATABASE_URL so pg_dumpall can connect.
 # pg_dumpall does not accept a connection URI directly; we pass individual flags.
 # The password is picked up from PGPASSWORD (set below).
-_parsed=$(python3 -c "
-import sys, urllib.parse as p
-u = p.urlparse('$DATABASE_URL')
+_parsed=$(DATABASE_URL="$DATABASE_URL" python3 - <<'PY'
+import os
+import urllib.parse as p
+
+u = p.urlparse(os.environ["DATABASE_URL"])
 print(u.hostname or 'localhost')
 print(u.port or 5432)
 print(u.username or 'postgres')
 print(u.password or '')
-")
+PY
+)
 PGHOST=$(echo "$_parsed" | sed -n '1p')
 PGPORT=$(echo "$_parsed" | sed -n '2p')
 PGUSER=$(echo "$_parsed" | sed -n '3p')
@@ -52,6 +56,7 @@ pg_dumpall \
   --clean \
   --if-exists \
   > "$OUTFILE"
+chmod 600 "$OUTFILE"
 
 SIZE=$(du -h "$OUTFILE" | cut -f1)
 echo "Backup complete: ${OUTFILE} (${SIZE})"
