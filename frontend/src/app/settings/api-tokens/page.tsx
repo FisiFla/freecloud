@@ -104,10 +104,10 @@ export default function APITokensPage() {
   return (
     <div>
       <div className="flex items-center gap-3">
-        <Key className="h-6 w-6 text-indigo-600" />
-        <h1 className="text-2xl font-bold text-slate-800">API Tokens</h1>
+        <Key className="h-6 w-6 text-indigo-600 dark:text-indigo-400" />
+        <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">API Tokens</h1>
       </div>
-      <p className="mt-1 text-sm text-slate-500">
+      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
         Create scoped service-account tokens for automated integrations. Tokens
         are shown only once — store them securely.
       </p>
@@ -120,17 +120,17 @@ export default function APITokensPage() {
 
       {/* New token banner — shown right after creation */}
       {newToken?.token && (
-        <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 p-5">
-          <p className="text-sm font-semibold text-emerald-800">
+        <div className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 p-5 dark:border-emerald-800 dark:bg-emerald-950">
+          <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">
             Token created — copy it now. It will not be shown again.
           </p>
           <div className="mt-3 flex items-center gap-2">
-            <code className="flex-1 overflow-x-auto rounded-lg bg-white px-3 py-2 font-mono text-sm text-slate-800 border border-emerald-200 select-all">
+            <code className="flex-1 overflow-x-auto rounded-lg bg-white px-3 py-2 font-mono text-sm text-slate-800 border border-emerald-200 select-all dark:bg-slate-800 dark:text-slate-100 dark:border-emerald-800">
               {newToken.token}
             </code>
             <button
               onClick={() => copyToClipboard(newToken.token!)}
-              className="flex items-center gap-1 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50"
+              className="flex items-center gap-1 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-sm text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:bg-slate-800 dark:text-emerald-400 dark:hover:bg-slate-700"
               aria-label="Copy token"
             >
               {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
@@ -141,11 +141,11 @@ export default function APITokensPage() {
       )}
 
       {/* Create form */}
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="font-semibold text-slate-800">Create New Token</h2>
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <h2 className="font-semibold text-slate-800 dark:text-slate-100">Create New Token</h2>
         <form onSubmit={handleCreate} className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="block text-sm font-medium text-slate-700">Name</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Name</label>
             <input
               type="text"
               value={name}
@@ -153,15 +153,15 @@ export default function APITokensPage() {
               placeholder="e.g. CI pipeline token"
               required
               maxLength={100}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700">Role</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Role</label>
             <select
               value={role}
               onChange={(e) => setRole(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
             >
               {TOKEN_ROLES.map((r) => (
                 <option key={r} value={r}>
@@ -171,7 +171,7 @@ export default function APITokensPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700">Service Identity</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Identity</label>
             <input
               type="text"
               value={serviceIdentity}
@@ -179,23 +179,23 @@ export default function APITokensPage() {
               placeholder="e.g. github-actions"
               required
               maxLength={100}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700">
-              Expires in days <span className="text-slate-400">(0 = never)</span>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+              Expires in days <span className="text-slate-400 dark:text-slate-500">(0 = never)</span>
             </label>
             <input
               type="number"
               min={0}
               value={expiresInDays}
               onChange={(e) => setExpiresInDays(Number(e.target.value))}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
             />
           </div>
           {createError && (
-            <div className="col-span-2 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+            <div className="col-span-2 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
               <AlertCircle className="h-4 w-4 shrink-0" />
               {createError}
             </div>
@@ -204,7 +204,7 @@ export default function APITokensPage() {
             <button
               type="submit"
               disabled={creating || !name.trim() || !serviceIdentity.trim()}
-              className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="rounded-lg bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-500 dark:hover:bg-indigo-400"
             >
               {creating ? "Creating…" : "Create Token"}
             </button>
@@ -213,13 +213,13 @@ export default function APITokensPage() {
       </div>
 
       {/* Token list */}
-      <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-6 py-4">
-          <h2 className="font-semibold text-slate-800">Active Tokens</h2>
+      <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <div className="border-b border-slate-100 px-6 py-4 dark:border-slate-800">
+          <h2 className="font-semibold text-slate-800 dark:text-slate-100">Active Tokens</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs font-medium uppercase text-slate-500">
+            <thead className="bg-slate-50 text-xs font-medium uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
               <tr>
                 <th className="px-6 py-3 text-left">Name</th>
                 <th className="px-6 py-3 text-left">Role</th>
@@ -229,43 +229,43 @@ export default function APITokensPage() {
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {loading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 6 }).map((__, j) => (
                       <td key={j} className="px-6 py-3">
-                        <div className="h-4 animate-pulse rounded bg-slate-200" />
+                        <div className="h-4 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
                       </td>
                     ))}
                   </tr>
                 ))
               ) : tokens.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-slate-400">
+                  <td colSpan={6} className="px-6 py-8 text-center text-slate-400 dark:text-slate-500">
                     No active tokens. Create one above.
                   </td>
                 </tr>
               ) : (
                 tokens.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-50">
-                    <td className="px-6 py-3 font-medium text-slate-800">{t.name}</td>
+                  <tr key={t.id} className="hover:bg-slate-50 dark:hover:bg-slate-800">
+                    <td className="px-6 py-3 font-medium text-slate-800 dark:text-slate-100">{t.name}</td>
                     <td className="px-6 py-3">
-                      <span className="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700">
+                      <span className="inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300">
                         {t.role}
                       </span>
                     </td>
-                    <td className="px-6 py-3 text-slate-600">{t.serviceIdentity}</td>
-                    <td className="px-6 py-3 text-slate-600">
+                    <td className="px-6 py-3 text-slate-600 dark:text-slate-400">{t.serviceIdentity}</td>
+                    <td className="px-6 py-3 text-slate-600 dark:text-slate-400">
                       {new Date(t.createdAt).toLocaleDateString()}
                     </td>
-                    <td className="px-6 py-3 text-slate-600">
+                    <td className="px-6 py-3 text-slate-600 dark:text-slate-400">
                       {t.expiresAt ? new Date(t.expiresAt).toLocaleDateString() : "Never"}
                     </td>
                     <td className="px-6 py-3 text-right">
                       <button
                         onClick={() => setRevokeTarget(t)}
-                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100"
+                        className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950 dark:text-red-300 dark:hover:bg-red-900"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                         Revoke

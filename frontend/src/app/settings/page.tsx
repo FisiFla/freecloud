@@ -75,16 +75,16 @@ export default function SettingsPage() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-slate-800">Settings</h1>
-      <p className="mt-1 text-sm text-slate-500">View connection status and system health.</p>
+      <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Settings</h1>
+      <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">View connection status and system health.</p>
 
       {/* Health check status */}
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-800">System Health</h2>
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">System Health</h2>
         {healthLoading ? (
-          <div className="mt-3 h-6 w-48 animate-pulse rounded bg-slate-200" />
+          <div className="mt-3 h-6 w-48 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
         ) : healthError ? (
-          <div className="mt-3 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mt-3 flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
             <AlertCircle className="h-5 w-5 shrink-0" />
             <span>{healthError}</span>
           </div>
@@ -93,13 +93,13 @@ export default function SettingsPage() {
             <span
               className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
                 healthStatus === "ok"
-                  ? "bg-emerald-50 text-emerald-700"
-                  : "bg-red-50 text-red-700"
+                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                  : "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
               }`}
             >
               {healthStatus === "ok" ? "Healthy" : healthStatus || "Unknown"}
             </span>
-            <span className="text-sm text-slate-500">
+            <span className="text-sm text-slate-500 dark:text-slate-400">
               Backend status: {healthStatus || "unknown"}
             </span>
           </div>
@@ -110,10 +110,10 @@ export default function SettingsPage() {
         {services.map((service, index) => (
           <div
             key={service.label}
-            className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm"
+            className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900"
           >
             <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-slate-800">{service.label}</h3>
+              <h3 className="font-semibold text-slate-800 dark:text-slate-100">{service.label}</h3>
               <div className="flex items-center gap-2">
                 {service.checking ? (
                   <RefreshCw className="h-5 w-5 animate-spin text-slate-400" />
@@ -122,21 +122,21 @@ export default function SettingsPage() {
                 ) : service.status === "disconnected" ? (
                   <XCircle className="h-5 w-5 text-red-500" />
                 ) : (
-                  <div className="h-5 w-5 rounded-full bg-slate-200" />
+                  <div className="h-5 w-5 rounded-full bg-slate-200 dark:bg-slate-700" />
                 )}
               </div>
             </div>
 
-            <p className="mt-2 text-xs text-slate-400 truncate">{service.endpoint}</p>
+            <p className="mt-2 text-xs text-slate-400 truncate dark:text-slate-500">{service.endpoint}</p>
 
             <div className="mt-4 flex items-center gap-2">
               <span
                 className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
                   service.status === "connected"
-                    ? "bg-emerald-50 text-emerald-700"
+                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
                     : service.status === "disconnected"
-                    ? "bg-red-50 text-red-700"
-                    : "bg-slate-100 text-slate-500"
+                    ? "bg-red-50 text-red-700 dark:bg-red-950 dark:text-red-300"
+                    : "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400"
                 }`}
               >
                 {service.checking
@@ -152,7 +152,7 @@ export default function SettingsPage() {
             <button
               onClick={() => testConnection(index)}
               disabled={service.checking}
-              className="mt-4 w-full rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="mt-4 w-full rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
             >
               {service.checking ? "Testing..." : "Test Connection"}
             </button>
@@ -161,11 +161,11 @@ export default function SettingsPage() {
       </div>
 
       {/* Config Info */}
-      <div className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-lg font-semibold text-slate-800">API Configuration</h2>
-        <p className="mt-1 text-sm text-slate-500">
+      <div className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">API Configuration</h2>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           The frontend connects to the backend at{" "}
-          <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700">
+          <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">
             {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"}
           </code>
         </p>

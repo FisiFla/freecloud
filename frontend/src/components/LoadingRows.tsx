@@ -10,7 +10,7 @@ export default function LoadingRows({ count = 3, className = "h-16" }: LoadingRo
   return (
     <div className="mt-6 space-y-3">
       {Array.from({ length: count }).map((_, i) => (
-        <div key={i} className={`${className} animate-pulse rounded-xl bg-slate-200`} />
+        <div key={i} className={`${className} animate-pulse rounded-xl bg-slate-200 dark:bg-slate-700`} />
       ))}
     </div>
   );

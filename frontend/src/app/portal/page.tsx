@@ -78,15 +78,15 @@ export default function PortalPage() {
     <div>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">My Portal</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">My Portal</h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Your devices, assigned apps, and compliance status.
           </p>
         </div>
         <button
           onClick={fetchData}
           disabled={loading}
-          className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+          className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 shadow-sm hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           Refresh
@@ -101,72 +101,72 @@ export default function PortalPage() {
 
       {/* Compliance summary */}
       <div className="mt-6 grid gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-2 text-slate-500">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
             <Monitor className="h-4 w-4" />
             <span className="text-sm font-medium">My Devices</span>
           </div>
-          <p className="mt-2 text-3xl font-bold text-slate-800">
+          <p className="mt-2 text-3xl font-bold text-slate-800 dark:text-slate-100">
             {loading ? "—" : devices.length}
           </p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-2 text-slate-500">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
             <Grid className="h-4 w-4" />
             <span className="text-sm font-medium">Assigned Apps</span>
           </div>
-          <p className="mt-2 text-3xl font-bold text-slate-800">
+          <p className="mt-2 text-3xl font-bold text-slate-800 dark:text-slate-100">
             {loading ? "—" : apps.length}
           </p>
         </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-2 text-slate-500">
+        <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+          <div className="flex items-center gap-2 text-slate-500 dark:text-slate-400">
             <ShieldCheck className="h-4 w-4" />
             <span className="text-sm font-medium">Compliant Devices</span>
           </div>
-          <p className="mt-2 text-3xl font-bold text-slate-800">
+          <p className="mt-2 text-3xl font-bold text-slate-800 dark:text-slate-100">
             {loading ? "—" : `${compliantCount} / ${totalCount}`}
           </p>
         </div>
       </div>
 
       {/* Devices table */}
-      <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-6 py-4">
-          <h2 className="font-semibold text-slate-800">My Devices</h2>
+      <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <div className="border-b border-slate-100 px-6 py-4 dark:border-slate-800">
+          <h2 className="font-semibold text-slate-800 dark:text-slate-100">My Devices</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs font-medium uppercase text-slate-500">
+            <thead className="bg-slate-50 text-xs font-medium uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
               <tr>
                 <th className="px-6 py-3 text-left">Hostname</th>
                 <th className="px-6 py-3 text-left">OS Version</th>
                 <th className="px-6 py-3 text-left">Last Seen</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {loading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 3 }).map((__, j) => (
                       <td key={j} className="px-6 py-3">
-                        <div className="h-4 animate-pulse rounded bg-slate-200" />
+                        <div className="h-4 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
                       </td>
                     ))}
                   </tr>
                 ))
               ) : devices.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-6 py-8 text-center text-slate-400">
+                  <td colSpan={3} className="px-6 py-8 text-center text-slate-400 dark:text-slate-500">
                     No devices enrolled.
                   </td>
                 </tr>
               ) : (
                 devices.map((d) => (
-                  <tr key={d.fleetHostId} className="hover:bg-slate-50">
-                    <td className="px-6 py-3 font-medium text-slate-800">{d.hostname || d.fleetHostId}</td>
-                    <td className="px-6 py-3 text-slate-600">{d.osVersion || "—"}</td>
-                    <td className="px-6 py-3 text-slate-600">
+                  <tr key={d.fleetHostId} className="hover:bg-slate-50 dark:hover:bg-slate-800">
+                    <td className="px-6 py-3 font-medium text-slate-800 dark:text-slate-100">{d.hostname || d.fleetHostId}</td>
+                    <td className="px-6 py-3 text-slate-600 dark:text-slate-400">{d.osVersion || "—"}</td>
+                    <td className="px-6 py-3 text-slate-600 dark:text-slate-400">
                       {d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString() : "—"}
                     </td>
                   </tr>
@@ -178,48 +178,48 @@ export default function PortalPage() {
       </div>
 
       {/* Assigned apps */}
-      <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-6 py-4">
-          <h2 className="font-semibold text-slate-800">My Apps</h2>
+      <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <div className="border-b border-slate-100 px-6 py-4 dark:border-slate-800">
+          <h2 className="font-semibold text-slate-800 dark:text-slate-100">My Apps</h2>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-xs font-medium uppercase text-slate-500">
+            <thead className="bg-slate-50 text-xs font-medium uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
               <tr>
                 <th className="px-6 py-3 text-left">Name</th>
                 <th className="px-6 py-3 text-left">Protocol</th>
                 <th className="px-6 py-3 text-left">URL</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
               {loading ? (
                 Array.from({ length: 3 }).map((_, i) => (
                   <tr key={i}>
                     {Array.from({ length: 3 }).map((__, j) => (
                       <td key={j} className="px-6 py-3">
-                        <div className="h-4 animate-pulse rounded bg-slate-200" />
+                        <div className="h-4 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />
                       </td>
                     ))}
                   </tr>
                 ))
               ) : apps.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="px-6 py-8 text-center text-slate-400">
+                  <td colSpan={3} className="px-6 py-8 text-center text-slate-400 dark:text-slate-500">
                     No apps assigned.
                   </td>
                 </tr>
               ) : (
                 apps.map((a) => (
-                  <tr key={a.id} className="hover:bg-slate-50">
-                    <td className="px-6 py-3 font-medium text-slate-800">{a.name}</td>
-                    <td className="px-6 py-3 text-slate-600">{a.protocol}</td>
-                    <td className="px-6 py-3 text-slate-600">
+                  <tr key={a.id} className="hover:bg-slate-50 dark:hover:bg-slate-800">
+                    <td className="px-6 py-3 font-medium text-slate-800 dark:text-slate-100">{a.name}</td>
+                    <td className="px-6 py-3 text-slate-600 dark:text-slate-400">{a.protocol}</td>
+                    <td className="px-6 py-3 text-slate-600 dark:text-slate-400">
                       {a.baseUrl ? (
                         <a
                           href={a.baseUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-indigo-600 hover:underline"
+                          className="text-indigo-600 hover:underline dark:text-indigo-400"
                         >
                           {a.baseUrl}
                         </a>
@@ -236,14 +236,14 @@ export default function PortalPage() {
       </div>
 
       {/* Access request form */}
-      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="font-semibold text-slate-800">Request App Access</h2>
-        <p className="mt-1 text-sm text-slate-500">
+      <div className="mt-6 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+        <h2 className="font-semibold text-slate-800 dark:text-slate-100">Request App Access</h2>
+        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
           Submit a request for an app you need access to. An administrator will review it.
         </p>
         <form onSubmit={handleRequestAccess} className="mt-4 space-y-3">
           <div>
-            <label htmlFor="appId" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="appId" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
               App ID (UUID)
             </label>
             <input
@@ -252,12 +252,12 @@ export default function PortalPage() {
               value={requestAppId}
               onChange={(e) => setRequestAppId(e.target.value)}
               placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
               required
             />
           </div>
           <div>
-            <label htmlFor="reason" className="block text-sm font-medium text-slate-700">
+            <label htmlFor="reason" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
               Reason (optional)
             </label>
             <input
@@ -266,16 +266,16 @@ export default function PortalPage() {
               value={requestReason}
               onChange={(e) => setRequestReason(e.target.value)}
               placeholder="Why do you need access?"
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
             />
           </div>
           {requestMsg && (
-            <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
+            <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
               {requestMsg}
             </div>
           )}
           {requestError && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">
+            <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
               <AlertCircle className="h-4 w-4 shrink-0" />
               {requestError}
             </div>
@@ -283,7 +283,7 @@ export default function PortalPage() {
           <button
             type="submit"
             disabled={requesting || !requestAppId.trim()}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-500 dark:hover:bg-indigo-400"
           >
             {requesting ? "Submitting…" : "Submit Request"}
           </button>

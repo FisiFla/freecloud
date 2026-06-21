@@ -57,12 +57,12 @@ export default function GroupsPage() {
     <div>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Groups</h1>
-          <p className="mt-1 text-sm text-slate-500">Manage Keycloak realm groups.</p>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Groups</h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage Keycloak realm groups.</p>
         </div>
         <button
           onClick={() => setShowCreate((v) => !v)}
-          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+          className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-400"
         >
           <Plus className="h-4 w-4" />
           New Group
@@ -77,16 +77,17 @@ export default function GroupsPage() {
 
       {/* Inline create form */}
       {showCreate && (
-        <form onSubmit={handleCreate} className="mt-4 flex items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <form onSubmit={handleCreate} className="mt-4 flex items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
           <div className="flex-1">
-            <label className="block text-sm font-medium text-slate-700">Group Name</label>
+            <label htmlFor="group-name" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Group Name</label>
             <input
+              id="group-name"
               type="text"
               required
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="e.g. Engineering"
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
             />
             {createError && (
               <p className="mt-1 flex items-center gap-1 text-xs text-red-600">
@@ -98,14 +99,14 @@ export default function GroupsPage() {
           <button
             type="submit"
             disabled={creating || !newName.trim()}
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-500 dark:hover:bg-indigo-400"
           >
             {creating ? "Creating..." : "Create"}
           </button>
           <button
             type="button"
             onClick={() => { setShowCreate(false); setNewName(""); setCreateError(null); }}
-            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
           >
             Cancel
           </button>
@@ -115,7 +116,7 @@ export default function GroupsPage() {
       {loading ? (
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[1, 2, 3].map((i) => (
-            <div key={i} className="h-16 animate-pulse rounded-xl bg-slate-200" />
+            <div key={i} className="h-16 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-700" />
           ))}
         </div>
       ) : (
@@ -123,14 +124,14 @@ export default function GroupsPage() {
           {groups.map((g) => (
             <div
               key={g.id}
-              className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+              className="flex items-center gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900"
             >
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400">
                 <Users className="h-5 w-5" />
               </div>
               <div className="min-w-0">
-                <p className="font-medium text-slate-800 truncate">{g.name}</p>
-                <p className="text-xs text-slate-400 font-mono truncate">{g.id}</p>
+                <p className="font-medium text-slate-800 truncate dark:text-slate-100">{g.name}</p>
+                <p className="text-xs text-slate-400 font-mono truncate dark:text-slate-500">{g.id}</p>
               </div>
             </div>
           ))}

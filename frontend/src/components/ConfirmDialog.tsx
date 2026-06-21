@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface ConfirmDialogProps {
   isOpen: boolean;
@@ -23,6 +23,7 @@ export default function ConfirmDialog({
   variant = "default",
 }: ConfirmDialogProps) {
   const [busy, setBusy] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -31,6 +32,12 @@ export default function ConfirmDialog({
     if (isOpen) document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
   }, [isOpen, onClose, busy]);
+
+  useEffect(() => {
+    if (isOpen) {
+      cancelRef.current?.focus();
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -55,10 +62,11 @@ export default function ConfirmDialog({
       {/* Modal */}
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
-          className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl"
+          className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900"
           role="dialog"
           aria-modal="true"
           aria-labelledby="confirm-dialog-title"
+          aria-describedby="confirm-dialog-desc"
         >
           <div className="flex items-start gap-4">
             <div
@@ -73,16 +81,17 @@ export default function ConfirmDialog({
               />
             </div>
             <div className="flex-1">
-              <h3 id="confirm-dialog-title" className="text-lg font-semibold text-slate-800">{title}</h3>
-              <p className="mt-1 text-sm text-slate-500">{message}</p>
+              <h3 id="confirm-dialog-title" className="text-lg font-semibold text-slate-800 dark:text-slate-100">{title}</h3>
+              <p id="confirm-dialog-desc" className="mt-1 text-sm text-slate-500 dark:text-slate-400">{message}</p>
             </div>
           </div>
 
           <div className="mt-6 flex justify-end gap-3">
             <button
+              ref={cancelRef}
               onClick={onClose}
               disabled={busy}
-              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
             >
               Cancel
             </button>
@@ -92,7 +101,7 @@ export default function ConfirmDialog({
               className={`rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors disabled:opacity-50 ${
                 variant === "danger"
                   ? "bg-red-600 hover:bg-red-700"
-                  : "bg-indigo-600 hover:bg-indigo-700"
+                  : "bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-400"
               }`}
             >
               {busy ? "..." : confirmLabel}

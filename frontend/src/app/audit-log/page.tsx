@@ -112,8 +112,8 @@ export default function AuditLogPage() {
     <div>
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Audit Log</h1>
-          <p className="mt-1 text-sm text-slate-500">Track all actions across your FreeCloud instance.</p>
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Audit Log</h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Track all actions across your FreeCloud instance.</p>
         </div>
         {/* C4: Export buttons — honour current actor/action filters */}
         <div className="flex items-center gap-2">
@@ -124,7 +124,7 @@ export default function AuditLogPage() {
                 action: actionFilter !== "All Actions" ? actionFilter : undefined,
               })
             }
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
           >
             <Download className="h-3.5 w-3.5" />
             Export CSV
@@ -136,7 +136,7 @@ export default function AuditLogPage() {
                 action: actionFilter !== "All Actions" ? actionFilter : undefined,
               })
             }
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50"
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
           >
             <Download className="h-3.5 w-3.5" />
             Export JSON
@@ -152,33 +152,35 @@ export default function AuditLogPage() {
       )}
 
       {/* Filters */}
-      <div className="mt-6 flex flex-wrap items-end gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="mt-6 flex flex-wrap items-end gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <div className="flex-1 min-w-[200px]">
-          <label className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">
+          <label htmlFor="actor-filter" className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1 dark:text-slate-400">
             Actor
           </label>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <input
+              id="actor-filter"
               type="text"
               placeholder="Search actor..."
               value={actorFilter}
               onChange={(e) => setActorFilter(e.target.value)}
-              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 placeholder-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-sm text-slate-700 placeholder-slate-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
             />
           </div>
         </div>
 
         <div className="w-full sm:w-44">
-          <label className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">
+          <label htmlFor="action-filter" className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1 dark:text-slate-400">
             Action
           </label>
           <div className="relative">
             <Filter className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
             <select
+              id="action-filter"
               value={actionFilter}
               onChange={(e) => setActionFilter(e.target.value)}
-              className="w-full appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="w-full appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-8 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
             >
               {actionOptions.map((opt) => (
                 <option key={opt} value={opt}>
@@ -190,26 +192,28 @@ export default function AuditLogPage() {
         </div>
 
         <div className="w-full sm:w-40">
-          <label className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">
+          <label htmlFor="date-from" className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1 dark:text-slate-400">
             From
           </label>
           <input
+            id="date-from"
             type="date"
             value={dateFrom}
             onChange={(e) => setDateFrom(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
           />
         </div>
 
         <div className="w-full sm:w-40">
-          <label className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1">
+          <label htmlFor="date-to" className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1 dark:text-slate-400">
             To
           </label>
           <input
+            id="date-to"
             type="date"
             value={dateTo}
             onChange={(e) => setDateTo(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            className="w-full rounded-lg border border-slate-200 bg-white py-2 px-3 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
           />
         </div>
       </div>
@@ -226,11 +230,11 @@ export default function AuditLogPage() {
       ) : (
         <>
           {/* Table */}
-          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                  <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-400">
                     <th className="px-6 py-3">Timestamp</th>
                     <th className="px-6 py-3">Actor</th>
                     <th className="px-6 py-3">Action</th>
@@ -239,21 +243,21 @@ export default function AuditLogPage() {
                     <th className="px-6 py-3">Details</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {filtered.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="whitespace-nowrap px-6 py-4 text-slate-600 font-mono text-xs">
+                    <tr key={log.id} className="hover:bg-slate-50 transition-colors dark:hover:bg-slate-800">
+                      <td className="whitespace-nowrap px-6 py-4 text-slate-600 font-mono text-xs dark:text-slate-400">
                         {formatTimestamp(log.createdAt)}
                       </td>
-                      <td className="px-6 py-4 text-slate-700">{log.actorId}</td>
+                      <td className="px-6 py-4 text-slate-700 dark:text-slate-300">{log.actorId}</td>
                       <td className="px-6 py-4">
-                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                        <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">
                           {log.action}
                         </span>
                       </td>
-                      <td className="px-6 py-4 text-slate-600 capitalize">{log.targetType}</td>
-                      <td className="px-6 py-4 font-mono text-xs text-slate-500">{log.targetId}</td>
-                      <td className="px-6 py-4 text-slate-600 max-w-xs truncate">
+                      <td className="px-6 py-4 text-slate-600 capitalize dark:text-slate-400">{log.targetType}</td>
+                      <td className="px-6 py-4 font-mono text-xs text-slate-500 dark:text-slate-500">{log.targetId}</td>
+                      <td className="px-6 py-4 text-slate-600 max-w-xs truncate dark:text-slate-400">
                         {typeof log.details === "string"
                           ? log.details
                           : JSON.stringify(log.details)}
@@ -262,7 +266,7 @@ export default function AuditLogPage() {
                   ))}
                   {filtered.length === 0 && (
                     <tr>
-                      <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400">
+                      <td colSpan={6} className="px-6 py-8 text-center text-sm text-slate-400 dark:text-slate-500">
                         No audit logs match your filters.
                       </td>
                     </tr>
@@ -273,14 +277,14 @@ export default function AuditLogPage() {
           </div>
 
           <div className="mt-4 flex items-center justify-between">
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-400 dark:text-slate-500">
               Showing {filtered.length} of {logs.length} loaded event{logs.length === 1 ? "" : "s"}
             </p>
             {hasMore && (
               <button
                 onClick={loadMore}
                 disabled={loadingMore}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
               >
                 {loadingMore ? "Loading…" : "Load more"}
               </button>

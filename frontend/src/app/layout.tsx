@@ -21,12 +21,27 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{const d=localStorage.getItem('fc-dark-mode');if(d==='true')document.documentElement.classList.add('dark');}catch(e){}})()`,
+          }}
+        />
+      </head>
       <body className={inter.className}>
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:absolute focus:z-50 focus:px-4 focus:py-2 focus:top-2 focus:left-2 focus:rounded-lg focus:bg-indigo-600 focus:text-white focus:text-sm focus:font-medium"
+        >
+          Skip to main content
+        </a>
         <Providers>
           <div className="flex min-h-screen">
             <Sidebar />
-            <main className="ml-60 flex-1 bg-slate-50 p-8">{children}</main>
+            <main id="main-content" className="ml-60 flex-1 bg-[var(--color-bg)] p-8">
+              {children}
+            </main>
           </div>
         </Providers>
       </body>
