@@ -418,8 +418,6 @@ func TestSCIMConformance_Users_DeleteDeactivates(t *testing.T) {
 }
 
 func TestSCIMConformance_Users_GetNotFound(t *testing.T) {
-	r, _, _ := newUserCRUDRouter(t)
-
 	// Override the db to always return not-found for this test
 	h := setupTestHandler(t)
 	h.SetSCIMBearerToken("test-bearer")
