@@ -205,6 +205,34 @@ export interface ComplianceResponse {
   devices: DeviceHostPosture[];
 }
 
+// B4: App Catalog templates
+export interface AppTemplate {
+  id: string;
+  name: string;
+  protocol: "OIDC" | "SAML";
+  description: string;
+  logoUrl?: string;
+  requiredFields: { name: string; label: string; placeholder?: string; required: boolean }[];
+  defaultRedirectURIs: string[];
+  notes?: string;
+}
+
+export interface CreateAppFromTemplateRequest {
+  name: string;
+  fields: Record<string, string>;
+}
+
+export async function listAppTemplates(): Promise<AppTemplate[]> {
+  return request<AppTemplate[]>("GET", "/api/v1/apps/templates");
+}
+
+export async function createAppFromTemplate(
+  templateId: string,
+  req: CreateAppFromTemplateRequest,
+): Promise<CreateAppResponse> {
+  return request<CreateAppResponse>("POST", `/api/v1/apps/templates/${templateId}/create`, req);
+}
+
 // B4 (kept for global policy listing)
 export interface Policy {
   id: string;
@@ -638,4 +666,41 @@ export async function decideAccessRequest(
   decision: "approved" | "rejected",
 ): Promise<{ status: string }> {
   return request<{ status: string }>("PATCH", `/api/v1/portal/access-requests/${id}`, { decision });
+}
+
+// C4 (FCEX3-16) — Approval workflow (privileged action queue)
+export interface ApprovalRequestItem {
+  id: string;
+  actionType: string;
+  requesterId: string;
+  payload: Record<string, unknown>;
+  status: string;
+  decidedBy?: string;
+  decidedAt?: string;
+  createdAt?: string;
+}
+
+export async function listApprovalRequests(
+  status: "pending" | "approved" | "rejected" | "all" = "pending",
+): Promise<ApprovalRequestItem[]> {
+  return request<ApprovalRequestItem[]>("GET", `/api/v1/approval-requests?status=${status}`);
+}
+
+export async function submitApprovalRequest(
+  actionType: "onboard" | "offboard",
+  payload: Record<string, unknown>,
+): Promise<{ id: string; status: string }> {
+  return request<{ id: string; status: string }>("POST", "/api/v1/approval-requests", {
+    actionType,
+    payload,
+  });
+}
+
+export async function decideApprovalRequest(
+  id: string,
+  decision: "approved" | "rejected",
+): Promise<{ id: string; status: string }> {
+  return request<{ id: string; status: string }>("PATCH", `/api/v1/approval-requests/${id}`, {
+    decision,
+  });
 }
