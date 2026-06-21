@@ -14,9 +14,9 @@ import type { ApprovalRequestItem } from "@/lib/api";
 import { useApiReady } from "../providers";
 
 const statusBadge: Record<string, string> = {
-  pending:  "bg-yellow-100 text-yellow-800",
-  approved: "bg-green-100  text-green-800",
-  rejected: "bg-red-100    text-red-800",
+  pending:  "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300",
+  approved: "bg-green-100  text-green-800  dark:bg-emerald-900/40 dark:text-emerald-300",
+  rejected: "bg-red-100    text-red-800    dark:bg-red-900/40 dark:text-red-300",
 };
 
 export default function ApprovalsPage() {
@@ -93,22 +93,22 @@ export default function ApprovalsPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Approval Requests</h1>
-          <p className="mt-1 text-sm text-gray-500">
+          <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Approval Requests</h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             Privileged actions (onboard / offboard) submitted by helpdesk, pending super-admin sign-off.
           </p>
         </div>
         <div className="flex gap-2">
           <button
             onClick={() => setShowSubmit((v) => !v)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white border rounded-md hover:bg-gray-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white border border-slate-200 rounded-md hover:bg-slate-50 text-slate-600 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700"
           >
             + Submit Request
           </button>
           <button
             onClick={load}
             disabled={loading}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white border rounded-md hover:bg-gray-50 disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-white border border-slate-200 rounded-md hover:bg-slate-50 text-slate-600 disabled:opacity-50 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-700"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
             Refresh
@@ -117,40 +117,40 @@ export default function ApprovalsPage() {
       </div>
 
       {showSubmit && (
-        <div className="border rounded-lg p-4 bg-gray-50">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">Submit a New Request</h2>
+        <div className="border border-slate-200 rounded-lg p-4 bg-slate-50 dark:border-slate-700 dark:bg-slate-800">
+          <h2 className="text-sm font-semibold text-slate-700 mb-3 dark:text-slate-300">Submit a New Request</h2>
           <form onSubmit={handleSubmit} className="space-y-3">
             <div className="flex gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Action Type</label>
+                <label className="block text-xs text-slate-500 mb-1 dark:text-slate-400">Action Type</label>
                 <select
                   value={submitActionType}
                   onChange={(e) => setSubmitActionType(e.target.value as "onboard" | "offboard")}
-                  className="border rounded px-2 py-1.5 text-sm"
+                  className="border border-slate-200 rounded px-2 py-1.5 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
                 >
                   <option value="onboard">Onboard</option>
                   <option value="offboard">Offboard</option>
                 </select>
               </div>
               <div className="flex-1">
-                <label className="block text-xs text-gray-500 mb-1">
-                  Payload (JSON) — e.g. <code className="bg-gray-200 px-1 rounded">{"{\"email\":\"user@example.com\",\"firstName\":\"Jo\",\"lastName\":\"Doe\"}"}</code>
+                <label className="block text-xs text-slate-500 mb-1 dark:text-slate-400">
+                  Payload (JSON) — e.g. <code className="bg-slate-200 px-1 rounded dark:bg-slate-600 dark:text-slate-200">{"{\"email\":\"user@example.com\",\"firstName\":\"Jo\",\"lastName\":\"Doe\"}"}</code>
                 </label>
                 <textarea
                   value={submitPayload}
                   onChange={(e) => setSubmitPayload(e.target.value)}
-                  className="w-full border rounded px-2 py-1.5 text-sm font-mono"
+                  className="w-full border border-slate-200 rounded px-2 py-1.5 text-sm font-mono text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
                   rows={2}
                   placeholder='{"email":"user@example.com","firstName":"Jo","lastName":"Doe"}'
                 />
               </div>
             </div>
-            {submitError && <p className="text-xs text-red-600">{submitError}</p>}
-            {submitMsg  && <p className="text-xs text-green-700">{submitMsg}</p>}
+            {submitError && <p className="text-xs text-red-600 dark:text-red-400">{submitError}</p>}
+            {submitMsg  && <p className="text-xs text-emerald-700 dark:text-emerald-400">{submitMsg}</p>}
             <button
               type="submit"
               disabled={submitting || !submitPayload.trim()}
-              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+              className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 dark:bg-indigo-500 dark:hover:bg-indigo-400"
             >
               {submitting ? "Submitting…" : "Submit"}
             </button>
@@ -167,8 +167,8 @@ export default function ApprovalsPage() {
             onClick={() => setFilter(s)}
             className={`px-3 py-1 rounded-full border capitalize ${
               filter === s
-                ? "bg-gray-900 text-white border-gray-900"
-                : "bg-white text-gray-600 hover:bg-gray-50"
+                ? "bg-slate-900 text-white border-slate-900 dark:bg-slate-100 dark:text-slate-900 dark:border-slate-100"
+                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700 dark:hover:bg-slate-700"
             }`}
           >
             {s}
@@ -176,9 +176,9 @@ export default function ApprovalsPage() {
         ))}
       </div>
 
-      <div className="bg-white border rounded-lg overflow-hidden">
+      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden dark:bg-slate-900 dark:border-slate-700">
         <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+          <thead className="bg-slate-50 text-left text-xs font-medium text-slate-500 uppercase tracking-wider dark:bg-slate-800 dark:text-slate-400">
             <tr>
               <th className="px-4 py-3">Type</th>
               <th className="px-4 py-3">Requester</th>
@@ -188,7 +188,7 @@ export default function ApprovalsPage() {
               <th className="px-4 py-3">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
+          <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
             {loading ? (
               <tr>
                 <td colSpan={6}><LoadingRows count={5} /></td>
@@ -201,10 +201,10 @@ export default function ApprovalsPage() {
               </tr>
             ) : (
               requests.map((req) => (
-                <tr key={req.id} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 font-medium capitalize">{req.actionType}</td>
-                  <td className="px-4 py-3 text-gray-600">{req.requesterId}</td>
-                  <td className="px-4 py-3 max-w-xs truncate font-mono text-xs text-gray-500">
+                <tr key={req.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                  <td className="px-4 py-3 font-medium capitalize text-slate-800 dark:text-slate-100">{req.actionType}</td>
+                  <td className="px-4 py-3 text-slate-600 dark:text-slate-400">{req.requesterId}</td>
+                  <td className="px-4 py-3 max-w-xs truncate font-mono text-xs text-slate-500 dark:text-slate-400">
                     {JSON.stringify(req.payload)}
                   </td>
                   <td className="px-4 py-3">
@@ -215,7 +215,7 @@ export default function ApprovalsPage() {
                       {req.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-gray-500">
+                  <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
                     {req.createdAt ? new Date(req.createdAt).toLocaleString() : "—"}
                   </td>
                   <td className="px-4 py-3">
@@ -238,7 +238,7 @@ export default function ApprovalsPage() {
                       </div>
                     )}
                     {req.status !== "pending" && (
-                      <span className="text-xs text-gray-400">
+                      <span className="text-xs text-slate-400 dark:text-slate-500">
                         {req.decidedBy ? `by ${req.decidedBy}` : "—"}
                       </span>
                     )}
