@@ -73,24 +73,33 @@ type Config struct {
 	SIEMHTTPUrl    string
 	SIEMHTTPToken  string
 	SIEMInterval   time.Duration // 0 means disabled
+
+	// C1 (FCEX3-13) — Audit retention (C2 / FCEX3-14)
+	// AuditPruneInterval controls how often the pruner runs. 0 = disabled.
+	// AuditRetainFor is the retention window. 0 = keep forever.
+	AuditPruneInterval time.Duration
+	AuditRetainFor     time.Duration
 }
 
 // Load reads configuration from environment variables with sensible defaults.
+// Secret fields (anything a leaked value would compromise) use resolveSecret,
+// which honours the _FILE → _VAULT_PATH → plain-env precedence; see
+// internal/config/secrets.go and docs/SECRETS.md for details.
 func Load() *Config {
 	return &Config{
 		Port:                 getEnv("PORT", "8080"),
-		DatabaseURL:          getEnv("DATABASE_URL", defaultDatabaseURL),
+		DatabaseURL:          resolveSecret("DATABASE_URL", defaultDatabaseURL),
 		KeycloakURL:          getEnv("KEYCLOAK_URL", defaultKeycloakURL),
 		KeycloakRealm:        getEnv("KEYCLOAK_REALM", "freecloud"),
 		KeycloakClientID:     getEnv("KEYCLOAK_CLIENT_ID", defaultKeycloakClientID),
-		KeycloakClientSecret: getEnv("KEYCLOAK_CLIENT_SECRET", ""),
+		KeycloakClientSecret: resolveSecret("KEYCLOAK_CLIENT_SECRET", ""),
 		KeycloakAudience:     getEnv("KEYCLOAK_AUDIENCE", "freecloud-dashboard"),
 		FleetURL:             getEnv("FLEET_URL", "http://localhost:8082"),
-		FleetAPIToken:        getEnv("FLEET_API_TOKEN", ""),
-		FleetWebhookSecret:   getEnv("FLEET_WEBHOOK_SECRET", ""),
-		SCIMBearerToken:   getEnv("SCIM_BEARER_TOKEN", ""),
-		AccessEvalToken:   getEnv("ACCESS_EVAL_TOKEN", ""),
-		ReconcileInterval: parseDuration(getEnv("RECONCILE_INTERVAL", "15m")),
+		FleetAPIToken:        resolveSecret("FLEET_API_TOKEN", ""),
+		FleetWebhookSecret:   resolveSecret("FLEET_WEBHOOK_SECRET", ""),
+		SCIMBearerToken:      resolveSecret("SCIM_BEARER_TOKEN", ""),
+		AccessEvalToken:      resolveSecret("ACCESS_EVAL_TOKEN", ""),
+		ReconcileInterval:    parseDuration(getEnv("RECONCILE_INTERVAL", "15m")),
 
 		// D1 — Notifications
 		NotifyEmail:           parseBool(getEnv("NOTIFY_EMAIL", "false")),
@@ -98,12 +107,12 @@ func Load() *Config {
 		SMTPPort:              getEnv("SMTP_PORT", "587"),
 		SMTPFrom:              getEnv("SMTP_FROM", ""),
 		SMTPTo:                getEnv("SMTP_TO", ""),
-		SMTPPassword:          getEnv("SMTP_PASSWORD", ""),
+		SMTPPassword:          resolveSecret("SMTP_PASSWORD", ""),
 		NotifySlack:           parseBool(getEnv("NOTIFY_SLACK", "false")),
-		SlackWebhookURL:       getEnv("SLACK_WEBHOOK_URL", ""),
+		SlackWebhookURL:       resolveSecret("SLACK_WEBHOOK_URL", ""),
 		NotifyWebhook:         parseBool(getEnv("NOTIFY_WEBHOOK", "false")),
 		WebhookURL:            getEnv("WEBHOOK_URL", ""),
-		WebhookSecret:         getEnv("WEBHOOK_SECRET", ""),
+		WebhookSecret:         resolveSecret("WEBHOOK_SECRET", ""),
 		NotifyEventOffboard:   parseBool(getEnv("NOTIFY_EVENT_OFFBOARD", "true")),
 		NotifyEventDrift:      parseBool(getEnv("NOTIFY_EVENT_DRIFT", "true")),
 		NotifyEventCompliance: parseBool(getEnv("NOTIFY_EVENT_COMPLIANCE", "true")),
@@ -115,8 +124,12 @@ func Load() *Config {
 		SIEMSyslogAddr: getEnv("SIEM_SYSLOG_ADDR", ""),
 		SIEMSyslogNet:  getEnv("SIEM_SYSLOG_NET", "udp"),
 		SIEMHTTPUrl:    getEnv("SIEM_HTTP_URL", ""),
-		SIEMHTTPToken:  getEnv("SIEM_HTTP_TOKEN", ""),
+		SIEMHTTPToken:  resolveSecret("SIEM_HTTP_TOKEN", ""),
 		SIEMInterval:   parseDuration(getEnv("SIEM_INTERVAL", "5s")),
+
+		// C1 — Audit retention
+		AuditPruneInterval: parseDuration(getEnv("AUDIT_PRUNE_INTERVAL", "0")),
+		AuditRetainFor:     parseDuration(getEnv("AUDIT_RETAIN_FOR", "0")),
 	}
 }
 
