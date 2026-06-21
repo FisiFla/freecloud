@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -147,5 +149,93 @@ func TestRouterReadEndpointsNotRateLimited(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("read endpoint after onboard limit: expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestEveryAPIRouteIsPermissionGated is a guard for the per-route RBAC model.
+// When the central path-prefix admin gate was removed, authorization became
+// opt-in per route via RequirePermission(...). The risk is that a future route
+// is added without a gate and is silently authenticated-but-unauthorized.
+//
+// This test walks the entire route tree and asserts that a minimal end-user
+// token (which holds only PermSelfService) is forbidden (403) from every route
+// EXCEPT an explicit allowlist of intentional exceptions: public probes,
+// dedicated-bearer service surfaces (which carry their own auth), and the
+// self-service routes an end-user legitimately reaches. Adding a sensitive
+// route without gating it — or without consciously allowlisting it — fails here.
+func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
+	h := setupTestHandler(t)
+	r := newRoleTestRouter(h, middleware.RoleEndUser)
+
+	// Routes intentionally NOT behind a management/read RBAC permission.
+	allow := map[string]bool{
+		// Public liveness/readiness/health probes.
+		"GET /healthz":                true,
+		"GET /readyz":                 true,
+		"GET /api/v1/health":          true,
+		"GET /api/v1/health/keycloak": true,
+		"GET /api/v1/health/fleetdm":  true,
+		// Public / service-authenticated (own auth, not RBAC).
+		"POST /api/v1/fleet/enrollment-callback": true, // HMAC
+		"POST /api/v1/auth/forgot-password":      true, // public, rate-limited
+		"POST /api/v1/access/evaluate":           true, // dedicated bearer
+		// SCIM provisioning surface — dedicated bearer token.
+		"GET /scim/v2/Users":          true,
+		"POST /scim/v2/Users":         true,
+		"GET /scim/v2/Users/{id}":     true,
+		"PATCH /scim/v2/Users/{id}":   true,
+		"DELETE /scim/v2/Users/{id}":  true,
+		"GET /scim/v2/Groups":         true,
+		"POST /scim/v2/Groups":        true,
+		"GET /scim/v2/Groups/{id}":    true,
+		"PATCH /scim/v2/Groups/{id}":  true,
+		"DELETE /scim/v2/Groups/{id}": true,
+		// Self-service — gated by PermSelfService, which end-user holds.
+		"POST /api/v1/auth/device-check":      true,
+		"GET /api/v1/portal/me/devices":       true,
+		"GET /api/v1/portal/me/apps":          true,
+		"GET /api/v1/portal/me/compliance":    true,
+		"POST /api/v1/portal/access-requests": true,
+	}
+
+	paramRe := regexp.MustCompile(`\{[^}]*\}`)
+	var routeCount int
+	var ungated []string
+
+	walkErr := chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		routeCount++
+		key := method + " " + route
+		// Unique client per request so no rate limiter ever interferes.
+		req := httptest.NewRequest(method, paramRe.ReplaceAllString(route, "x"), nil)
+		req.RemoteAddr = fmt.Sprintf("10.10.%d.%d:1000", routeCount/256, routeCount%256)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		if allow[key] {
+			// Allowlisted routes are public / bearer-authed / self-service, so
+			// an end-user must never be RBAC-forbidden on them. A 403 here means
+			// a gate was tightened without updating this allowlist.
+			if rec.Code == http.StatusForbidden {
+				t.Errorf("allowlisted route %q returned 403 to end-user — its gate changed? body=%s",
+					key, strings.TrimSpace(rec.Body.String()))
+			}
+			return nil
+		}
+		// Everything else must be RBAC-gated: a minimal end-user gets 403.
+		if rec.Code != http.StatusForbidden {
+			ungated = append(ungated, fmt.Sprintf("%s -> %d", key, rec.Code))
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("chi.Walk failed: %v", walkErr)
+	}
+	if routeCount < 30 {
+		t.Fatalf("route walk found only %d routes; the walk is likely broken", routeCount)
+	}
+	if len(ungated) > 0 {
+		t.Fatalf("these routes are NOT permission-gated (a minimal end-user token did not get 403).\n"+
+			"Wrap each with middleware.RequirePermission(...) in routes.go, or add it to the allowlist "+
+			"if it is intentionally public/self-service:\n  %s", strings.Join(ungated, "\n  "))
 	}
 }
