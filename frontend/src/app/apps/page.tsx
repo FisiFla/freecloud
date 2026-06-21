@@ -161,12 +161,12 @@ export default function AppsPage() {
       <div>
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-800">App Catalog</h1>
-            <p className="mt-1 text-sm text-slate-500">Manage SSO-connected applications.</p>
+            <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">App Catalog</h1>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage SSO-connected applications.</p>
           </div>
           <button
             onClick={() => setShowAdd(true)}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-400"
           >
             <Plus className="h-4 w-4" />
             Add Application
@@ -184,7 +184,7 @@ export default function AppsPage() {
         {loading ? (
           <div className="mt-6 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="h-40 animate-pulse rounded-xl bg-slate-200" />
+              <div key={i} className="h-40 animate-pulse rounded-xl bg-slate-200 dark:bg-slate-700" />
             ))}
           </div>
         ) : (
@@ -193,23 +193,23 @@ export default function AppsPage() {
             {apps.map((app) => (
               <div
                 key={app.id}
-                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md"
+                className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-shadow hover:shadow-md dark:border-slate-700 dark:bg-slate-900"
               >
                 <div className="flex items-start justify-between">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400">
                     <Globe className="h-5 w-5" />
                   </div>
                 </div>
 
-                <h3 className="mt-4 font-semibold text-slate-800">{app.name}</h3>
-                <p className="mt-1 text-xs text-slate-500 truncate">{app.baseUrl}</p>
+                <h3 className="mt-4 font-semibold text-slate-800 dark:text-slate-100">{app.name}</h3>
+                <p className="mt-1 text-xs text-slate-500 truncate dark:text-slate-400">{app.baseUrl}</p>
 
                 <div className="mt-4 flex items-center gap-2">
                   <span
                     className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
                       app.protocol === "OIDC"
                         ? "bg-sky-50 text-sky-700"
-                        : "bg-amber-50 text-amber-700"
+                        : "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                     }`}
                   >
                     {app.protocol}
@@ -217,8 +217,8 @@ export default function AppsPage() {
                   <span
                     className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
                       app.enabled
-                        ? "bg-emerald-50 text-emerald-700"
-                        : "bg-slate-100 text-slate-500"
+                        ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                        : "bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400"
                     }`}
                   >
                     {app.enabled ? "Enabled" : "Disabled"}
@@ -229,14 +229,14 @@ export default function AppsPage() {
                 <div className="mt-4 flex gap-2">
                   <button
                     onClick={() => { setAssignAppId(app.id); setAssignUserId(""); setAssignMessage(null); }}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 dark:border-slate-700 dark:text-slate-400"
                   >
                     <UserPlus className="h-3.5 w-3.5" />
                     Assign
                   </button>
                   <button
                     onClick={() => openPolicy(app)}
-                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200"
+                    className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200 dark:border-slate-700 dark:text-slate-400"
                   >
                     Access Policy
                   </button>
@@ -260,27 +260,28 @@ export default function AppsPage() {
       <SlideOver isOpen={showAdd} onClose={() => { setShowAdd(false); setSamlMetadata(null); setNewName(""); setNewProtocol("OIDC"); setNewRedirectUris(""); setNewBaseUrl(""); }} title="Add Application">
         <form onSubmit={handleAddApp} className="space-y-5">
           {submitError && (
-            <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
               <AlertCircle className="h-5 w-5 shrink-0" />
               <span>{submitError}</span>
             </div>
           )}
           <div>
-            <label className="block text-sm font-medium text-slate-700">Application Name</label>
+            <label htmlFor="app-name" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Application Name</label>
             <input
+              id="app-name"
               type="text"
               required
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
               placeholder="My App"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700">Protocol</label>
+            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Protocol</label>
             <div className="mt-2 flex gap-4">
-              <label className="flex items-center gap-2 text-sm text-slate-700">
+              <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                 <input
                   type="radio"
                   name="protocol"
@@ -291,7 +292,7 @@ export default function AppsPage() {
                 />
                 OIDC
               </label>
-              <label className="flex items-center gap-2 text-sm text-slate-700">
+              <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                 <input
                   type="radio"
                   name="protocol"
@@ -306,38 +307,40 @@ export default function AppsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700">
+            <label htmlFor="app-redirect-uris" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
               Redirect URIs <span className="text-slate-400">(one per line)</span>
             </label>
             <textarea
+              id="app-redirect-uris"
               rows={4}
               value={newRedirectUris}
               onChange={(e) => setNewRedirectUris(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
               placeholder="https://myapp.com/callback"
             />
             {newProtocol === "OIDC" && !newRedirectUris.trim() && (
               <p className="mt-1 text-xs text-amber-600">At least one redirect URI is required for OIDC apps</p>
             )}
             {newRedirectUris.trim() && (
-              <p className="mt-1 text-xs text-slate-400">Redirect URIs must start with https:// or http://localhost</p>
+              <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">Redirect URIs must start with https:// or http://localhost</p>
             )}
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700">Base URL</label>
+            <label htmlFor="app-base-url" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Base URL</label>
             <input
+              id="app-base-url"
               type="url"
               required
               value={newBaseUrl}
               onChange={(e) => setNewBaseUrl(e.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
               placeholder="https://myapp.com"
             />
           </div>
 
           {newProtocol === "SAML" && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
               <p className="font-medium">SAML SP Metadata</p>
               <p className="mt-1">After creation, copy the <strong>Entity ID</strong> and <strong>ACS URL</strong> into your Service Provider configuration. The Entity ID defaults to the Base URL; the ACS URL is the first Redirect URI you enter above.</p>
             </div>
@@ -346,7 +349,7 @@ export default function AppsPage() {
           <button
             type="submit"
             disabled={submitting}
-            className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-500 dark:hover:bg-indigo-400"
           >
             {submitting ? "Creating..." : "Create Application"}
           </button>
@@ -354,15 +357,15 @@ export default function AppsPage() {
 
         {/* SAML SP metadata panel shown after successful creation */}
         {samlMetadata && (
-          <div className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4 space-y-3">
-            <p className="text-sm font-semibold text-emerald-800">Application created — copy these into your SP configuration:</p>
+          <div className="mt-6 rounded-lg border border-emerald-200 bg-emerald-50 p-4 space-y-3 dark:border-emerald-800 dark:bg-emerald-950">
+            <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">Application created — copy these into your SP configuration:</p>
             <div>
-              <p className="text-xs font-medium text-emerald-700">SP Entity ID</p>
-              <code className="block mt-1 rounded bg-white px-2 py-1 text-xs text-slate-700 border border-emerald-200 break-all">{samlMetadata.entityId}</code>
+              <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">SP Entity ID</p>
+              <code className="block mt-1 rounded bg-white px-2 py-1 text-xs text-slate-700 border border-emerald-200 break-all dark:bg-slate-800 dark:text-slate-300 dark:border-emerald-800">{samlMetadata.entityId}</code>
             </div>
             <div>
-              <p className="text-xs font-medium text-emerald-700">ACS URL (POST binding)</p>
-              <code className="block mt-1 rounded bg-white px-2 py-1 text-xs text-slate-700 border border-emerald-200 break-all">{samlMetadata.acsUrl || "—"}</code>
+              <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">ACS URL (POST binding)</p>
+              <code className="block mt-1 rounded bg-white px-2 py-1 text-xs text-slate-700 border border-emerald-200 break-all dark:bg-slate-800 dark:text-slate-300 dark:border-emerald-800">{samlMetadata.acsUrl || "—"}</code>
             </div>
             <button
               onClick={() => { setSamlMetadata(null); setShowAdd(false); setNewName(""); setNewProtocol("OIDC"); setNewRedirectUris(""); setNewBaseUrl(""); }}
@@ -378,18 +381,18 @@ export default function AppsPage() {
       {policyAppId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div className="fixed inset-0 bg-black/40" onClick={() => setPolicyAppId(null)} />
-          <div className="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl">
-            <h3 className="text-lg font-semibold text-slate-800">Access Policy</h3>
-            <p className="mt-1 text-sm text-slate-500">{policyAppName}</p>
+          <div className="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+            <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Access Policy</h3>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{policyAppName}</p>
 
             {policyLoading ? (
               <div className="mt-4 space-y-3">
-                {[1, 2, 3].map((i) => <div key={i} className="h-6 animate-pulse rounded bg-slate-200" />)}
+                {[1, 2, 3].map((i) => <div key={i} className="h-6 animate-pulse rounded bg-slate-200 dark:bg-slate-700" />)}
               </div>
             ) : (
               <div className="mt-4 space-y-3">
                 {policyError && (
-                  <p className="text-sm text-red-600">{policyError}</p>
+                  <p className="text-sm text-red-600 dark:text-red-400">{policyError}</p>
                 )}
                 {policy && (
                   <>
@@ -400,7 +403,7 @@ export default function AppsPage() {
                         onChange={(e) => setPolicy({ ...policy, requireEnrolled: e.target.checked })}
                         className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                       />
-                      <span className="text-sm text-slate-700">Require device enrolled in MDM</span>
+                      <span className="text-sm text-slate-700 dark:text-slate-300">Require device enrolled in MDM</span>
                     </label>
                     <label className="flex items-center gap-3 cursor-pointer">
                       <input
@@ -409,7 +412,7 @@ export default function AppsPage() {
                         onChange={(e) => setPolicy({ ...policy, requireDiskEncrypted: e.target.checked })}
                         className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                       />
-                      <span className="text-sm text-slate-700">Require disk encryption</span>
+                      <span className="text-sm text-slate-700 dark:text-slate-300">Require disk encryption</span>
                     </label>
                     <label className="flex items-center gap-3 cursor-pointer">
                       <input
@@ -418,11 +421,12 @@ export default function AppsPage() {
                         onChange={(e) => setPolicy({ ...policy, requireNoCriticalVulns: e.target.checked })}
                         className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                       />
-                      <span className="text-sm text-slate-700">Require no critical vulnerabilities</span>
+                      <span className="text-sm text-slate-700 dark:text-slate-300">Require no critical vulnerabilities</span>
                     </label>
                     <div>
-                      <label className="block text-sm font-medium text-slate-700">Max OS age (days)</label>
+                      <label htmlFor="policy-max-os-age" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Max OS age (days)</label>
                       <input
+                        id="policy-max-os-age"
                         type="number"
                         min={0}
                         value={policy.maxOsAgeDays ?? ""}
@@ -430,7 +434,7 @@ export default function AppsPage() {
                           ...policy,
                           maxOsAgeDays: e.target.value === "" ? undefined : parseInt(e.target.value, 10),
                         })}
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                         placeholder="No limit"
                       />
                     </div>
@@ -442,14 +446,14 @@ export default function AppsPage() {
             <div className="mt-5 flex justify-end gap-3">
               <button
                 onClick={() => setPolicyAppId(null)}
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
               >
                 Cancel
               </button>
               <button
                 onClick={savePolicy}
                 disabled={policyLoading || policySaving}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-500 dark:hover:bg-indigo-400"
               >
                 {policySaving ? "Saving..." : "Save Policy"}
               </button>
@@ -464,18 +468,18 @@ export default function AppsPage() {
           {/* Overlay */}
           <div className="fixed inset-0 bg-black/40" onClick={() => setAssignAppId(null)} />
           {/* Modal */}
-          <div className="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl">
-            <h3 className="text-lg font-semibold text-slate-800">Assign Application</h3>
-            <p className="mt-1 text-sm text-slate-500">
+          <div className="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+            <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Assign Application</h3>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
               Select a user to assign this application to.
             </p>
 
             <div className="mt-4">
-              <label className="block text-sm font-medium text-slate-700">User</label>
+              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">User</label>
               <select
                 value={assignUserId}
                 onChange={(e) => setAssignUserId(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
               >
                 <option value="">Select a user...</option>
                 {users.map((u) => (
@@ -499,14 +503,14 @@ export default function AppsPage() {
             <div className="mt-5 flex justify-end gap-3">
               <button
                 onClick={() => setAssignAppId(null)}
-                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
               >
                 Cancel
               </button>
               <button
                 onClick={handleAssign}
                 disabled={!assignUserId || assigning}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-500 dark:hover:bg-indigo-400"
               >
                 {assigning ? "Assigning..." : "Assign"}
               </button>

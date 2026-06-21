@@ -116,12 +116,12 @@ export default function EmployeesPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-slate-800">Employees</h1>
-            <p className="mt-1 text-sm text-slate-500">Manage users and their accounts.</p>
+            <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Employees</h1>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage users and their accounts.</p>
           </div>
           <button
             onClick={() => setShowOnboard(true)}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700"
+            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-400"
           >
             <UserPlus className="h-4 w-4" />
             Onboard New Employee
@@ -137,7 +137,7 @@ export default function EmployeesPage() {
 
         {/* Deprovision action error */}
         {actionError && (
-          <div className="mt-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mt-4 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
             <div className="flex-1">
               <p className="font-medium">Deprovisioning failed</p>
@@ -155,11 +155,11 @@ export default function EmployeesPage() {
 
         {/* Deprovision partial-success warnings */}
         {actionWarnings && actionWarnings.length > 0 && (
-          <div className="mt-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <div className="mt-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
             <div className="flex-1">
               <p className="font-medium">Employee offboarded with warnings</p>
-              <ul className="mt-1 list-inside list-disc text-amber-700">
+              <ul className="mt-1 list-inside list-disc text-amber-700 dark:text-amber-300">
                 {actionWarnings.map((w, i) => (
                   <li key={i}>{w}</li>
                 ))}
@@ -183,7 +183,7 @@ export default function EmployeesPage() {
             placeholder="Search employees..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+            className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
           />
         </div>
 
@@ -204,10 +204,10 @@ export default function EmployeesPage() {
           />
         ) : (
           /* Table */
-          <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">
+                <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-400">
                   <th className="px-6 py-3">Name</th>
                   <th className="px-6 py-3">Email</th>
                   <th className="px-6 py-3">Department</th>
@@ -216,26 +216,26 @@ export default function EmployeesPage() {
                   <th className="px-6 py-3">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {filtered.map((emp) => (
-                  <tr key={emp.id} className="hover:bg-slate-50 transition-colors">
+                  <tr key={emp.id} className="hover:bg-slate-50 transition-colors dark:hover:bg-slate-800">
                     <td className="px-6 py-4">
                       <Link
                         href={`/employees/${emp.id}`}
-                        className="font-medium text-indigo-600 hover:text-indigo-800"
+                        className="font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
                       >
                         {emp.firstName} {emp.lastName}
                       </Link>
                     </td>
-                    <td className="px-6 py-4 text-slate-600">{emp.email}</td>
-                    <td className="px-6 py-4 text-slate-600">{emp.department}</td>
-                    <td className="px-6 py-4 text-slate-600">{emp.role}</td>
+                    <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{emp.email}</td>
+                    <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{emp.department}</td>
+                    <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{emp.role}</td>
                     <td className="px-6 py-4">
                       <span
                         className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
                           emp.status === "Active"
-                            ? "bg-emerald-50 text-emerald-700"
-                            : "bg-amber-50 text-amber-700"
+                            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                            : "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
                         }`}
                       >
                         {emp.status}
@@ -245,7 +245,7 @@ export default function EmployeesPage() {
                       <button
                         onClick={() => setDeprovisionTarget(emp.id)}
                         title="Deprovision"
-                        className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                        className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
