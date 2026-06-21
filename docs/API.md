@@ -203,8 +203,7 @@ Returns `207` on partial success:
 {
   "requireEnrolled": true,
   "requireDiskEncrypted": true,
-  "requireNoCriticalVulns": false,
-  "maxOsAgeDays": 90
+  "requireNoCriticalVulns": false
 }
 ```
 

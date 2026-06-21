@@ -471,9 +471,11 @@ func (r fakeTokenRow) Scan(dest ...any) error {
 	if r.err != nil {
 		return r.err
 	}
-	*(dest[0].(*string)) = r.role
-	*(dest[1].(**time.Time)) = nil
-	*(dest[2].(**time.Time)) = nil
+	*(dest[0].(*string)) = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	*(dest[1].(*string)) = r.role
+	*(dest[2].(*string)) = "ci"
+	*(dest[3].(**time.Time)) = nil
+	*(dest[4].(**time.Time)) = nil
 	return nil
 }
 
@@ -488,6 +490,9 @@ func TestAPITokenMiddlewareStoredRoleAllowsPermission(t *testing.T) {
 			}
 			if claims.Role != RoleSuperAdmin {
 				t.Fatalf("expected super-admin role, got %q", claims.Role)
+			}
+			if claims.PreferredUsername != "api-token:ci" {
+				t.Fatalf("expected service identity actor, got %q", claims.PreferredUsername)
 			}
 			w.WriteHeader(http.StatusOK)
 		}),

@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -104,9 +106,17 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		expiresAt = &t
 	}
 
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		h.logger.Error("failed to begin api token transaction", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to create token")
+		return
+	}
+	defer tx.Rollback(ctx)
+
 	var id string
 	var createdAt time.Time
-	err := h.db.QueryRow(ctx,
+	err = tx.QueryRow(ctx,
 		`INSERT INTO api_tokens (name, token_hash, role, scopes, service_identity, created_by, expires_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)
 		 RETURNING id, created_at`,
@@ -114,6 +124,21 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	).Scan(&id, &createdAt)
 	if err != nil {
 		h.logger.Error("failed to insert api token", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to create token")
+		return
+	}
+	if err := writeAuditEntry(ctx, tx, actorID, "api_token.create", "api_token", id, map[string]interface{}{
+		"name":             req.Name,
+		"role":             req.Role,
+		"service_identity": req.ServiceIdentity,
+		"expires_at":       expiresAt,
+	}); err != nil {
+		h.logger.Error("failed to audit api token creation", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to create token")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit api token creation", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to create token")
 		return
 	}
@@ -186,17 +211,46 @@ func (h *Handler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
-	tag, err := h.db.Exec(r.Context(),
-		`UPDATE api_tokens SET revoked_at = NOW() WHERE id = $1 AND revoked_at IS NULL`,
-		id,
-	)
+
+	ctx := r.Context()
+	actorID := middleware.GetActorID(ctx)
+	tx, err := h.db.Begin(ctx)
 	if err != nil {
+		h.logger.Error("failed to begin api token revocation", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	var name, role, serviceIdentity string
+	err = tx.QueryRow(ctx,
+		`UPDATE api_tokens
+		 SET revoked_at = NOW()
+		 WHERE id = $1 AND revoked_at IS NULL
+		 RETURNING name, role, service_identity`,
+		id,
+	).Scan(&name, &role, &serviceIdentity)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "token not found or already revoked")
+			return
+		}
 		h.logger.Error("failed to revoke api token", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	if tag.RowsAffected() == 0 {
-		respondError(w, http.StatusNotFound, "token not found or already revoked")
+	if err := writeAuditEntry(ctx, tx, actorID, "api_token.revoke", "api_token", id, map[string]interface{}{
+		"name":             name,
+		"role":             role,
+		"service_identity": serviceIdentity,
+	}); err != nil {
+		h.logger.Error("failed to audit api token revocation", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.Error("failed to commit api token revocation", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	respondJSON(w, http.StatusOK, map[string]bool{"revoked": true})

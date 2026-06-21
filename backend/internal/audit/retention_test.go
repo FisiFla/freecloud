@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,17 +34,15 @@ func TestPruneDeletesRows(t *testing.T) {
 	db := &fakeDB{
 		execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
 			execCalls++
-			// First call is the DELETE; simulate 5 rows deleted.
-			// Subsequent calls are the audit WriteEntry INSERT (two Exec calls:
-			// chainHead QueryRow + INSERT Exec). We only count the DELETE here.
-			var tag pgconn.CommandTag
-			if execCalls == 1 {
-				tag = pgconn.NewCommandTag("DELETE 5")
+			if strings.Contains(sql, "DELETE FROM audit_logs") {
+				return pgconn.NewCommandTag("DELETE 5"), nil
 			}
-			return tag, nil
+			return pgconn.CommandTag{}, nil
 		},
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
-			// chainHead — no existing rows, return empty hash
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			if strings.Contains(sql, "WHERE created_at >= $1") {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if p, ok := dest[0].(**string); ok {
 					*p = nil
@@ -62,6 +61,49 @@ func TestPruneDeletesRows(t *testing.T) {
 	}
 }
 
+func TestPruneWritesAnchorForRetainedSuffix(t *testing.T) {
+	anchorWritten := false
+	db := &fakeDB{
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			if strings.Contains(sql, "DELETE FROM audit_logs") {
+				return pgconn.NewCommandTag("DELETE 2"), nil
+			}
+			if strings.Contains(sql, "INSERT INTO audit_chain_anchors") {
+				if args[0] != int64(3) || args[1] != "previous-row-hash" {
+					t.Fatalf("unexpected anchor args: %#v", args)
+				}
+				anchorWritten = true
+			}
+			return pgconn.CommandTag{}, nil
+		},
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			if strings.Contains(sql, "WHERE created_at >= $1") {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*dest[0].(*int64) = 3
+					*dest[1].(*string) = "previous-row-hash"
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error {
+				head := "retained-chain-head"
+				*dest[0].(**string) = &head
+				return nil
+			}}
+		},
+	}
+	p := NewPruner(db, zap.NewNop())
+	deleted, err := p.Prune(context.Background(), 24*time.Hour)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if deleted != 2 {
+		t.Fatalf("expected 2 rows deleted, got %d", deleted)
+	}
+	if !anchorWritten {
+		t.Fatal("expected prune to write audit chain anchor")
+	}
+}
+
 func TestPruneWindowBoundary(t *testing.T) {
 	// Verify that retainFor > 0 results in an Exec call (the DELETE).
 	called := false
@@ -70,7 +112,10 @@ func TestPruneWindowBoundary(t *testing.T) {
 			called = true
 			return pgconn.NewCommandTag("DELETE 0"), nil
 		},
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			if strings.Contains(sql, "WHERE created_at >= $1") {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if p, ok := dest[0].(**string); ok {
 					*p = nil

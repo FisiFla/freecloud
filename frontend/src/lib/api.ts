@@ -565,7 +565,6 @@ export interface AppAccessPolicy {
   requireEnrolled: boolean;
   requireDiskEncrypted: boolean;
   requireNoCriticalVulns: boolean;
-  maxOsAgeDays?: number;
   updatedAt?: string;
 }
 

@@ -131,7 +131,6 @@ export default function AppsPage() {
         requireEnrolled: policy.requireEnrolled,
         requireDiskEncrypted: policy.requireDiskEncrypted,
         requireNoCriticalVulns: policy.requireNoCriticalVulns,
-        maxOsAgeDays: policy.maxOsAgeDays,
       });
       setPolicy(updated);
       setPolicyAppId(null);
@@ -423,21 +422,6 @@ export default function AppsPage() {
                       />
                       <span className="text-sm text-slate-700 dark:text-slate-300">Require no critical vulnerabilities</span>
                     </label>
-                    <div>
-                      <label htmlFor="policy-max-os-age" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Max OS age (days)</label>
-                      <input
-                        id="policy-max-os-age"
-                        type="number"
-                        min={0}
-                        value={policy.maxOsAgeDays ?? ""}
-                        onChange={(e) => setPolicy({
-                          ...policy,
-                          maxOsAgeDays: e.target.value === "" ? undefined : parseInt(e.target.value, 10),
-                        })}
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
-                        placeholder="No limit"
-                      />
-                    </div>
                   </>
                 )}
               </div>

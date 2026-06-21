@@ -117,6 +117,19 @@ func TestUpsertAppPolicyInvalidBody(t *testing.T) {
 	}
 }
 
+func TestUpsertAppPolicyRejectsUnsupportedMaxOSAge(t *testing.T) {
+	db := &fakeDB{}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	maxAge := 90
+	body, _ := json.Marshal(UpsertAppAccessPolicyRequest{RequireDiskEncrypted: true, MaxOsAgeDays: &maxAge})
+	req := withAppID(httptest.NewRequest(http.MethodPut, "/api/v1/apps/app-1/policy", bytes.NewReader(body)), "app-1")
+	rec := httptest.NewRecorder()
+	h.UpsertAppAccessPolicy(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestUpsertAppPolicyAppNotFound(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {

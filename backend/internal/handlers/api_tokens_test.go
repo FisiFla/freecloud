@@ -6,9 +6,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 func TestCreateAPITokenEmptyBody(t *testing.T) {
@@ -59,6 +66,48 @@ func TestCreateAPITokenNilDB(t *testing.T) {
 	}
 }
 
+func TestCreateAPITokenAuditsCreation(t *testing.T) {
+	const tokenID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	createdAt := time.Now().UTC()
+	auditWritten := false
+
+	tx := &fakeTx{
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			if strings.Contains(sql, "INSERT INTO api_tokens") {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*dest[0].(*string) = tokenID
+					*dest[1].(*time.Time) = createdAt
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			if strings.Contains(sql, "INSERT INTO audit_logs") && args[1] == "api_token.create" && args[3] == tokenID {
+				auditWritten = true
+			}
+			return pgconn.CommandTag{}, nil
+		},
+	}
+	db := &fakeDB{beginFn: func(_ context.Context) (pgx.Tx, error) { return tx, nil }}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+
+	b, _ := json.Marshal(map[string]interface{}{"name": "tok", "role": "auditor", "serviceIdentity": "ci"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/api-tokens", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin-user"))
+	rec := httptest.NewRecorder()
+
+	h.CreateAPIToken(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !auditWritten {
+		t.Fatal("expected api_token.create audit record")
+	}
+}
+
 func TestListAPITokensNilDB(t *testing.T) {
 	h := setupTestHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/api-tokens", nil)
@@ -66,6 +115,49 @@ func TestListAPITokensNilDB(t *testing.T) {
 	h.ListAPITokens(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("nil DB: expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRevokeAPITokenAuditsRevocation(t *testing.T) {
+	const tokenID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	auditWritten := false
+
+	tx := &fakeTx{
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			if strings.Contains(sql, "UPDATE api_tokens") {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*dest[0].(*string) = "deploy-token"
+					*dest[1].(*string) = "auditor"
+					*dest[2].(*string) = "ci"
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			if strings.Contains(sql, "INSERT INTO audit_logs") && args[1] == "api_token.revoke" && args[3] == tokenID {
+				auditWritten = true
+			}
+			return pgconn.CommandTag{}, nil
+		},
+	}
+	db := &fakeDB{beginFn: func(_ context.Context) (pgx.Tx, error) { return tx, nil }}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/api-tokens/"+tokenID, nil)
+	chiCtx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
+		URLParams: chi.RouteParams{Keys: []string{"id"}, Values: []string{tokenID}},
+	})
+	req = req.WithContext(context.WithValue(chiCtx, middleware.ActorIDKey, "admin-user"))
+	rec := httptest.NewRecorder()
+
+	h.RevokeAPIToken(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !auditWritten {
+		t.Fatal("expected api_token.revoke audit record")
 	}
 }
 

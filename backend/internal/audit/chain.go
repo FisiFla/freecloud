@@ -20,7 +20,10 @@ type DBPool interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
+
+const auditChainLockID int64 = 0x4652434c4f5544 // "FRCLOUD" within signed int64 range.
 
 // WriteEntry inserts one audit log row and computes row_hash + prev_hash in the
 // same database round-trip. It reads the max-seq row's hash first, then inserts
@@ -39,20 +42,33 @@ func WriteEntry(ctx context.Context, db DBPool, actorID, action, targetType, tar
 		detailsBytes = []byte("{}")
 	}
 
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin audit write transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, auditChainLockID); err != nil {
+		return fmt.Errorf("lock audit chain: %w", err)
+	}
+
 	// Read the hash of the current chain head (the row with the highest seq).
-	prevHash, err := chainHead(ctx, db)
+	prevHash, err := chainHead(ctx, tx)
 	if err != nil {
 		return fmt.Errorf("read chain head: %w", err)
 	}
 
 	rowHash := computeHash(actorID, action, targetType, targetID, string(detailsBytes), prevHash)
 
-	_, err = db.Exec(ctx,
+	_, err = tx.Exec(ctx,
 		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details, row_hash, prev_hash)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		actorID, action, targetType, targetID, detailsBytes, rowHash, prevHash,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // chainHead returns the row_hash of the highest-seq row (the chain tip), or an
@@ -114,6 +130,11 @@ type VerifyResult struct {
 // VerifyChain walks all rows in seq order and returns the result of the
 // integrity check. It stops at the first broken link.
 func VerifyChain(ctx context.Context, db DBPool) (VerifyResult, error) {
+	anchorSeq, anchorPrevHash, err := chainAnchor(ctx, db)
+	if err != nil {
+		return VerifyResult{}, err
+	}
+
 	rows, err := db.Query(ctx,
 		`SELECT seq, id, actor_id, action,
 		        COALESCE(target_type, ''), COALESCE(target_id, ''),
@@ -142,6 +163,15 @@ func VerifyChain(ctx context.Context, db DBPool) (VerifyResult, error) {
 		}
 		result.RowsChecked++
 
+		if result.RowsChecked == 1 && anchorSeq > 0 {
+			if e.Seq != anchorSeq {
+				result.FirstBreakSeq = e.Seq
+				result.Error = fmt.Sprintf("seq %d: anchor mismatch (expected first retained seq %d)", e.Seq, anchorSeq)
+				return result, nil
+			}
+			prevHash = anchorPrevHash
+		}
+
 		if e.RowHash == "" {
 			result.FirstBreakSeq = e.Seq
 			result.Error = fmt.Sprintf("seq %d: missing row_hash", e.Seq)
@@ -169,4 +199,19 @@ func VerifyChain(ctx context.Context, db DBPool) (VerifyResult, error) {
 
 	result.OK = true
 	return result, nil
+}
+
+func chainAnchor(ctx context.Context, db DBPool) (int64, string, error) {
+	var seq int64
+	var prevHash string
+	err := db.QueryRow(ctx,
+		`SELECT first_seq, prev_hash FROM audit_chain_anchors WHERE id = 1`,
+	).Scan(&seq, &prevHash)
+	if err == pgx.ErrNoRows {
+		return 0, "", nil
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	return seq, prevHash, nil
 }

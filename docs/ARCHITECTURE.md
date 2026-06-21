@@ -145,8 +145,8 @@ graph LR
    with `ACCESS_EVAL_TOKEN`).
 3. Backend fetches the user's device posture from FleetDM and loads the per-app
    access policy from Postgres.
-4. Backend evaluates: enrolled device required, disk encryption, no critical
-   vulnerabilities, OS age limit.
+4. Backend evaluates: enrolled device required, disk encryption, and no critical
+   vulnerabilities.
 5. Returns `{ allowed: true }` or `{ allowed: false, failures: [...] }`.
 6. Keycloak grants or denies the session; the frontend shows the access-blocked
    page on denial.

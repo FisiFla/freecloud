@@ -2,18 +2,18 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
 // Pruner periodically deletes audit rows older than a configured window.
-// Pruning preserves chain integrity by removing from the oldest end only
-// (rows whose seq precedes the chain window). After pruning, the chain
-// starts at the first surviving row; its prev_hash is treated as a
-// "truncation anchor" by VerifyChain (pre-chain rows with empty row_hash
-// are already skipped). The prune action is itself audited via WriteEntry.
+// Pruning records the first surviving row's prev_hash in audit_chain_anchors
+// before deleting old rows, so VerifyChain can validate the retained suffix
+// without pretending the pruned prefix still exists.
 type Pruner struct {
 	pool   DBPool
 	logger *zap.Logger
@@ -34,7 +34,34 @@ func (p *Pruner) Prune(ctx context.Context, retainFor time.Duration) (int64, err
 
 	cutoff := time.Now().UTC().Add(-retainFor)
 
-	tag, err := p.pool.Exec(ctx,
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("begin audit prune transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, auditChainLockID); err != nil {
+		return 0, fmt.Errorf("lock audit chain for prune: %w", err)
+	}
+
+	var anchorSeq int64
+	anchorPrevHash := ""
+	hasAnchor := false
+	err = tx.QueryRow(ctx,
+		`SELECT seq, prev_hash
+		 FROM audit_logs
+		 WHERE created_at >= $1
+		 ORDER BY seq ASC
+		 LIMIT 1`,
+		cutoff,
+	).Scan(&anchorSeq, &anchorPrevHash)
+	if err == nil {
+		hasAnchor = true
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return 0, fmt.Errorf("read audit prune anchor: %w", err)
+	}
+
+	tag, err := tx.Exec(ctx,
 		`DELETE FROM audit_logs WHERE created_at < $1`,
 		cutoff,
 	)
@@ -44,20 +71,42 @@ func (p *Pruner) Prune(ctx context.Context, retainFor time.Duration) (int64, err
 	deleted := tag.RowsAffected()
 
 	if deleted > 0 {
+		if hasAnchor {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO audit_chain_anchors (id, first_seq, prev_hash, pruned_before, updated_at)
+				 VALUES (1, $1, $2, $3, NOW())
+				 ON CONFLICT (id) DO UPDATE SET
+				   first_seq = EXCLUDED.first_seq,
+				   prev_hash = EXCLUDED.prev_hash,
+				   pruned_before = EXCLUDED.pruned_before,
+				   updated_at = NOW()`,
+				anchorSeq, anchorPrevHash, cutoff,
+			); err != nil {
+				return 0, fmt.Errorf("write audit prune anchor: %w", err)
+			}
+		} else {
+			if _, err := tx.Exec(ctx,
+				`DELETE FROM audit_chain_anchors WHERE id = 1`,
+			); err != nil {
+				return 0, fmt.Errorf("clear audit prune anchor: %w", err)
+			}
+		}
+
 		p.logger.Info("audit log pruned",
 			zap.Int64("rows_deleted", deleted),
 			zap.Time("cutoff", cutoff),
 		)
-		// Audit the prune itself — detached context so a caller cancellation
-		// does not silently drop the record of this privileged action.
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = WriteEntry(auditCtx, p.pool, "system", "audit.prune", "audit_logs", "",
+		if err := WriteEntry(ctx, tx, "system", "audit.prune", "audit_logs", "",
 			map[string]interface{}{
 				"rows_deleted": deleted,
 				"cutoff":       cutoff.Format(time.RFC3339),
 			},
-		)
+		); err != nil {
+			return 0, fmt.Errorf("write audit prune entry: %w", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("commit audit prune: %w", err)
 	}
 	return deleted, nil
 }
