@@ -49,23 +49,23 @@ type scimEmail struct {
 
 // SCIMUser is the SCIM User resource representation (RFC 7643 §4.1).
 type SCIMUser struct {
-	Schemas    []string   `json:"schemas"`
-	ID         string     `json:"id,omitempty"`
-	ExternalID string     `json:"externalId,omitempty"`
-	UserName   string     `json:"userName"`
-	Name       scimName   `json:"name,omitempty"`
+	Schemas    []string    `json:"schemas"`
+	ID         string      `json:"id,omitempty"`
+	ExternalID string      `json:"externalId,omitempty"`
+	UserName   string      `json:"userName"`
+	Name       scimName    `json:"name,omitempty"`
 	Emails     []scimEmail `json:"emails,omitempty"`
-	Active     bool       `json:"active"`
-	Meta       scimMeta   `json:"meta,omitempty"`
+	Active     bool        `json:"active"`
+	Meta       scimMeta    `json:"meta,omitempty"`
 }
 
 // scimListResponse is the SCIM ListResponse envelope.
 type scimListResponse struct {
-	Schemas      []string    `json:"schemas"`
-	TotalResults int         `json:"totalResults"`
-	StartIndex   int         `json:"startIndex"`
-	ItemsPerPage int         `json:"itemsPerPage"`
-	Resources    []SCIMUser  `json:"Resources"`
+	Schemas      []string   `json:"schemas"`
+	TotalResults int        `json:"totalResults"`
+	StartIndex   int        `json:"startIndex"`
+	ItemsPerPage int        `json:"itemsPerPage"`
+	Resources    []SCIMUser `json:"Resources"`
 }
 
 // scimError is the SCIM error response (RFC 7644 §3.12).
@@ -90,12 +90,12 @@ type scimPatchRequest struct {
 }
 
 const (
-	scimUserSchema     = "urn:ietf:params:scim:schemas:core:2.0:User"
-	scimGroupSchema    = "urn:ietf:params:scim:schemas:core:2.0:Group"
-	scimListSchema     = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
-	scimPatchSchema    = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
-	scimErrorSchema    = "urn:ietf:params:scim:api:messages:2.0:Error"
-	scimContentType    = "application/scim+json"
+	scimUserSchema  = "urn:ietf:params:scim:schemas:core:2.0:User"
+	scimGroupSchema = "urn:ietf:params:scim:schemas:core:2.0:Group"
+	scimListSchema  = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+	scimPatchSchema = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
+	scimErrorSchema = "urn:ietf:params:scim:api:messages:2.0:Error"
+	scimContentType = "application/scim+json"
 )
 
 // ---- helpers ----
@@ -152,7 +152,7 @@ func SCIMBearerMiddleware(token string) func(http.Handler) http.Handler {
 				scimRespondError(w, http.StatusUnauthorized, "Bearer token required", "")
 				return
 			}
-			if strings.TrimPrefix(auth, "Bearer ") != token {
+			if !constantTimeStringEqual(strings.TrimPrefix(auth, "Bearer "), token) {
 				scimRespondError(w, http.StatusUnauthorized, "Invalid bearer token", "")
 				return
 			}
@@ -248,9 +248,9 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var (
 			id, email, firstName, lastName string
-			disabled                        bool
-			createdAt, updatedAt            time.Time
-			version                         int64
+			disabled                       bool
+			createdAt, updatedAt           time.Time
+			version                        int64
 		)
 		if err := rows.Scan(&id, &email, &firstName, &lastName, &disabled, &createdAt, &updatedAt, &version); err != nil {
 			h.logger.Warn("scim list users scan failed", zap.Error(err))
@@ -290,9 +290,9 @@ func (h *Handler) SCIMGetUser(w http.ResponseWriter, r *http.Request) {
 
 	var (
 		id, email, firstName, lastName string
-		disabled                        bool
-		createdAt, updatedAt            time.Time
-		version                         int64
+		disabled                       bool
+		createdAt, updatedAt           time.Time
+		version                        int64
 	)
 	err := h.db.QueryRow(ctx,
 		`SELECT u.keycloak_user_id, u.email, u.first_name, u.last_name,
@@ -417,8 +417,8 @@ func (h *Handler) SCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 	// Fetch the just-created row for canonical timestamps
 	var (
 		id, dbEmail, dbFirst, dbLast string
-		disabled                      bool
-		createdAt, updatedAt          time.Time
+		disabled                     bool
+		createdAt, updatedAt         time.Time
 	)
 	version := int64(1)
 	_ = h.db.QueryRow(persistCtx,
@@ -462,9 +462,9 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 	// Load current user
 	var (
 		email, firstName, lastName string
-		disabled                    bool
-		createdAt, updatedAt        time.Time
-		version                     int64
+		disabled                   bool
+		createdAt, updatedAt       time.Time
+		version                    int64
 	)
 	err := h.db.QueryRow(ctx,
 		`SELECT u.email, u.first_name, u.last_name,

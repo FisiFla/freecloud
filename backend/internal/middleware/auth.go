@@ -175,8 +175,15 @@ func (a *APITokenMiddleware) Middleware(next http.Handler) http.Handler {
 			return
 		}
 		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" && strings.HasPrefix(strings.TrimPrefix(authHeader, "Bearer "), "fc_") {
-			a.handleAPIToken(w, r, next)
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+			if strings.HasPrefix(tokenStr, "fc_") {
+				a.handleAPIToken(w, r, next, tokenStr)
+				return
+			}
+		}
+		if strings.HasPrefix(authHeader, "fc_") {
+			writeAuthError(w, http.StatusUnauthorized, "unauthorized: missing Bearer token")
 			return
 		}
 		// Fall through to standard JWT validation.
@@ -184,8 +191,7 @@ func (a *APITokenMiddleware) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Request, next http.Handler) {
-	tokenStr := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Request, next http.Handler, tokenStr string) {
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenStr)))
 
 	if a.db == nil {

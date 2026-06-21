@@ -24,7 +24,16 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TMPDIR_BACKUP="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR_BACKUP"' EXIT
+VERIFY_DB=""
+
+cleanup() {
+  if [ -n "${VERIFY_DB:-}" ]; then
+    echo "Dropping scratch database ${VERIFY_DB} ..."
+    psql_scratch -c "DROP DATABASE IF EXISTS ${VERIFY_DB};" > /dev/null 2>&1 || true
+  fi
+  rm -rf "$TMPDIR_BACKUP"
+}
+trap cleanup EXIT
 
 # ── Inputs ───────────────────────────────────────────────────────────────────
 
@@ -42,14 +51,17 @@ fi
 
 # ── Parse scratch connection ──────────────────────────────────────────────────
 
-_parsed=$(python3 -c "
-import sys, urllib.parse as p
-u = p.urlparse('$SCRATCH_DATABASE_URL')
+_parsed=$(SCRATCH_DATABASE_URL="$SCRATCH_DATABASE_URL" python3 - <<'PY'
+import os
+import urllib.parse as p
+
+u = p.urlparse(os.environ["SCRATCH_DATABASE_URL"])
 print(u.hostname or 'localhost')
 print(u.port or 5432)
 print(u.username or 'postgres')
 print(u.password or '')
-")
+PY
+)
 PGHOST=$(echo "$_parsed" | sed -n '1p')
 PGPORT=$(echo "$_parsed" | sed -n '2p')
 PGUSER=$(echo "$_parsed" | sed -n '3p')
@@ -82,12 +94,6 @@ psql_verify() {
     "$@"
 }
 
-cleanup_verify_db() {
-  echo "Dropping scratch database ${VERIFY_DB} ..."
-  psql_scratch -c "DROP DATABASE IF EXISTS ${VERIFY_DB};" > /dev/null 2>&1 || true
-}
-trap cleanup_verify_db EXIT
-
 # ── Dump (if not provided) ────────────────────────────────────────────────────
 
 if [ -z "$DUMP_FILE" ]; then
@@ -105,15 +111,18 @@ fi
 # ── Get source row counts (baseline) ─────────────────────────────────────────
 
 echo "Counting rows in source database ..."
-_src_parsed=$(python3 -c "
-import sys, urllib.parse as p
-u = p.urlparse('$DATABASE_URL')
+_src_parsed=$(DATABASE_URL="$DATABASE_URL" python3 - <<'PY'
+import os
+import urllib.parse as p
+
+u = p.urlparse(os.environ["DATABASE_URL"])
 print(u.hostname or 'localhost')
 print(u.port or 5432)
 print(u.username or 'postgres')
 print(u.password or '')
 print(u.path.lstrip('/') or 'freecloud')
-")
+PY
+)
 SRC_HOST=$(echo "$_src_parsed" | sed -n '1p')
 SRC_PORT=$(echo "$_src_parsed" | sed -n '2p')
 SRC_USER=$(echo "$_src_parsed" | sed -n '3p')

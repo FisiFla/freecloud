@@ -30,6 +30,8 @@ cp .env.prod.example .env.prod
 | `KEYCLOAK_AUDIENCE` | Expected JWT audience (default `freecloud-dashboard`) |
 | `FLEET_URL` / `FLEET_API_TOKEN` | Real FleetDM API endpoint + token |
 | `FLEET_WEBHOOK_SECRET` | HMAC key for the Fleet enrollment callback |
+| `SCIM_BEARER_TOKEN` | Dedicated bearer token for inbound SCIM provisioning |
+| `ACCESS_EVAL_TOKEN` | Dedicated bearer token for posture access-evaluation calls |
 | `AUTH_SECRET` | Auth.js session-signing secret (frontend) |
 | `AUTH_KEYCLOAK_ID` / `AUTH_KEYCLOAK_SECRET` | Frontend OIDC client |
 

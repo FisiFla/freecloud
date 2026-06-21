@@ -1,0 +1,2 @@
+CREATE DATABASE keycloak_e2e;
+GRANT ALL PRIVILEGES ON DATABASE keycloak_e2e TO freecloud;

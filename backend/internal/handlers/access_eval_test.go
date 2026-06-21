@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
@@ -238,6 +239,87 @@ func TestAccessEvalAllow(t *testing.T) {
 	resp := evalResponse(t, rec)
 	if !resp.Allow {
 		t.Errorf("expected allow=true for clean device, got reasons: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalNoPolicyRowAllowsCleanDevice(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const appID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	const devID = "dev-clean"
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM users"):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = userID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM app_access_policies"):
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			default:
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			return &fakeQueryRows{rows: [][]interface{}{{devID}}}, nil
+		},
+	}
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			return &fleet.SecurityState{FirewallEnabled: true, DiskEncrypted: true}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, AppID: appID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if !resp.Allow {
+		t.Errorf("expected allow=true when app has no policy row and device is clean, got reasons: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalPolicyLookupErrorDenies(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const appID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	const devID = "dev-clean"
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM users"):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = userID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM app_access_policies"):
+				return fakeRow{scanFn: func(dest ...any) error { return errors.New("policy db unavailable") }}
+			default:
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			return &fakeQueryRows{rows: [][]interface{}{{devID}}}, nil
+		},
+	}
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			return &fleet.SecurityState{FirewallEnabled: true, DiskEncrypted: true}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, AppID: appID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false when app policy lookup fails")
+	}
+	if len(resp.Reasons) != 1 || resp.Reasons[0] != "app policy lookup failed" {
+		t.Errorf("expected app policy lookup failure reason, got: %v", resp.Reasons)
 	}
 }
 
