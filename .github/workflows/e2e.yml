@@ -10,9 +10,36 @@ permissions:
   contents: read
 
 jobs:
+  # A2 (FCEX3-6): Build the Keycloak SPI JAR separately first so CI can cache
+  # the Maven build layer independently of the Docker image build.
+  build-kc-spi:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build Keycloak SPI JAR + run Java unit tests
+        run: |
+          cd keycloak-authenticator
+          mvn -q package
+        # mvn package = compile + test + shade. Fails the job if Java unit tests fail.
+
+      - name: Verify JAR exists
+        run: |
+          ls -lh keycloak-authenticator/target/keycloak-posture-authenticator-1.0.0.jar
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Only run e2e if the SPI jar builds cleanly.
+    needs: build-kc-spi
 
     steps:
       - uses: actions/checkout@v6
@@ -23,6 +50,9 @@ jobs:
           cache-dependency-path: backend/go.sum
 
       - name: Build e2e stack
+        # docker/Dockerfile.keycloak is a multi-stage build: maven stage builds the jar,
+        # second stage bakes it into the Keycloak image.  No Java/Maven needed here
+        # because the build happens inside Docker.
         run: |
           docker compose -f docker/docker-compose.e2e.yml build
 
@@ -42,12 +72,12 @@ jobs:
           KEYCLOAK_CLIENT_SECRET: freecloud-secret
         run: |
           echo "Waiting for Keycloak admin API at http://localhost:8083..."
-          for i in $(seq 1 60); do
+          for i in $(seq 1 90); do
             if curl -sf http://localhost:8083/realms/master >/dev/null 2>&1; then
               echo "Keycloak ready."
               break
             fi
-            echo "  attempt $i/60..."
+            echo "  attempt $i/90..."
             sleep 2
           done
           curl -sf http://localhost:8083/realms/master >/dev/null
@@ -71,6 +101,8 @@ jobs:
           E2E_BACKEND_URL: http://localhost:8085
           E2E_SCIM_TOKEN: e2e-scim-token
           E2E_WEBHOOK_SECRET: e2e-webhook-secret
+          # A4 (FCEX3-8): access eval token for posture enforcement e2e tests.
+          E2E_ACCESS_EVAL_TOKEN: e2e-access-eval-token
         run: |
           cd backend && go test -tags=e2e -v -timeout 5m ./internal/e2e/...
 

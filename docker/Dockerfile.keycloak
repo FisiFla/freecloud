@@ -1,0 +1,42 @@
+# syntax=docker/dockerfile:1
+# A2 (FCEX3-6) — Custom Keycloak image with the FreeCloud posture-check SPI.
+#
+# Stage 1: Build the fat JAR using Maven (Java 17).
+# Stage 2: Extend the official Keycloak 25 image, copy the JAR into providers/,
+#          and run `kc.sh build` so Keycloak pre-compiles the provider at image
+#          build time rather than at every startup.
+#
+# The jar is built from the keycloak-authenticator/ Maven module.
+# Build context must be the repo root so both the pom.xml and src/ are available.
+# Docker Compose sets context: .. from the docker/ directory.
+
+# ---- Stage 1: Maven build ----
+FROM maven:3.9-eclipse-temurin-17 AS builder
+WORKDIR /build
+
+# Copy the Maven module.
+COPY keycloak-authenticator/pom.xml ./pom.xml
+COPY keycloak-authenticator/src ./src
+
+# Download deps (separate layer for cache) then build.
+# -DskipTests: unit tests run in CI as a separate job before image build.
+# The shade plugin produces the fat jar as the main artifact.
+RUN mvn -q dependency:go-offline
+RUN mvn -q package -DskipTests
+
+# ---- Stage 2: Custom Keycloak image ----
+FROM quay.io/keycloak/keycloak:25.0 AS keycloak
+
+# Copy the shaded fat jar into Keycloak's providers directory.
+COPY --from=builder /build/target/keycloak-posture-authenticator-1.0.0.jar \
+    /opt/keycloak/providers/keycloak-posture-authenticator.jar
+
+# Pre-build Keycloak so startup is fast and providers are compiled-in.
+# KC_DB is required by `kc.sh build` even though the value is overridden at runtime.
+ENV KC_DB=postgres
+RUN /opt/keycloak/bin/kc.sh build
+
+# Runtime environment variables are supplied by docker-compose at startup.
+# Required: ACCESS_EVAL_URL, ACCESS_EVAL_TOKEN, POSTURE_CHECK_ENABLED
+# (The Keycloak-specific KC_* vars are also supplied by compose.)
+ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]

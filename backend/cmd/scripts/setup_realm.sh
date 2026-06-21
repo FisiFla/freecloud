@@ -192,6 +192,82 @@ if [ "$CREATE_DEMO_USER" = "true" ]; then
   fi
 fi
 
+# A2 (FCEX3-6): Wire the posture-check authenticator into the browser login flow.
+#
+# Strategy: copy the built-in "browser" flow, add a REQUIRED execution for the
+# freecloud-posture-check provider, and bind the copy as the realm's browser flow.
+#
+# Keycloak's admin API for authentication flows is not idempotent by design —
+# re-running this script against an already-configured realm must not create a
+# second copy of the flow or add a duplicate execution.  We check whether our
+# copy already exists before creating it.
+#
+# POSTURE_CHECK_ENABLED defaults to false so the SPI is wired but dormant in dev.
+echo "→ Wiring posture-check authenticator into browser flow..."
+
+POSTURE_FLOW_ALIAS="${POSTURE_FLOW_ALIAS:-browser-with-posture}"
+
+# Check if our custom flow already exists.
+EXISTING_FLOW_ID=$(curl -s "$KC_URL/admin/realms/$REALM/authentication/flows" \
+    -H "$AUTH" | jq -r --arg alias "$POSTURE_FLOW_ALIAS" \
+    '.[] | select(.alias == $alias) | .id' 2>/dev/null || echo "")
+
+if [ -n "$EXISTING_FLOW_ID" ] && [ "$EXISTING_FLOW_ID" != "null" ]; then
+  echo "  Flow '$POSTURE_FLOW_ALIAS' already exists (id: $EXISTING_FLOW_ID). Skipping."
+else
+  # Copy the built-in browser flow.
+  COPY_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+      "$KC_URL/admin/realms/$REALM/authentication/flows/browser/copy" \
+      -H "$AUTH" -H "$CT" \
+      -d "{\"newName\": \"$POSTURE_FLOW_ALIAS\"}")
+  if [ "$COPY_HTTP" != "201" ] && [ "$COPY_HTTP" != "409" ]; then
+    echo "  WARNING: browser flow copy returned HTTP $COPY_HTTP (expected 201). Continuing."
+  fi
+
+  # Fetch the new flow's ID.
+  EXISTING_FLOW_ID=$(curl -s "$KC_URL/admin/realms/$REALM/authentication/flows" \
+      -H "$AUTH" | jq -r --arg alias "$POSTURE_FLOW_ALIAS" \
+      '.[] | select(.alias == $alias) | .id')
+
+  if [ -z "$EXISTING_FLOW_ID" ] || [ "$EXISTING_FLOW_ID" = "null" ]; then
+    echo "  ERROR: could not retrieve the copied flow '$POSTURE_FLOW_ALIAS'." >&2
+  else
+    # Add the posture-check execution to the new flow.
+    ADD_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+        "$KC_URL/admin/realms/$REALM/authentication/flows/$POSTURE_FLOW_ALIAS/executions/execution" \
+        -H "$AUTH" -H "$CT" \
+        -d '{"provider": "freecloud-posture-check"}')
+    if [ "$ADD_HTTP" = "201" ]; then
+      echo "  Added freecloud-posture-check execution to '$POSTURE_FLOW_ALIAS'."
+
+      # Set the new execution to REQUIRED.
+      EXECUTIONS=$(curl -s "$KC_URL/admin/realms/$REALM/authentication/flows/$POSTURE_FLOW_ALIAS/executions" \
+          -H "$AUTH")
+      POSTURE_EXEC_ID=$(echo "$EXECUTIONS" | jq -r \
+          '.[] | select(.providerId == "freecloud-posture-check") | .id' 2>/dev/null || echo "")
+      if [ -n "$POSTURE_EXEC_ID" ] && [ "$POSTURE_EXEC_ID" != "null" ]; then
+        curl -s -X PUT "$KC_URL/admin/realms/$REALM/authentication/flows/$POSTURE_FLOW_ALIAS/executions" \
+            -H "$AUTH" -H "$CT" \
+            -d "{\"id\": \"$POSTURE_EXEC_ID\", \"requirement\": \"REQUIRED\"}" > /dev/null
+        echo "  Set posture-check execution to REQUIRED."
+      fi
+    else
+      echo "  WARNING: adding posture-check execution returned HTTP $ADD_HTTP."
+    fi
+
+    # Bind the new flow as the realm's browser flow.
+    BIND_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+        "$KC_URL/admin/realms/$REALM" \
+        -H "$AUTH" -H "$CT" \
+        -d "{\"browserFlow\": \"$POSTURE_FLOW_ALIAS\"}")
+    if [ "$BIND_HTTP" = "204" ]; then
+      echo "  Bound '$POSTURE_FLOW_ALIAS' as the realm browser flow."
+    else
+      echo "  WARNING: binding browser flow returned HTTP $BIND_HTTP."
+    fi
+  fi
+fi
+
 echo ""
 echo "✓ Keycloak realm '$REALM' is ready."
 echo "  Admin console: $KC_URL/admin/$REALM/console"

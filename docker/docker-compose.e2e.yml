@@ -21,7 +21,12 @@ services:
       retries: 10
 
   keycloak-e2e:
-    image: quay.io/keycloak/keycloak:25.0
+    # A2 (FCEX3-6): custom Keycloak image with the posture-check SPI jar baked in.
+    # Build context is the repo root so the maven module keycloak-authenticator/
+    # is accessible during the multi-stage Docker build.
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.keycloak
     environment:
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
@@ -32,6 +37,12 @@ services:
       KC_DB_PASSWORD: freecloud
       KC_HOSTNAME: localhost
       KC_HOSTNAME_PORT: 8083
+      # A3: propagate posture-check config so the SPI can call the backend.
+      # In e2e the backend is reachable at its internal compose hostname.
+      ACCESS_EVAL_URL: http://backend-e2e:8080/api/v1/access/evaluate
+      ACCESS_EVAL_TOKEN: e2e-access-eval-token
+      # Feature flag: enable enforcement in e2e (A4 tests verify the SPI fires).
+      POSTURE_CHECK_ENABLED: "true"
     ports:
       - "8083:8080"
     depends_on:
@@ -43,7 +54,7 @@ services:
       interval: 10s
       timeout: 10s
       retries: 20
-      start_period: 30s
+      start_period: 60s
 
   fleetdm-e2e:
     build:

@@ -16,10 +16,12 @@ import (
 )
 
 type Host struct {
-	ID        string `json:"id"`
-	Hostname  string `json:"hostname"`
-	OsVersion string `json:"os_version"`
-	Status    string `json:"status"`
+	ID             string `json:"id"`
+	Hostname       string `json:"hostname"`
+	OsVersion      string `json:"os_version"`
+	Status         string `json:"status"`
+	DiskEncryption bool   `json:"disk_encryption"`
+	Firewall       bool   `json:"firewall"`
 }
 
 type Software struct {
@@ -44,7 +46,7 @@ func main() {
 
 		case path == "/hosts" || path == "/hosts/":
 			hosts := []Host{
-				{ID: "host-001", Hostname: "demo-laptop", OsVersion: "macOS 15.0", Status: "online"},
+				{ID: "host-001", Hostname: "demo-laptop", OsVersion: "macOS 15.0", Status: "online", DiskEncryption: true, Firewall: true},
 				{ID: "host-002", Hostname: "demo-server", OsVersion: "Ubuntu 24.04", Status: "online"},
 			}
 			json.NewEncoder(w).Encode(map[string]interface{}{"hosts": hosts})
@@ -66,9 +68,12 @@ func main() {
 
 		case strings.HasPrefix(path, "/hosts/"):
 			hostID := strings.TrimPrefix(strings.TrimSuffix(path, "/"), "/hosts/")
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"host": Host{ID: hostID, Hostname: "demo-laptop", OsVersion: "macOS 15.0", Status: "online"},
-			})
+			h := Host{ID: hostID, Hostname: "demo-laptop", OsVersion: "macOS 15.0", Status: "online"}
+			if hostID == "host-001" {
+				h.DiskEncryption = true
+				h.Firewall = true
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{"host": h})
 
 		case path == "/setup_experience/enrollment_tokens" || strings.HasPrefix(path, "/setup_experience/enrollment_tokens"):
 			if r.Method == "POST" {
