@@ -72,7 +72,7 @@ services:
       PORT: "8080"
       KEYCLOAK_URL: http://keycloak-e2e:8080
       KEYCLOAK_REALM: freecloud-e2e
-      KEYCLOAK_CLIENT_ID: freecloud-backend
+      KEYCLOAK_CLIENT_ID: freecloud-service
       KEYCLOAK_CLIENT_SECRET: freecloud-secret
       FLEET_URL: http://fleetdm-e2e:8080
       FLEET_API_TOKEN: e2e-fleet-token
