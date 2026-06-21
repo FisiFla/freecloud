@@ -79,6 +79,26 @@ var migrations = []migration{
 		name:      "enrollment_tokens_used_by_host_id",
 		statement: Migration023,
 	},
+	{
+		id:        28,
+		name:      "audit_logs_hash_chain",
+		statement: Migration028,
+	},
+	{
+		id:        29,
+		name:      "approval_requests",
+		statement: Migration029,
+	},
+	{
+		id:        30,
+		name:      "approval_requests_payload",
+		statement: Migration030,
+	},
+	{
+		id:        31,
+		name:      "approval_requests_indexes",
+		statement: Migration031,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -322,6 +342,91 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_seq ON audit_logs(seq);
 const Migration023 = `
 ALTER TABLE enrollment_tokens ADD COLUMN IF NOT EXISTS used_by_host_id TEXT
     REFERENCES devices(fleet_host_id) ON DELETE SET NULL;
+`
+
+// Migration028 adds row_hash + prev_hash to audit_logs for tamper-evident
+// hash-chaining (C1 / FCEX3-13). Existing rows are backfilled in seq order:
+// each row's hash is computed over its canonical fields plus the previous row's
+// hash. Rows written before this migration have empty details treated as '{}';
+// the UPDATE uses a window-function CTE to walk the chain in one pass via a
+// recursive approach implemented as a PL/pgSQL DO block for portability.
+// New inserts use the WriteEntry helper (internal/audit/chain.go) which
+// computes hashes before the INSERT, keeping the DB free of trigger logic.
+const Migration028 = `
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS row_hash TEXT;
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS prev_hash TEXT NOT NULL DEFAULT '';
+
+CREATE INDEX IF NOT EXISTS idx_audit_logs_row_hash ON audit_logs(row_hash);
+
+-- Backfill existing rows in seq order using a PL/pgSQL loop.
+DO $$
+DECLARE
+    r   RECORD;
+    ph  TEXT := '';
+    h   TEXT;
+BEGIN
+    FOR r IN
+        SELECT seq, actor_id, action,
+               COALESCE(target_type, '') AS target_type,
+               COALESCE(target_id, '')   AS target_id,
+               COALESCE(details::text, '{}') AS details
+        FROM audit_logs
+        WHERE row_hash IS NULL
+        ORDER BY seq ASC
+    LOOP
+        -- Mirror Go's computeHash: sha256( len:field| for each of 6 fields ).
+        -- We replicate the canonical format in SQL for the backfill only;
+        -- new rows are hashed in Go before INSERT.
+        h := encode(
+            sha256(
+                convert_to(
+                    length(r.actor_id)::text    || ':' || r.actor_id    || '|' ||
+                    length(r.action)::text      || ':' || r.action      || '|' ||
+                    length(r.target_type)::text || ':' || r.target_type || '|' ||
+                    length(r.target_id)::text   || ':' || r.target_id   || '|' ||
+                    length(r.details)::text     || ':' || r.details     || '|' ||
+                    length(ph)::text            || ':' || ph            || '|',
+                    'UTF8'
+                )
+            ),
+            'hex'
+        );
+        UPDATE audit_logs SET row_hash = h, prev_hash = ph WHERE seq = r.seq;
+        ph := h;
+    END LOOP;
+END;
+$$;
+`
+
+// Migration029 creates the approval_requests table (C4 / FCEX3-16).
+// A privileged action (onboard / offboard) submitted by helpdesk is stored
+// here pending super-admin review; the actual KC/Fleet action runs only on
+// approval.
+const Migration029 = `
+CREATE TABLE IF NOT EXISTS approval_requests (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    action_type  TEXT NOT NULL CHECK (action_type IN ('onboard', 'offboard')),
+    requester_id TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending'
+                     CHECK (status IN ('pending', 'approved', 'rejected')),
+    decided_by   TEXT,
+    decided_at   TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+`
+
+// Migration030 adds the payload column to approval_requests.
+// Stored as JSONB so both onboard (user details) and offboard (user ID) fit
+// in a single table without per-action-type columns.
+const Migration030 = `
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS payload JSONB NOT NULL DEFAULT '{}';
+`
+
+// Migration031 adds indexes on approval_requests used by the list endpoints.
+const Migration031 = `
+CREATE INDEX IF NOT EXISTS idx_approval_requests_status     ON approval_requests(status);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_requester  ON approval_requests(requester_id);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_created_at ON approval_requests(created_at DESC);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

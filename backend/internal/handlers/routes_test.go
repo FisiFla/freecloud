@@ -176,10 +176,14 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		"GET /api/v1/health/keycloak": true,
 		"GET /api/v1/health/fleetdm":  true,
 		// Public / service-authenticated (own auth, not RBAC).
-		"POST /api/v1/fleet/enrollment-callback":     true, // HMAC
-		"POST /api/v1/auth/forgot-password":          true, // public, rate-limited
-		"POST /api/v1/access/evaluate":               true, // dedicated bearer
-		"POST /api/v1/enrollment/device-identity":    true, // A3: enrollment cookie, rate-limited, no JWT
+		"POST /api/v1/fleet/enrollment-callback":  true, // HMAC
+		"POST /api/v1/auth/forgot-password":       true, // public, rate-limited
+		"POST /api/v1/access/evaluate":            true, // dedicated bearer
+		"POST /api/v1/enrollment/device-identity": true, // A3: enrollment cookie, rate-limited, no JWT
+		// SCIM discovery — unauthenticated per RFC 7644 §2.
+		"GET /scim/v2/ServiceProviderConfig": true,
+		"GET /scim/v2/ResourceTypes":         true,
+		"GET /scim/v2/Schemas":               true,
 		// SCIM provisioning surface — dedicated bearer token.
 		"GET /scim/v2/Users":          true,
 		"POST /scim/v2/Users":         true,

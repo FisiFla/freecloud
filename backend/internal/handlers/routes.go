@@ -42,6 +42,12 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Post("/api/v1/enrollment/device-identity", h.SetDeviceIdentityCookie)
 	})
 
+	// SCIM 2.0 discovery — unauthenticated per RFC 7644 §2.
+	// Clients need these endpoints to discover capabilities before authenticating.
+	r.Get("/scim/v2/ServiceProviderConfig", h.SCIMServiceProviderConfig)
+	r.Get("/scim/v2/ResourceTypes", h.SCIMResourceTypes)
+	r.Get("/scim/v2/Schemas", h.SCIMSchemas)
+
 	// SCIM 2.0 provisioning — bearer-token authenticated, outside the user-JWT group.
 	// SCIMBearerToken is injected by SetupSCIM (called from main after config load).
 	r.Group(func(r chi.Router) {
@@ -89,6 +95,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.With(middleware.RequirePermission(middleware.PermOnboardOffboard)).Post("/api/v1/offboard/{userId}", h.Offboard)
 			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/create", h.CreateApp)
 			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/{appId}/assign", h.AssignApp)
+			// B4: App Catalog — create from template
+			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/templates/{templateId}/create", h.CreateAppFromTemplate)
 
 			// A4 — user profile update
 			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Patch("/api/v1/users/{id}", h.PatchUser)
@@ -116,10 +124,13 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 		r.With(middleware.RequirePermission(middleware.PermSelfService)).Post("/api/v1/auth/device-check", h.DeviceCheck)
 		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps", h.ListApps)
+		// B4: App Catalog — list templates
+		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/templates", h.ListAppTemplates)
 		// A3: per-app access policy read
 		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/{appId}/policy", h.GetAppAccessPolicy)
 		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs", h.ListAuditLogs)
-		r.With(middleware.RequirePermission(middleware.PermExportAuditLogs)).Get("/api/v1/audit-logs/export", h.ExportAuditLogs) // C4
+		r.With(middleware.RequirePermission(middleware.PermExportAuditLogs)).Get("/api/v1/audit-logs/export", h.ExportAuditLogs)     // C4
+		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs/verify", h.VerifyAuditChain) // C1
 		r.With(middleware.RequirePermission(middleware.PermReadUsers)).Get("/api/v1/users", h.ListUsers)
 		r.With(middleware.RequirePermission(middleware.PermReadUsers)).Get("/api/v1/users/{id}", h.GetUser)
 
@@ -178,5 +189,14 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 		// D2: analytics time-series snapshots.
 		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/analytics/snapshots", h.GetAnalyticsSnapshots)
+
+		// C4 (FCEX3-16) — Approval workflow.
+		// Helpdesk submits a request; super-admin approves/rejects via PermApproveRequests.
+		r.With(middleware.RequirePermission(middleware.PermOnboardOffboard)).Post("/api/v1/approval-requests", h.SubmitApproval)
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequirePermission(middleware.PermApproveRequests))
+			r.Get("/api/v1/approval-requests", h.ListApprovalRequests)
+			r.Patch("/api/v1/approval-requests/{id}", h.DecideApproval)
+		})
 	})
 }

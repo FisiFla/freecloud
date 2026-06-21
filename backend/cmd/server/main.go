@@ -17,6 +17,7 @@ import (
 
 	"strings"
 
+	"github.com/FisiFla/freecloud/backend/internal/audit"
 	"github.com/FisiFla/freecloud/backend/internal/config"
 	"github.com/FisiFla/freecloud/backend/internal/db"
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
@@ -151,6 +152,10 @@ func main() {
 	siemSink := siem.BuildSink(cfg.SIEMSyslogNet, cfg.SIEMSyslogAddr, cfg.SIEMHTTPUrl, cfg.SIEMHTTPToken, logger)
 	siemStreamer := siem.New(pool, siemSink, logger)
 	siemStreamer.Start(lifecycleCtx, cfg.SIEMInterval)
+
+	// C2 (FCEX3-14) — Audit retention/pruning.
+	auditPruner := audit.NewPruner(pool, logger)
+	auditPruner.Start(lifecycleCtx, cfg.AuditPruneInterval, cfg.AuditRetainFor)
 
 	// Create handler
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
