@@ -92,10 +92,8 @@ class PostureCheckAuthenticatorTest {
         when(context.getAuthenticationSession()).thenReturn(authSession);
         when(authSession.getClient()).thenReturn(client);
         when(client.getId()).thenReturn("kc-client-uuid");
-        Cookie deviceCookie = mock(Cookie.class);
-        when(deviceCookie.getValue()).thenReturn("host-123");
         when(httpHeaders.getCookies()).thenReturn(Map.of(
-            "freecloud-device-id", deviceCookie
+            "freecloud-device-id", new Cookie("freecloud-device-id", "host-123")
         ));
         AtomicReference<String> capturedBody = new AtomicReference<>("");
 
