@@ -27,7 +27,11 @@ services:
       retries: 10
 
   keycloak:
-    image: quay.io/keycloak/keycloak:25.0
+    # A2 (FCEX3-6): custom Keycloak image with the posture-check SPI jar.
+    # Build context is repo root; Dockerfile.keycloak is in docker/.
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.keycloak
     restart: unless-stopped
     command: ["start"]
     environment:
@@ -41,6 +45,10 @@ services:
       KC_PROXY_HEADERS: xforwarded
       KC_HTTP_ENABLED: "true"
       KC_HEALTH_ENABLED: "true"
+      # A3: posture-check SPI config — must be set in .env.prod
+      ACCESS_EVAL_URL: ${ACCESS_EVAL_URL}
+      ACCESS_EVAL_TOKEN: ${ACCESS_EVAL_TOKEN}
+      POSTURE_CHECK_ENABLED: ${POSTURE_CHECK_ENABLED:-false}
     depends_on:
       postgres:
         condition: service_healthy
