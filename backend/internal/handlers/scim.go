@@ -161,27 +161,14 @@ func SCIMBearerMiddleware(token string) func(http.Handler) http.Handler {
 	}
 }
 
-// ---- filter parsing ----
-// Supports only: userName eq "value"  (case-insensitive attribute name)
+// ---- filter types (implementation in scim_filter.go) ----
+
+// scimFilter is the simple flat filter representation used by the list
+// handlers. ParseSCIMFilter in scim_filter.go produces it via the shim.
 type scimFilter struct {
 	attr  string
 	op    string
 	value string
-}
-
-func parseSCIMFilter(raw string) *scimFilter {
-	// Very minimal: "attr op \"value\""
-	parts := strings.Fields(raw)
-	if len(parts) < 3 {
-		return nil
-	}
-	val := strings.Join(parts[2:], " ")
-	val = strings.Trim(val, "\"'")
-	return &scimFilter{
-		attr:  strings.ToLower(parts[0]),
-		op:    strings.ToLower(parts[1]),
-		value: val,
-	}
 }
 
 // ---- handlers ----
@@ -208,11 +195,14 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filterRaw := r.URL.Query().Get("filter")
-	var emailFilter string
+	// filterOp and filterVal are used to build a SQL WHERE clause.
+	// filterOp: "eq", "co", "sw" — derived from the SCIM filter node.
+	var filterOp, filterVal string
 	if filterRaw != "" {
 		f := parseSCIMFilter(filterRaw)
-		if f != nil && f.op == "eq" && (f.attr == "username" || f.attr == "emails.value") {
-			emailFilter = strings.ToLower(f.value)
+		if f != nil && (f.attr == "username" || f.attr == "emails.value") {
+			filterOp = f.op
+			filterVal = strings.ToLower(f.value)
 		}
 	}
 
@@ -223,9 +213,18 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 	           LEFT JOIN scim_resource_versions v ON v.user_id = u.keycloak_user_id`
 	args := []interface{}{}
 	argIdx := 1
-	if emailFilter != "" {
+	switch filterOp {
+	case "eq":
 		query += ` WHERE u.email = $` + strconv.Itoa(argIdx)
-		args = append(args, emailFilter)
+		args = append(args, filterVal)
+		argIdx++
+	case "co":
+		query += ` WHERE u.email ILIKE $` + strconv.Itoa(argIdx)
+		args = append(args, "%"+filterVal+"%")
+		argIdx++
+	case "sw":
+		query += ` WHERE u.email ILIKE $` + strconv.Itoa(argIdx)
+		args = append(args, filterVal+"%")
 		argIdx++
 	}
 	query += ` ORDER BY u.created_at`
@@ -484,23 +483,79 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Apply operations
+	newEmail := email
 	for _, op := range patch.Operations {
-		switch strings.ToLower(op.Op) {
+		opLow := strings.ToLower(op.Op)
+		pathLow := strings.ToLower(op.Path)
+
+		// Detect filter-qualified paths like "emails[type eq \"work\"].value"
+		// We strip the bracket segment and treat the remainder as a plain path.
+		plainPath := pathLow
+		if strings.Contains(pathLow, "[") {
+			base, _ := ParseSCIMFilterPath(op.Path)
+			if base != "" {
+				// Resolve the leaf attribute after the bracket:
+				// e.g. "emails[type eq \"work\"].value" → leaf is "emails.value"
+				afterBracket := ""
+				if close := strings.LastIndex(pathLow, "]"); close != -1 && close+1 < len(pathLow) {
+					afterBracket = strings.TrimPrefix(pathLow[close+1:], ".")
+				}
+				if afterBracket != "" {
+					plainPath = base + "." + afterBracket
+				} else {
+					plainPath = base
+				}
+			}
+		}
+
+		switch opLow {
 		case "replace", "add":
 			switch {
-			case strings.EqualFold(op.Path, "active"):
+			case plainPath == "active":
 				if b, ok := op.Value.(bool); ok {
 					disabled = !b
 				}
-			case strings.EqualFold(op.Path, "name.givenName"):
+			case plainPath == "name.givenname":
 				if s, ok := op.Value.(string); ok {
 					firstName = strings.TrimSpace(s)
 				}
-			case strings.EqualFold(op.Path, "name.familyName"):
+			case plainPath == "name.familyname":
 				if s, ok := op.Value.(string); ok {
 					lastName = strings.TrimSpace(s)
 				}
-			case op.Path == "":
+			case plainPath == "username":
+				if s, ok := op.Value.(string); ok {
+					v := strings.ToLower(strings.TrimSpace(s))
+					if v != "" {
+						newEmail = v
+					}
+				}
+			case plainPath == "emails" || plainPath == "emails.value":
+				// Value may be a string (direct), a single object, or array.
+				switch v := op.Value.(type) {
+				case string:
+					if e := strings.ToLower(strings.TrimSpace(v)); e != "" {
+						newEmail = e
+					}
+				case map[string]interface{}:
+					if val, ok := v["value"].(string); ok {
+						if e := strings.ToLower(strings.TrimSpace(val)); e != "" {
+							newEmail = e
+						}
+					}
+				case []interface{}:
+					for _, item := range v {
+						if m, ok := item.(map[string]interface{}); ok {
+							if val, ok := m["value"].(string); ok {
+								if e := strings.ToLower(strings.TrimSpace(val)); e != "" {
+									newEmail = e
+									break
+								}
+							}
+						}
+					}
+				}
+			case plainPath == "":
 				// Value is an object — merge fields
 				if m, ok := op.Value.(map[string]interface{}); ok {
 					if v, ok := m["active"].(bool); ok {
@@ -514,7 +569,18 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 							lastName = strings.TrimSpace(v)
 						}
 					}
+					if v, ok := m["userName"].(string); ok {
+						if e := strings.ToLower(strings.TrimSpace(v)); e != "" {
+							newEmail = e
+						}
+					}
 				}
+			}
+		case "remove":
+			// remove active → set disabled (treat as deactivation)
+			// remove emails/userName → no-op (can't remove required attrs)
+			if plainPath == "active" {
+				disabled = true
 			}
 		}
 	}
@@ -526,15 +592,25 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If deactivating, also disable via Keycloak's dedicated path (already done via UpdateUser above)
-	// and soft-disable in DB
+	// Persist changes. Include email if it changed.
 	newVersion := version + 1
-	_, dbErr := h.db.Exec(ctx,
-		`UPDATE users SET first_name=$1, last_name=$2, disabled=$3, updated_at=NOW()
-		 WHERE keycloak_user_id=$4`,
-		firstName, lastName, disabled, userID)
-	if dbErr != nil {
-		h.logger.Warn("scim patch: db update failed", zap.String("user_id", userID), zap.Error(dbErr))
+	if newEmail != email {
+		_, dbErr := h.db.Exec(ctx,
+			`UPDATE users SET email=$1, first_name=$2, last_name=$3, disabled=$4, updated_at=NOW()
+			 WHERE keycloak_user_id=$5`,
+			newEmail, firstName, lastName, disabled, userID)
+		if dbErr != nil {
+			h.logger.Warn("scim patch: db update (with email) failed", zap.String("user_id", userID), zap.Error(dbErr))
+		}
+		email = newEmail
+	} else {
+		_, dbErr := h.db.Exec(ctx,
+			`UPDATE users SET first_name=$1, last_name=$2, disabled=$3, updated_at=NOW()
+			 WHERE keycloak_user_id=$4`,
+			firstName, lastName, disabled, userID)
+		if dbErr != nil {
+			h.logger.Warn("scim patch: db update failed", zap.String("user_id", userID), zap.Error(dbErr))
+		}
 	}
 	_, _ = h.db.Exec(ctx,
 		`INSERT INTO scim_resource_versions (user_id, version, updated_at) VALUES ($1, $2, NOW())
@@ -826,6 +902,22 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		opLow := strings.ToLower(op.Op)
 		pathLow := strings.ToLower(op.Path)
 
+		// Detect filter-qualified paths like "members[value eq \"user-id\"]".
+		// If present, extract the target user ID from the inner filter.
+		var filterQualifiedUserID string
+		if strings.Contains(pathLow, "[") {
+			base, inner := ParseSCIMFilterPath(op.Path)
+			if base == "members" && inner != nil {
+				// The inner filter should be something like: value eq "user-id"
+				// We extract the value directly from the node.
+				if inner.Op == scimOpEq && inner.Attr == "value" {
+					filterQualifiedUserID = inner.Value
+				}
+				// Normalise the path so the switch below matches "members".
+				pathLow = base
+			}
+		}
+
 		switch {
 		case (opLow == "replace" || opLow == "add") && (pathLow == "displayname" || pathLow == ""):
 			// Replace displayName (direct or object)
@@ -840,22 +932,38 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 			}
 
 		case (opLow == "add") && pathLow == "members":
-			// Add members: value is []{"value": userID}
-			userIDs := extractMemberValues(op.Value)
-			for _, uid := range userIDs {
-				if err := h.keycloak.AddUserToGroup(ctx, uid, groupID); err != nil {
-					h.logger.Warn("scim patch group: add member failed",
-						zap.String("group_id", groupID), zap.String("user_id", uid), zap.Error(err))
+			if filterQualifiedUserID != "" {
+				// Filter-qualified add: add a specific member by value filter.
+				if err := h.keycloak.AddUserToGroup(ctx, filterQualifiedUserID, groupID); err != nil {
+					h.logger.Warn("scim patch group: filter-qualified add member failed",
+						zap.String("group_id", groupID), zap.String("user_id", filterQualifiedUserID), zap.Error(err))
+				}
+			} else {
+				// Add members: value is []{"value": userID}
+				userIDs := extractMemberValues(op.Value)
+				for _, uid := range userIDs {
+					if err := h.keycloak.AddUserToGroup(ctx, uid, groupID); err != nil {
+						h.logger.Warn("scim patch group: add member failed",
+							zap.String("group_id", groupID), zap.String("user_id", uid), zap.Error(err))
+					}
 				}
 			}
 
 		case (opLow == "remove") && pathLow == "members":
-			// Remove members: value may be []{"value": userID} or empty (remove all, not supported)
-			userIDs := extractMemberValues(op.Value)
-			for _, uid := range userIDs {
-				if err := h.keycloak.RemoveUserFromGroup(ctx, uid, groupID); err != nil {
-					h.logger.Warn("scim patch group: remove member failed",
-						zap.String("group_id", groupID), zap.String("user_id", uid), zap.Error(err))
+			if filterQualifiedUserID != "" {
+				// Filter-qualified remove: remove a specific member.
+				if err := h.keycloak.RemoveUserFromGroup(ctx, filterQualifiedUserID, groupID); err != nil {
+					h.logger.Warn("scim patch group: filter-qualified remove member failed",
+						zap.String("group_id", groupID), zap.String("user_id", filterQualifiedUserID), zap.Error(err))
+				}
+			} else {
+				// Remove members: value may be []{"value": userID} or empty (remove all, not supported)
+				userIDs := extractMemberValues(op.Value)
+				for _, uid := range userIDs {
+					if err := h.keycloak.RemoveUserFromGroup(ctx, uid, groupID); err != nil {
+						h.logger.Warn("scim patch group: remove member failed",
+							zap.String("group_id", groupID), zap.String("user_id", uid), zap.Error(err))
+					}
 				}
 			}
 
