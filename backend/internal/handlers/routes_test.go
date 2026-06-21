@@ -179,6 +179,10 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		"POST /api/v1/fleet/enrollment-callback": true, // HMAC
 		"POST /api/v1/auth/forgot-password":      true, // public, rate-limited
 		"POST /api/v1/access/evaluate":           true, // dedicated bearer
+		// SCIM discovery — unauthenticated per RFC 7644 §2.
+		"GET /scim/v2/ServiceProviderConfig": true,
+		"GET /scim/v2/ResourceTypes":         true,
+		"GET /scim/v2/Schemas":               true,
 		// SCIM provisioning surface — dedicated bearer token.
 		"GET /scim/v2/Users":          true,
 		"POST /scim/v2/Users":         true,

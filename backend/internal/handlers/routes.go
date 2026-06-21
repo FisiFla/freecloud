@@ -33,6 +33,12 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	// JWT auth group.
 	r.Post("/api/v1/fleet/enrollment-callback", h.FleetEnrollmentCallback)
 
+	// SCIM 2.0 discovery — unauthenticated per RFC 7644 §2.
+	// Clients need these endpoints to discover capabilities before authenticating.
+	r.Get("/scim/v2/ServiceProviderConfig", h.SCIMServiceProviderConfig)
+	r.Get("/scim/v2/ResourceTypes", h.SCIMResourceTypes)
+	r.Get("/scim/v2/Schemas", h.SCIMSchemas)
+
 	// SCIM 2.0 provisioning — bearer-token authenticated, outside the user-JWT group.
 	// SCIMBearerToken is injected by SetupSCIM (called from main after config load).
 	r.Group(func(r chi.Router) {
@@ -80,6 +86,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.With(middleware.RequirePermission(middleware.PermOnboardOffboard)).Post("/api/v1/offboard/{userId}", h.Offboard)
 			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/create", h.CreateApp)
 			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/{appId}/assign", h.AssignApp)
+			// B4: App Catalog — create from template
+			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/templates/{templateId}/create", h.CreateAppFromTemplate)
 
 			// A4 — user profile update
 			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Patch("/api/v1/users/{id}", h.PatchUser)
@@ -107,6 +115,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 		r.With(middleware.RequirePermission(middleware.PermSelfService)).Post("/api/v1/auth/device-check", h.DeviceCheck)
 		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps", h.ListApps)
+		// B4: App Catalog — list templates
+		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/templates", h.ListAppTemplates)
 		// A3: per-app access policy read
 		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/{appId}/policy", h.GetAppAccessPolicy)
 		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs", h.ListAuditLogs)
