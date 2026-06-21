@@ -639,3 +639,40 @@ export async function decideAccessRequest(
 ): Promise<{ status: string }> {
   return request<{ status: string }>("PATCH", `/api/v1/portal/access-requests/${id}`, { decision });
 }
+
+// C4 (FCEX3-16) — Approval workflow (privileged action queue)
+export interface ApprovalRequestItem {
+  id: string;
+  actionType: string;
+  requesterId: string;
+  payload: Record<string, unknown>;
+  status: string;
+  decidedBy?: string;
+  decidedAt?: string;
+  createdAt?: string;
+}
+
+export async function listApprovalRequests(
+  status: "pending" | "approved" | "rejected" | "all" = "pending",
+): Promise<ApprovalRequestItem[]> {
+  return request<ApprovalRequestItem[]>("GET", `/api/v1/approval-requests?status=${status}`);
+}
+
+export async function submitApprovalRequest(
+  actionType: "onboard" | "offboard",
+  payload: Record<string, unknown>,
+): Promise<{ id: string; status: string }> {
+  return request<{ id: string; status: string }>("POST", "/api/v1/approval-requests", {
+    actionType,
+    payload,
+  });
+}
+
+export async function decideApprovalRequest(
+  id: string,
+  decision: "approved" | "rejected",
+): Promise<{ id: string; status: string }> {
+  return request<{ id: string; status: string }>("PATCH", `/api/v1/approval-requests/${id}`, {
+    decision,
+  });
+}
