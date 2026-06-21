@@ -75,6 +75,11 @@ var migrations = []migration{
 		statement: Migration022,
 	},
 	{
+		id:        23,
+		name:      "enrollment_tokens_used_by_host_id",
+		statement: Migration023,
+	},
+	{
 		id:        28,
 		name:      "audit_logs_hash_chain",
 		statement: Migration028,
@@ -327,6 +332,21 @@ INSERT INTO siem_cursor (id, last_seq) VALUES (1, 0) ON CONFLICT DO NOTHING;
 const Migration022 = `
 ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS seq BIGSERIAL;
 CREATE INDEX IF NOT EXISTS idx_audit_logs_seq ON audit_logs(seq);
+`
+
+// Migration023 adds a used_by_host_id column to enrollment_tokens so the
+// FleetDM enrollment callback can record which device consumed a given token.
+// This enables the device-identity cookie endpoint (A3 / FCEX3-7) to look up
+// the enrolled fleet_host_id from an enrollment token without re-querying
+// users_devices_mapping — the token row itself becomes the link.
+//
+// Plain TEXT (no FK): the enrollment callback sets used_by_host_id in the same
+// transaction that upserts the devices row, and the token UPDATE necessarily
+// runs before the device INSERT (it gates token consumption), so a FK to
+// devices(fleet_host_id) would be violated mid-transaction. The column is only
+// a lookup hint, so referential integrity is unnecessary.
+const Migration023 = `
+ALTER TABLE enrollment_tokens ADD COLUMN IF NOT EXISTS used_by_host_id TEXT;
 `
 
 // Migration028 adds row_hash + prev_hash to audit_logs for tamper-evident

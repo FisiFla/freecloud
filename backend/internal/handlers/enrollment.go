@@ -107,10 +107,10 @@ func (h *Handler) linkEnrolledDevice(ctx context.Context, req EnrollmentCallback
 	var userID string
 	if err := tx.QueryRow(ctx,
 		`UPDATE enrollment_tokens
-		 SET used_at = NOW()
+		 SET used_at = NOW(), used_by_host_id = $2
 		 WHERE token = $1 AND used_at IS NULL AND expires_at > NOW()
 		 RETURNING user_id`,
-		req.EnrollmentToken,
+		req.EnrollmentToken, req.HostID,
 	).Scan(&userID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", errEnrollmentTokenNotConsumable

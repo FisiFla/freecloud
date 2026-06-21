@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-setup build-backend build-frontend clean verify verify-db verify-all test-db prod-build prod-up prod-down
+.PHONY: dev-up dev-down db-migrate kc-setup kc-build build-backend build-frontend clean verify verify-db verify-all test-db prod-build prod-up prod-down
 
 dev-up:
 	docker compose -f docker/docker-compose.yml up -d
@@ -16,6 +16,12 @@ db-migrate:
 kc-setup:
 	@chmod +x backend/cmd/scripts/setup_realm.sh
 	@bash backend/cmd/scripts/setup_realm.sh
+
+# A2 (FCEX3-6): Build the custom Keycloak image with the posture-check SPI.
+# Requires Docker. Runs the multi-stage docker/Dockerfile.keycloak build.
+# Only needed when keycloak-authenticator/ changes — not on every Go/TS change.
+kc-build:
+	docker compose -f docker/docker-compose.yml build keycloak
 
 test-integration:
 	cd backend && go test ./internal/handlers/ -v -run Integration
