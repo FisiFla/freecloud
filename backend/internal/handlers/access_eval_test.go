@@ -173,6 +173,86 @@ func TestAccessEvalNoDevices(t *testing.T) {
 	}
 }
 
+func TestAccessEvalExplicitDeviceMustBeMappedToUser(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const devID = "dev-spoofed"
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM users "):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = userID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM users_devices_mapping"):
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			default:
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+	}
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			t.Fatalf("Fleet must not be called for an unmapped explicit device ID")
+			return nil, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, DeviceID: devID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false for unmapped explicit device")
+	}
+	if len(resp.Reasons) != 1 || resp.Reasons[0] != "device is not enrolled for user" {
+		t.Fatalf("unexpected reasons: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalExplicitMappedDeviceAllowsCleanPosture(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const devID = "dev-clean"
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM users "):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = userID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM users_devices_mapping"):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = devID
+					return nil
+				}}
+			default:
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+	}
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			if hostID != devID {
+				t.Fatalf("got hostID %q, want %q", hostID, devID)
+			}
+			return &fleet.SecurityState{FirewallEnabled: true, DiskEncrypted: true}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, DeviceID: "  " + devID + "  "})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if !resp.Allow {
+		t.Fatalf("expected allow=true for mapped clean explicit device, got reasons: %v", resp.Reasons)
+	}
+}
+
 func TestAccessEvalFleetError(t *testing.T) {
 	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	const devID = "dev-001"

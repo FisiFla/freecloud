@@ -78,15 +78,10 @@ func (h *Handler) FleetEnrollmentCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Audit on a detached context so a disconnect can't drop the record.
-	auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	details, _ := json.Marshal(map[string]interface{}{"host_id": req.HostID, "hostname": req.Hostname})
-	if _, auditErr := h.db.Exec(auditCtx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		"fleet-webhook", "device_enroll", "device", req.HostID, string(details),
-	); auditErr != nil {
+	if auditErr := h.writeAuditEntryDetached("fleet-webhook", "device_enroll", "device", req.HostID, map[string]interface{}{
+		"host_id":  req.HostID,
+		"hostname": req.Hostname,
+	}); auditErr != nil {
 		logger.Warn("failed to write device-enroll audit log", zap.Error(auditErr))
 	}
 

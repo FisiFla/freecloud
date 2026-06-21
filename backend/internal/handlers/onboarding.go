@@ -163,12 +163,12 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	// onboarding can never lack an audit record. Failure here triggers the
 	// Keycloak rollback via the deferred compensation above.
 	if h.db != nil {
-		auditDetails, _ := json.Marshal(map[string]interface{}{
+		auditDetails := map[string]interface{}{
 			"email": req.Email, "department": req.Department, "role": req.Role,
-		})
+		}
 		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, string(auditDetails), enrollmentToken); persistErr != nil {
+		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, auditDetails, enrollmentToken); persistErr != nil {
 			logger.Error("failed to persist onboarded user; rolling back Keycloak user",
 				zap.String("kc_user_id", kcUserID), zap.Error(persistErr))
 			respondError(w, http.StatusInternalServerError, "failed to persist user")
@@ -208,7 +208,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 // enrollment token was issued) the token→user mapping, all in a single
 // transaction — so a persisted onboarding always has a matching audit record,
 // and a device that later enrolls with that token can be linked to its owner.
-func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req OnboardRequest, actorID, auditDetails, enrollmentToken string) error {
+func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req OnboardRequest, actorID string, auditDetails any, enrollmentToken string) error {
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -222,11 +222,7 @@ func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req Onboa
 	); err != nil {
 		return fmt.Errorf("insert user: %w", err)
 	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "onboard", "user", kcUserID, auditDetails,
-	); err != nil {
+	if err := writeAuditEntry(ctx, tx, actorID, "onboard", "user", kcUserID, auditDetails); err != nil {
 		return fmt.Errorf("insert audit log: %w", err)
 	}
 	if enrollmentToken != "" {

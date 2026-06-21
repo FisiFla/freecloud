@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -310,14 +309,9 @@ func (h *Handler) CompleteCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Audit (best-effort, detached context).
-	auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, _ = h.db.Exec(auditCtx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, 'complete_campaign', 'campaign', $2, '{}')`,
-		actorID, campaignID,
-	)
+	if err := h.writeAuditEntryDetached(actorID, "complete_campaign", "campaign", campaignID, map[string]interface{}{}); err != nil {
+		h.logger.Warn("failed to write campaign completion audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"completed": true})
 }

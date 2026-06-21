@@ -1,6 +1,79 @@
 package handlers
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"go.uber.org/zap"
+)
+
+func TestAssignAppCompensatesWhenAssignmentInsertFails(t *testing.T) {
+	const appID = "app-123"
+	const keycloakClientID = "kc-client-123"
+	const userID = "00000000-0000-0000-0000-000000000099"
+
+	db := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*string)) = keycloakClientID
+				return nil
+			}}
+		},
+		beginFn: func(context.Context) (pgx.Tx, error) {
+			return &fakeTx{
+				execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+					return pgconn.CommandTag{}, errors.New("db insert failed")
+				},
+			}, nil
+		},
+	}
+
+	assignCalled := false
+	unassignCalled := false
+	kc := &fakeKeycloak{
+		assignUserToClientFn: func(_ context.Context, gotUserID, gotClientID string) error {
+			assignCalled = true
+			if gotUserID != userID || gotClientID != keycloakClientID {
+				t.Fatalf("assign got user=%q client=%q", gotUserID, gotClientID)
+			}
+			return nil
+		},
+		unassignUserFromClientFn: func(_ context.Context, gotUserID, gotClientID string) error {
+			unassignCalled = true
+			if gotUserID != userID || gotClientID != keycloakClientID {
+				t.Fatalf("unassign got user=%q client=%q", gotUserID, gotClientID)
+			}
+			return nil
+		},
+	}
+
+	h := NewHandler(db, kc, &fakeFleet{}, zap.NewNop())
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/apps/"+appID+"/assign", bytes.NewBufferString(`{"userId":"`+userID+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	chiCtx := chi.NewRouteContext()
+	chiCtx.URLParams.Add("appId", appID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, chiCtx))
+	rec := httptest.NewRecorder()
+
+	h.AssignApp(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !assignCalled {
+		t.Fatal("expected Keycloak assignment to be attempted")
+	}
+	if !unassignCalled {
+		t.Fatal("expected failed DB insert to compensate Keycloak assignment")
+	}
+}
 
 // TestValidateRedirectURI locks down the exact attack cases the redirect-URI
 // validator is meant to block, so it cannot regress.

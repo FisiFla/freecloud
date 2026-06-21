@@ -11,12 +11,10 @@ package handlers
 // token (ACCESS_EVAL_TOKEN), registered OUTSIDE the user-JWT group.
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
@@ -84,6 +82,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	req.UserID = strings.TrimSpace(req.UserID)
+	req.DeviceID = strings.TrimSpace(req.DeviceID)
 	if req.UserID == "" {
 		h.auditAccessDecision("", req.AppID, false, []string{"missing or invalid user identifier"})
 		respondJSON(w, http.StatusOK, AccessEvalResponse{
@@ -127,7 +126,28 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	// 2. Collect device IDs to evaluate.
 	var deviceIDs []string
 	if req.DeviceID != "" {
-		deviceIDs = []string{req.DeviceID}
+		var mappedDeviceID string
+		err := h.db.QueryRow(ctx,
+			`SELECT device_id FROM users_devices_mapping
+			 WHERE user_id = $1 AND device_id = $2`,
+			req.UserID, req.DeviceID,
+		).Scan(&mappedDeviceID)
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				h.logger.Error("access eval: failed to verify device mapping",
+					zap.String("user_id", req.UserID),
+					zap.String("device_id", req.DeviceID),
+					zap.Error(err),
+				)
+			}
+			h.auditAccessDecision(req.UserID, req.AppID, false, []string{"device is not enrolled for user"})
+			respondJSON(w, http.StatusOK, AccessEvalResponse{
+				Allow:   false,
+				Reasons: []string{"device is not enrolled for user"},
+			})
+			return
+		}
+		deviceIDs = []string{mappedDeviceID}
 	} else {
 		rows, err := h.db.Query(ctx,
 			`SELECT device_id FROM users_devices_mapping WHERE user_id = $1`,
@@ -252,9 +272,6 @@ func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons 
 	if h.db == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
 	actorID := "service:access-eval"
 
 	details := map[string]interface{}{
@@ -262,12 +279,7 @@ func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons 
 		"allow":   allow,
 		"reasons": reasons,
 	}
-	_, err := h.db.Exec(ctx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "access_eval", "user", userID, details,
-	)
-	if err != nil {
+	if err := h.writeAuditEntryDetached(actorID, "access_eval", "user", userID, details); err != nil {
 		h.logger.Warn("access eval: failed to write audit log", zap.Error(err))
 	}
 }

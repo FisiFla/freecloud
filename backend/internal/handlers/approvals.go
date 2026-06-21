@@ -36,7 +36,7 @@ type SubmitApprovalRequest struct {
 // SubmitApproval creates a pending approval request. Called by helpdesk.
 //
 // Route: POST /api/v1/approval-requests
-// Permission-gated via PermOnboardOffboard.
+// Permission-gated via PermSubmitApprovals.
 func (h *Handler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.GetActorID(r.Context())
 
@@ -80,15 +80,11 @@ func (h *Handler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Audit the submission.
-	auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, _ = h.db.Exec(auditCtx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "approval.submitted", "approval_request", id,
-		json.RawMessage(`{"action_type":"`+req.ActionType+`"}`),
-	)
+	if err := h.writeAuditEntryDetached(actorID, "approval.submitted", "approval_request", id, map[string]interface{}{
+		"action_type": req.ActionType,
+	}); err != nil {
+		h.logger.Warn("failed to write approval submission audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "pending"})
 }
@@ -201,29 +197,44 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Mark decided.
-	_, err = h.db.Exec(r.Context(),
-		`UPDATE approval_requests SET status=$1, decided_by=$2, decided_at=NOW() WHERE id=$3`,
-		body.Decision, actorID, approvalID,
-	)
-	if err != nil {
-		h.logger.Error("failed to update approval request", zap.Error(err))
-		respondError(w, http.StatusInternalServerError, "internal error")
+	if body.Decision == "rejected" {
+		tag, err := h.db.Exec(r.Context(),
+			`UPDATE approval_requests
+			 SET status='rejected', decided_by=$1, decided_at=NOW()
+			 WHERE id=$2 AND status='pending'`,
+			actorID, approvalID,
+		)
+		if err != nil {
+			h.logger.Error("failed to reject approval request", zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if tag.RowsAffected() == 0 {
+			respondError(w, http.StatusConflict, "approval request already decided")
+			return
+		}
+		if err := h.writeAuditEntryDetached(actorID, "approval.rejected", "approval_request", approvalID, map[string]interface{}{
+			"action_type": actionType,
+		}); err != nil {
+			h.logger.Warn("failed to write approval rejection audit log", zap.Error(err))
+		}
+		respondJSON(w, http.StatusOK, map[string]string{"id": approvalID, "status": "rejected"})
 		return
 	}
 
-	// Audit the decision.
-	auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, _ = h.db.Exec(auditCtx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "approval."+body.Decision, "approval_request", approvalID,
-		json.RawMessage(`{"action_type":"`+actionType+`"}`),
+	tag, err := h.db.Exec(r.Context(),
+		`UPDATE approval_requests
+		 SET status='executing', decided_by=$1, decided_at=NOW()
+		 WHERE id=$2 AND status='pending'`,
+		actorID, approvalID,
 	)
-
-	if body.Decision == "rejected" {
-		respondJSON(w, http.StatusOK, map[string]string{"id": approvalID, "status": "rejected"})
+	if err != nil {
+		h.logger.Error("failed to claim approval request", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		respondError(w, http.StatusConflict, "approval request already decided")
 		return
 	}
 
@@ -239,8 +250,49 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 			zap.String("action_type", actionType),
 			zap.Error(err),
 		)
+		resetCtx, cancel := context.WithTimeout(context.Background(), auditWriteTimeout)
+		defer cancel()
+		if _, resetErr := h.db.Exec(resetCtx,
+			`UPDATE approval_requests
+			 SET status='pending', decided_by=NULL, decided_at=NULL
+			 WHERE id=$1 AND status='executing'`,
+			approvalID,
+		); resetErr != nil {
+			h.logger.Error("failed to reset approval request after execution failure",
+				zap.String("approval_id", approvalID),
+				zap.Error(resetErr),
+			)
+		}
+		if auditErr := h.writeAuditEntryDetached(actorID, "approval.execution_failed", "approval_request", approvalID, map[string]interface{}{
+			"action_type": actionType,
+			"error":       err.Error(),
+		}); auditErr != nil {
+			h.logger.Warn("failed to write approval execution failure audit log", zap.Error(auditErr))
+		}
 		respondError(w, http.StatusInternalServerError, "action execution failed: "+err.Error())
 		return
+	}
+
+	tag, err = h.db.Exec(r.Context(),
+		`UPDATE approval_requests
+		 SET status='approved', decided_by=$1, decided_at=NOW()
+		 WHERE id=$2 AND status='executing'`,
+		actorID, approvalID,
+	)
+	if err != nil {
+		h.logger.Error("failed to mark approval request approved", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		h.logger.Error("approval request changed state during execution", zap.String("approval_id", approvalID))
+		respondError(w, http.StatusInternalServerError, "approval request changed state during execution")
+		return
+	}
+	if err := h.writeAuditEntryDetached(actorID, "approval.approved", "approval_request", approvalID, map[string]interface{}{
+		"action_type": actionType,
+	}); err != nil {
+		h.logger.Warn("failed to write approval approval audit log", zap.Error(err))
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"id": approvalID, "status": "approved"})
@@ -285,10 +337,10 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 		}
 
 		if h.db != nil {
-			auditDetails, _ := json.Marshal(map[string]interface{}{
+			auditDetails := map[string]interface{}{
 				"email": req.Email, "approval_id": approvalID,
-			})
-			if err := h.persistOnboard(ctx, kcUserID, req, approverID, string(auditDetails), enrollmentToken); err != nil {
+			}
+			if err := h.persistOnboard(ctx, kcUserID, req, approverID, auditDetails, enrollmentToken); err != nil {
 				return fmt.Errorf("persist onboard: %w", err)
 			}
 		}
@@ -308,14 +360,11 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 				`UPDATE users SET disabled = true, updated_at = NOW() WHERE keycloak_user_id = $1`,
 				userID,
 			)
-			details, _ := json.Marshal(map[string]interface{}{"approval_id": approvalID})
-			auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			_, _ = h.db.Exec(auditCtx,
-				`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-				 VALUES ($1, $2, $3, $4, $5)`,
-				approverID, "offboard", "user", userID, details,
-			)
+			if err := h.writeAuditEntryDetached(approverID, "offboard", "user", userID, map[string]interface{}{
+				"approval_id": approvalID,
+			}); err != nil {
+				h.logger.Warn("failed to write approved offboard audit log", zap.Error(err))
+			}
 		}
 		return nil
 

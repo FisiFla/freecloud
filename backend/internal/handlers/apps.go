@@ -172,13 +172,10 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 
 	// Write audit log
 	actorID := middleware.GetActorID(r.Context())
-	_, auditErr := h.db.Exec(ctx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "app_create", "app", appID,
-		map[string]interface{}{"name": req.Name, "protocol": req.Protocol},
-	)
-	if auditErr != nil {
+	if auditErr := h.writeAuditEntry(ctx, actorID, "app_create", "app", appID, map[string]interface{}{
+		"name":     req.Name,
+		"protocol": req.Protocol,
+	}); auditErr != nil {
 		h.logger.Warn("failed to write audit log", zap.Error(auditErr))
 	}
 
@@ -257,30 +254,62 @@ func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record in app_assignments
 	actorID := middleware.GetActorID(r.Context())
-	_, err = h.db.Exec(ctx,
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		h.compensateAppAssignment(req.UserID, keycloakClientID)
+		h.logger.Error("failed to begin app assignment transaction", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to record app assignment")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	tag, err := tx.Exec(ctx,
 		`INSERT INTO app_assignments (app_id, user_id, assigned_by)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (app_id, user_id) DO NOTHING`,
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (app_id, user_id) DO NOTHING`,
 		appID, req.UserID, actorID,
 	)
+	insertedAssignment := tag.RowsAffected() > 0
 	if err != nil {
-		h.logger.Warn("failed to record app assignment", zap.Error(err))
+		h.compensateAppAssignment(req.UserID, keycloakClientID)
+		h.logger.Error("failed to record app assignment", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to record app assignment")
+		return
 	}
 
-	// Write audit log
-	_, auditErr := h.db.Exec(ctx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-		 VALUES ($1, $2, $3, $4, $5)`,
-		actorID, "app_assign", "app", appID,
-		map[string]interface{}{"user_id": req.UserID},
-	)
-	if auditErr != nil {
-		h.logger.Warn("failed to write audit log", zap.Error(auditErr))
+	if err := writeAuditEntry(ctx, tx, actorID, "app_assign", "app", appID, map[string]interface{}{
+		"user_id": req.UserID,
+	}); err != nil {
+		if insertedAssignment {
+			h.compensateAppAssignment(req.UserID, keycloakClientID)
+		}
+		h.logger.Error("failed to write app assignment audit log", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to record app assignment")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		if insertedAssignment {
+			h.compensateAppAssignment(req.UserID, keycloakClientID)
+		}
+		h.logger.Error("failed to commit app assignment", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to record app assignment")
+		return
 	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"assigned": true})
+}
+
+func (h *Handler) compensateAppAssignment(userID, keycloakClientID string) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.keycloak.UnassignUserFromClient(cleanupCtx, userID, keycloakClientID); err != nil {
+		h.logger.Error("failed to compensate Keycloak app assignment",
+			zap.String("user_id", userID),
+			zap.String("kc_client_id", keycloakClientID),
+			zap.Error(err),
+		)
+	}
 }
 
 // ListApps lists all connected apps from the local database.

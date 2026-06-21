@@ -1,10 +1,8 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -14,10 +12,10 @@ import (
 
 // MFAStatusResponse describes the MFA enrollment state for a user.
 type MFAStatusResponse struct {
-	UserID      string `json:"userId"`
-	OTPEnabled  bool   `json:"otpEnabled"`
-	OTPPending  bool   `json:"otpPending"`
-	WebAuthnEnabled bool `json:"webAuthnEnabled"`
+	UserID          string `json:"userId"`
+	OTPEnabled      bool   `json:"otpEnabled"`
+	OTPPending      bool   `json:"otpPending"`
+	WebAuthnEnabled bool   `json:"webAuthnEnabled"`
 }
 
 // RequireMFARequest specifies which MFA type to require.
@@ -105,17 +103,9 @@ func (h *Handler) RequireMFA(w http.ResponseWriter, r *http.Request) {
 	// Audit log — best-effort, detached context.
 	if h.db != nil {
 		actorID := middleware.GetActorID(r.Context())
-		auditDetails, _ := json.Marshal(map[string]interface{}{
+		if auditErr := h.writeAuditEntryDetached(actorID, "require_mfa", "user", userID, map[string]interface{}{
 			"mfa_type": req.Type, "action": action,
-		})
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, auditErr := h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "require_mfa", "user", userID, string(auditDetails),
-		)
-		if auditErr != nil {
+		}); auditErr != nil {
 			h.logger.Warn("failed to write audit log for require_mfa", zap.Error(auditErr))
 		}
 	}

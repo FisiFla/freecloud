@@ -1,12 +1,10 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -103,14 +101,10 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		details, _ := json.Marshal(map[string]interface{}{"team_name": team.Name, "team_id": team.ID})
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "fleet_team_create", "team", team.Name, details,
-		); err != nil {
+		if err := h.writeAuditEntryDetached(actorID, "fleet_team_create", "team", team.Name, map[string]interface{}{
+			"team_name": team.Name,
+			"team_id":   team.ID,
+		}); err != nil {
 			h.logger.Warn("failed to write audit log for team creation", zap.Error(err))
 		}
 	}
@@ -158,14 +152,10 @@ func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		details, _ := json.Marshal(map[string]interface{}{"team_id": teamID, "policy_id": req.PolicyID})
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "fleet_team_policy_assign", "team", teamIDStr, details,
-		); err != nil {
+		if err := h.writeAuditEntryDetached(actorID, "fleet_team_policy_assign", "team", teamIDStr, map[string]interface{}{
+			"team_id":   teamID,
+			"policy_id": req.PolicyID,
+		}); err != nil {
 			h.logger.Warn("failed to write audit log for team policy assignment", zap.Error(err))
 		}
 	}
@@ -216,14 +206,10 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		details, _ := json.Marshal(map[string]interface{}{"team_id": teamID, "host_ids": req.HostIDs})
-		auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if _, err := h.db.Exec(auditCtx,
-			`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details)
-			 VALUES ($1, $2, $3, $4, $5)`,
-			actorID, "fleet_host_move_team", "team", teamIDStr, details,
-		); err != nil {
+		if err := h.writeAuditEntryDetached(actorID, "fleet_host_move_team", "team", teamIDStr, map[string]interface{}{
+			"team_id":  teamID,
+			"host_ids": req.HostIDs,
+		}); err != nil {
 			h.logger.Warn("failed to write audit log for host move", zap.Error(err))
 		}
 	}

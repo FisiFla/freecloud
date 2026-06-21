@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
@@ -101,8 +103,19 @@ func TestRouterReadOnlyCanReadUsersButCannotOnboard(t *testing.T) {
 	}
 }
 
-func TestRouterHelpdeskCanOnboardButCannotCreateApp(t *testing.T) {
-	h := setupTestHandler(t)
+func TestRouterHelpdeskCanSubmitApprovalButCannotDirectlyOnboard(t *testing.T) {
+	db := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+			if strings.Contains(sql, "INSERT INTO approval_requests") {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = "00000000-0000-0000-0000-000000000001"
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 	r := newRoleTestRouter(h, middleware.RoleHelpdesk)
 
 	body := `{"firstName":"A","lastName":"B","email":"a@b.com"}`
@@ -110,8 +123,17 @@ func TestRouterHelpdeskCanOnboardButCannotCreateApp(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("helpdesk POST /onboard: expected 200, got %d (body: %s)", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("helpdesk POST /onboard: expected 403, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+
+	approvalBody := `{"actionType":"onboard","payload":{"firstName":"A","lastName":"B","email":"a@b.com"}}`
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/approval-requests", strings.NewReader(approvalBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("helpdesk POST /approval-requests: expected 201, got %d (body: %s)", rec.Code, rec.Body.String())
 	}
 
 	appBody := `{"name":"App","protocol":"OIDC","redirectURIs":["https://app.example/cb"],"baseURL":"https://app.example"}`

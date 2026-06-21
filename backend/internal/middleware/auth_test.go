@@ -395,7 +395,8 @@ func TestHasPermissionMatrix(t *testing.T) {
 	}{
 		{RoleSuperAdmin, PermManageUsers, true},
 		{RoleHelpdesk, PermManageUsers, false},
-		{RoleHelpdesk, PermOnboardOffboard, true},
+		{RoleHelpdesk, PermOnboardOffboard, false},
+		{RoleHelpdesk, PermSubmitApprovals, true},
 		{RoleAuditor, PermOnboardOffboard, false},
 		{RoleAuditor, PermExportAuditLogs, true},
 		{RoleReadOnly, PermExportAuditLogs, false},

@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -122,6 +124,9 @@ func TestDecideApprovalRejectAudited(t *testing.T) {
 					auditInserted = true
 				}
 			}
+			if strings.Contains(sql, "UPDATE approval_requests") {
+				return pgconn.NewCommandTag("UPDATE 1"), nil
+			}
 			return pgconn.CommandTag{}, nil
 		},
 	}
@@ -197,6 +202,76 @@ func TestDecideApprovalAlreadyDecidedConflict(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDecideApprovalExecutionFailureResetsPending(t *testing.T) {
+	approvalID := "00000000-0000-0000-0000-000000000004"
+
+	sawExecuting := false
+	sawReset := false
+	sawApproved := false
+	db := &fakeDB{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error {
+				if len(dest) < 3 {
+					return nil
+				}
+				*(dest[0].(*string)) = "onboard"
+				*(dest[1].(*string)) = "pending"
+				payload, _ := json.Marshal(map[string]string{"email": "new@example.com"})
+				*(dest[2].(*[]byte)) = payload
+				return nil
+			}}
+		},
+		execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+			switch {
+			case strings.Contains(sql, "status='pending', decided_by=NULL"):
+				sawReset = true
+				return pgconn.NewCommandTag("UPDATE 1"), nil
+			case strings.Contains(sql, "status='executing'"):
+				sawExecuting = true
+				return pgconn.NewCommandTag("UPDATE 1"), nil
+			case strings.Contains(sql, "status='approved'"):
+				sawApproved = true
+				return pgconn.NewCommandTag("UPDATE 1"), nil
+			default:
+				return pgconn.CommandTag{}, nil
+			}
+		},
+	}
+	kc := &fakeKeycloak{
+		createUserFn: func(context.Context, string, string, string, string) (*keycloak.CreateUserResult, error) {
+			return nil, errors.New("keycloak unavailable")
+		},
+	}
+	h := &Handler{
+		db:       db,
+		keycloak: kc,
+		fleet:    &fakeFleet{},
+		logger:   zap.NewNop(),
+	}
+
+	body := `{"decision":"approved"}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/approval-requests/"+approvalID, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(setActorCtx(req.Context(), "admin-user"))
+	req = withApprovalChiParam(req, "id", approvalID)
+	rec := httptest.NewRecorder()
+
+	h.DecideApproval(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !sawExecuting {
+		t.Fatal("expected approval to be claimed as executing")
+	}
+	if !sawReset {
+		t.Fatal("expected failed execution to reset approval to pending")
+	}
+	if sawApproved {
+		t.Fatal("must not mark approval approved after execution failure")
 	}
 }
 

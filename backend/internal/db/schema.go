@@ -99,6 +99,11 @@ var migrations = []migration{
 		name:      "approval_requests_indexes",
 		statement: Migration031,
 	},
+	{
+		id:        32,
+		name:      "approval_requests_executing_status",
+		statement: Migration032,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -432,6 +437,16 @@ const Migration031 = `
 CREATE INDEX IF NOT EXISTS idx_approval_requests_status     ON approval_requests(status);
 CREATE INDEX IF NOT EXISTS idx_approval_requests_requester  ON approval_requests(requester_id);
 CREATE INDEX IF NOT EXISTS idx_approval_requests_created_at ON approval_requests(created_at DESC);
+`
+
+// Migration032 allows an approval request to be claimed while its approved
+// action is executing, without exposing it as approved before the action
+// actually succeeds.
+const Migration032 = `
+ALTER TABLE approval_requests DROP CONSTRAINT IF EXISTS approval_requests_status_check;
+ALTER TABLE approval_requests
+    ADD CONSTRAINT approval_requests_status_check
+    CHECK (status IN ('pending', 'executing', 'approved', 'rejected'));
 `
 
 // RunMigrations applies any pending migrations in order, recording each in
