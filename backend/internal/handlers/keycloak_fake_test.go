@@ -43,6 +43,10 @@ type fakeKeycloak struct {
 	// D1: account policy
 	getRealmPolicyFn    func(ctx context.Context) (*keycloak.RealmPolicyResult, error)
 	updateRealmPolicyFn func(ctx context.Context, req keycloak.UpdateRealmPolicyRequest) error
+
+	// B1: MFA self-service credential operations
+	getUserCredentialsFullFn func(ctx context.Context, userID string) ([]*gocloak.CredentialRepresentation, error)
+	deleteCredentialFn       func(ctx context.Context, userID, credentialID string) error
 }
 
 func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -213,6 +217,20 @@ func (f *fakeKeycloak) ListUsers(ctx context.Context) ([]gocloak.User, error) {
 		return f.listUsersFn(ctx)
 	}
 	return nil, nil
+}
+
+func (f *fakeKeycloak) GetUserCredentialsFull(ctx context.Context, userID string) ([]*gocloak.CredentialRepresentation, error) {
+	if f.getUserCredentialsFullFn != nil {
+		return f.getUserCredentialsFullFn(ctx, userID)
+	}
+	return []*gocloak.CredentialRepresentation{}, nil
+}
+
+func (f *fakeKeycloak) DeleteCredential(ctx context.Context, userID, credentialID string) error {
+	if f.deleteCredentialFn != nil {
+		return f.deleteCredentialFn(ctx, userID, credentialID)
+	}
+	return nil
 }
 
 func (f *fakeKeycloak) GetGroupByID(ctx context.Context, groupID string) (*gocloak.Group, error) {

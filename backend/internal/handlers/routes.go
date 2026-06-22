@@ -186,6 +186,14 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.Get("/api/v1/portal/me/apps", h.PortalMyApps)
 			r.Get("/api/v1/portal/me/compliance", h.PortalMyCompliance)
 			r.Post("/api/v1/portal/access-requests", h.PortalRequestAccess)
+
+			// B1: MFA self-service enrollment (scoped to calling user only).
+			r.Get("/api/v1/portal/me/mfa/factors", h.PortalMyMFAFactors)
+			r.Post("/api/v1/portal/me/mfa/totp/enroll", h.PortalEnrollTOTP)
+			r.Post("/api/v1/portal/me/mfa/webauthn/enroll", h.PortalEnrollWebAuthn)
+			r.Delete("/api/v1/portal/me/mfa/factors/{credId}", h.PortalRemoveMFAFactor)
+			r.Get("/api/v1/portal/me/recovery-codes", h.PortalRecoveryCodesStatus)
+			r.Post("/api/v1/portal/me/recovery-codes", h.PortalGenerateRecoveryCodes)
 		})
 		// Admin approval queue for access requests.
 		r.Group(func(r chi.Router) {

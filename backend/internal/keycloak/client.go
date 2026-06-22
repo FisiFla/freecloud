@@ -57,6 +57,13 @@ type KeycloakClientInterface interface {
 	GetRealmPolicy(ctx context.Context) (*RealmPolicyResult, error)
 	// UpdateRealmPolicy writes new password-policy + brute-force settings to the realm.
 	UpdateRealmPolicy(ctx context.Context, req UpdateRealmPolicyRequest) error
+	// B1 (MFA self-service): credential management.
+
+	// GetUserCredentialsFull returns the full CredentialRepresentation slice for
+	// the user, including ID and type fields needed for remove operations.
+	GetUserCredentialsFull(ctx context.Context, userID string) ([]*gocloak.CredentialRepresentation, error)
+	// DeleteCredential removes a single credential by its Keycloak credential ID.
+	DeleteCredential(ctx context.Context, userID, credentialID string) error
 
 	// B1: SCIM Group operations.
 
@@ -742,6 +749,34 @@ func (k *KeycloakClient) GetUserCredentials(ctx context.Context, userID string) 
 		}
 	}
 	return types, nil
+}
+
+// GetUserCredentialsFull returns the full CredentialRepresentation slice for the
+// user, including credential IDs needed to remove specific factors.
+func (k *KeycloakClient) GetUserCredentialsFull(ctx context.Context, userID string) ([]*gocloak.CredentialRepresentation, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	creds, err := k.client.GetCredentials(ctx, token, k.realm, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get credentials (full) for user %s: %w", userID, err)
+	}
+	return creds, nil
+}
+
+// DeleteCredential removes a single Keycloak credential by its ID.
+func (k *KeycloakClient) DeleteCredential(ctx context.Context, userID, credentialID string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.DeleteCredentials(ctx, token, k.realm, userID, credentialID); err != nil {
+		return fmt.Errorf("delete credential %s for user %s: %w", credentialID, userID, err)
+	}
+	zap.L().Info("deleted MFA credential",
+		zap.String("user_id", userID), zap.String("credential_id", credentialID))
+	return nil
 }
 
 // GetUserRequiredActions returns the pending required actions for a user.

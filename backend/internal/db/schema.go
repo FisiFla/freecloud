@@ -114,6 +114,11 @@ var migrations = []migration{
 		name:      "device_commands",
 		statement: Migration034,
 	},
+	{
+		id:        35,
+		name:      "mfa_self_service",
+		statement: Migration035,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -490,6 +495,29 @@ CREATE TABLE IF NOT EXISTS device_commands (
 );
 CREATE INDEX IF NOT EXISTS idx_device_commands_host_id      ON device_commands(host_id);
 CREATE INDEX IF NOT EXISTS idx_device_commands_requested_at ON device_commands(requested_at DESC);
+`
+
+// Migration035 adds the tables required for MFA self-service (B1):
+//
+//   - mfa_recovery_codes: hashed single-use backup codes for MFA users.
+//   - mfa_coverage_cache: a per-user cache of MFA enrollment state used by the
+//     analytics snapshot job to compute mfa_coverage_pct without a live
+//     Keycloak round-trip.
+const Migration035 = `
+CREATE TABLE IF NOT EXISTS mfa_recovery_codes (
+    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id    TEXT        NOT NULL,
+    code_hash  TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    used_at    TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_mfa_recovery_codes_user ON mfa_recovery_codes(user_id);
+
+CREATE TABLE IF NOT EXISTS mfa_coverage_cache (
+    user_id    TEXT        PRIMARY KEY,
+    has_mfa    BOOLEAN     NOT NULL DEFAULT FALSE,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

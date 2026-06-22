@@ -122,6 +122,10 @@ func TestTakeSnapshot_HappyPath(t *testing.T) {
 		queryRowFn: queryRowCallSeq([]func(dest ...any) error{
 			// COUNT(*) FROM devices
 			func(dest ...any) error { *(dest[0].(*int)) = 5; return nil },
+			// COUNT(*) FROM users (mfaTotal for coverage)
+			func(dest ...any) error { *(dest[0].(*int)) = 5; return nil },
+			// COUNT(*) FROM mfa_coverage_cache WHERE has_mfa = TRUE (mfaEnrolled)
+			func(dest ...any) error { *(dest[0].(*int)) = 3; return nil },
 			// COUNT(*) FROM connected_apps
 			func(dest ...any) error { *(dest[0].(*int)) = 3; return nil },
 			// MAX(captured_at) FROM analytics_snapshots
