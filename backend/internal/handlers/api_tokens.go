@@ -166,7 +166,7 @@ func (h *Handler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 	}
 	rows, err := h.db.Query(r.Context(),
 		`SELECT id, name, role, service_identity, created_at, expires_at
-		 FROM api_tokens WHERE revoked_at IS NULL ORDER BY created_at DESC`,
+		 FROM api_tokens WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC`,
 	)
 	if err != nil {
 		h.logger.Error("failed to list api tokens", zap.Error(err))

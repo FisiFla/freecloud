@@ -283,6 +283,62 @@ func TestDecideApprovalExecutionFailureResetsPending(t *testing.T) {
 	}
 }
 
+// TestDecideApprovalSelfApprovalForbidden verifies that a user who is both the
+// requester and the approver receives 403 and the request remains pending.
+func TestDecideApprovalSelfApprovalForbidden(t *testing.T) {
+	approvalID := "00000000-0000-0000-0000-000000000005"
+	actorID := "same-user"
+
+	executeCalled := false
+	db := &fakeDB{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			// Return a pending request whose requester_id == actorID.
+			return fakeRow{scanFn: func(dest ...any) error {
+				if len(dest) < 4 {
+					return nil
+				}
+				*(dest[0].(*string)) = "onboard"
+				*(dest[1].(*string)) = "pending"
+				payload, _ := json.Marshal(map[string]string{"email": "new@example.com"})
+				*(dest[2].(*[]byte)) = payload
+				*(dest[3].(*string)) = actorID // requester_id == actorID
+				return nil
+			}}
+		},
+		execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+			if strings.Contains(sql, "status='executing'") {
+				executeCalled = true
+			}
+			return pgconn.NewCommandTag("UPDATE 1"), nil
+		},
+	}
+
+	h := &Handler{
+		db:       db,
+		keycloak: &fakeKeycloak{},
+		fleet:    &fakeFleet{},
+		logger:   zap.NewNop(),
+	}
+	h.scimBearerMW = SCIMBearerMiddleware("")
+	h.accessEvalBearerMW = accessEvalBearerMiddleware("")
+
+	body := `{"decision":"approved"}`
+	req := httptest.NewRequest(http.MethodPatch, "/api/v1/approval-requests/"+approvalID, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(setActorCtx(req.Context(), actorID))
+	req = withApprovalChiParam(req, "id", approvalID)
+	rec := httptest.NewRecorder()
+
+	h.DecideApproval(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if executeCalled {
+		t.Fatal("execution must not be triggered when self-approval is blocked")
+	}
+}
+
 // setActorCtx injects an actor ID into the context.
 func setActorCtx(ctx context.Context, actorID string) context.Context {
 	return context.WithValue(ctx, middleware.ActorIDKey, actorID)

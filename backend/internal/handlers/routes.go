@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -199,4 +200,14 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.Patch("/api/v1/approval-requests/{id}", h.DecideApproval)
 		})
 	})
+
+	// Test-only enrollment-token helper — ONLY registered when APP_ENV=test.
+	// Gated by the SCIM bearer token; never reaches production because the
+	// APP_ENV guard prevents registration outside of test stacks.
+	if os.Getenv("APP_ENV") == "test" {
+		r.Group(func(r chi.Router) {
+			r.Use(h.scimBearerMW)
+			r.Post("/api/v1/e2e/enrollment-token", h.E2ECreateEnrollmentToken)
+		})
+	}
 }

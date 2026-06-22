@@ -625,6 +625,9 @@ func (k *KeycloakClient) AssignUserToClient(ctx context.Context, userID, clientI
 }
 
 // UnassignUserFromClient removes the FreeCloud client role mapping from a user.
+// If the role no longer exists (404 / not-found), the operation is treated as a
+// no-op success — the mapping is already absent, mirroring how AssignUserToClient
+// tolerates 409 Conflict on role creation.
 func (k *KeycloakClient) UnassignUserFromClient(ctx context.Context, userID, clientID string) error {
 	logger := zap.L()
 	token, err := k.login(ctx)
@@ -635,6 +638,12 @@ func (k *KeycloakClient) UnassignUserFromClient(ctx context.Context, userID, cli
 	roleName := "user"
 	clientRole, err := k.client.GetClientRole(ctx, token, k.realm, clientID, roleName)
 	if err != nil {
+		if isNotFoundErr(err) {
+			logger.Debug("client role not found during unassign, treating as no-op",
+				zap.String("client_id", clientID),
+			)
+			return nil
+		}
 		return fmt.Errorf("get client role: %w", err)
 	}
 
@@ -647,6 +656,15 @@ func (k *KeycloakClient) UnassignUserFromClient(ctx context.Context, userID, cli
 		zap.String("client_id", clientID),
 	)
 	return nil
+}
+
+// isNotFoundErr reports whether the given gocloak error represents a 404 Not Found.
+func isNotFoundErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found")
 }
 
 // isConflictErr reports whether the given gocloak error represents a 409 Conflict,

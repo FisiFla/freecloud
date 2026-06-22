@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -115,7 +117,7 @@ func (h *Handler) BulkOnboard(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			// pgx.ErrNoRows → proceed; any other error → report as failure.
-			if lookupErr.Error() != "no rows in result set" && !strings.Contains(lookupErr.Error(), "no rows") {
+			if !errors.Is(lookupErr, pgx.ErrNoRows) {
 				logger.Error("bulk onboard idempotency lookup failed",
 					zap.Int("row", rowNum), zap.Error(lookupErr))
 				resp.Failed++

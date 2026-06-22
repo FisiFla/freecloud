@@ -80,7 +80,7 @@ class PostureCheckAuthenticatorTest {
     void testAllowResponse() {
         PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
             "http://localhost:9999/no-server", "token", true,
-            (url, token, body) -> new BackendResponse(200, "{\"data\":{\"allow\":true}}")
+            (url, token, body) -> new BackendResponse(200, "{\"success\":true,\"data\":{\"allow\":true}}")
         );
         auth.authenticate(context);
         verify(context).success();
@@ -101,7 +101,7 @@ class PostureCheckAuthenticatorTest {
             "http://localhost:9999/no-server", "token", true,
             (url, token, body) -> {
                 capturedBody.set(body);
-                return new BackendResponse(200, "{\"data\":{\"allow\":true}}");
+                return new BackendResponse(200, "{\"success\":true,\"data\":{\"allow\":true}}");
             }
         );
         auth.authenticate(context);
@@ -116,7 +116,7 @@ class PostureCheckAuthenticatorTest {
     void testDenyResponse() {
         PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
             "http://localhost:9999/no-server", "token", true,
-            (url, token, body) -> new BackendResponse(200, "{\"data\":{\"allow\":false,\"reasons\":[\"firewall disabled\"]}}")
+            (url, token, body) -> new BackendResponse(200, "{\"success\":true,\"data\":{\"allow\":false,\"reasons\":[\"firewall disabled\"]}}")
         );
         auth.authenticate(context);
         verify(context).failure(eq(AuthenticationFlowError.ACCESS_DENIED), any(Response.class));

@@ -395,12 +395,12 @@ BEGIN
         h := encode(
             sha256(
                 convert_to(
-                    length(r.actor_id)::text    || ':' || r.actor_id    || '|' ||
-                    length(r.action)::text      || ':' || r.action      || '|' ||
-                    length(r.target_type)::text || ':' || r.target_type || '|' ||
-                    length(r.target_id)::text   || ':' || r.target_id   || '|' ||
-                    length(r.details)::text     || ':' || r.details     || '|' ||
-                    length(ph)::text            || ':' || ph            || '|',
+                    octet_length(r.actor_id)::text    || ':' || r.actor_id    || '|' ||
+                    octet_length(r.action)::text      || ':' || r.action      || '|' ||
+                    octet_length(r.target_type)::text || ':' || r.target_type || '|' ||
+                    octet_length(r.target_id)::text   || ':' || r.target_id   || '|' ||
+                    octet_length(r.details)::text     || ':' || r.details     || '|' ||
+                    octet_length(ph)::text            || ':' || ph            || '|',
                     'UTF8'
                 )
             ),

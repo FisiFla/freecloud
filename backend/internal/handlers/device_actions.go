@@ -45,7 +45,7 @@ func (h *Handler) RemoteLock(w http.ResponseWriter, r *http.Request) {
 
 	// Detached audit write — client disconnect must not drop the record.
 	if h.db != nil {
-		if err := h.writeAuditEntryDetached(actorID, "device_lock", "device", deviceID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(actorID, "device_lock", "device", deviceID, map[string]interface{}{
 			"device_id": deviceID,
 		}); err != nil {
 			h.logger.Warn("failed to write audit log for remote lock", zap.Error(err))

@@ -543,3 +543,4 @@ func TestAccessEvalDenyDiskEncryption(t *testing.T) {
 		t.Error("expected deny reason for disk encryption failure")
 	}
 }
+
