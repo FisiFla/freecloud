@@ -228,6 +228,39 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		// API's documented "no policy row means no posture gate" behavior.
 	}
 
+	// 3b. If the policy requires enrollment and a specific device was requested,
+	// verify it belongs to the user. Devices from the users_devices_mapping query
+	// are enrolled by construction; the explicit override path may reference a
+	// device not yet mapped. Fail closed on DB error.
+	if policy.RequireEnrolled && req.DeviceID != "" {
+		var dummy string
+		enrollErr := h.db.QueryRow(ctx,
+			`SELECT 1 FROM users_devices_mapping WHERE user_id = $1 AND device_id = $2`,
+			req.UserID, req.DeviceID,
+		).Scan(&dummy)
+		if enrollErr != nil {
+			if errors.Is(enrollErr, pgx.ErrNoRows) {
+				h.auditAccessDecision(req.UserID, req.AppID, false, []string{"app policy requires an enrolled device"})
+				respondJSON(w, http.StatusOK, AccessEvalResponse{
+					Allow:   false,
+					Reasons: []string{"app policy requires an enrolled device"},
+				})
+			} else {
+				h.logger.Error("access eval: enrollment check failed",
+					zap.String("user_id", req.UserID),
+					zap.String("device_id", req.DeviceID),
+					zap.Error(enrollErr),
+				)
+				h.auditAccessDecision(req.UserID, req.AppID, false, []string{"enrollment check failed"})
+				respondJSON(w, http.StatusOK, AccessEvalResponse{
+					Allow:   false,
+					Reasons: []string{"enrollment check failed"},
+				})
+			}
+			return
+		}
+	}
+
 	// 4. Evaluate posture for every device.
 	var reasons []string
 
@@ -291,7 +324,7 @@ func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons 
 		"allow":   allow,
 		"reasons": reasons,
 	}
-	if err := h.writeAuditEntryDetached(actorID, "access_eval", "user", userID, details); err != nil {
+	if err := h.writeAuditEntryBestEffort(actorID, "access_eval", "user", userID, details); err != nil {
 		h.logger.Warn("access eval: failed to write audit log", zap.Error(err))
 	}
 }

@@ -543,3 +543,130 @@ func TestAccessEvalDenyDiskEncryption(t *testing.T) {
 		t.Error("expected deny reason for disk encryption failure")
 	}
 }
+
+// TestAccessEvalRequireEnrolledDeniesUnenrolledExplicitDevice verifies that
+// when an app policy has require_enrolled=true and the step-3b enrollment
+// re-check finds the device absent from the mapping, access is denied.
+// (Step 2 finds the device; step 3b is a policy-layer re-verification.)
+func TestAccessEvalRequireEnrolledDeniesUnenrolledExplicitDevice(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const appID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	const devID = "dev-not-enrolled"
+
+	// Track query call count to distinguish step-2 (SELECT device_id) from
+	// step-3b (SELECT 1) — both query users_devices_mapping with device_id = $2.
+	mappingCallCount := 0
+
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM users "):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = userID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM users_devices_mapping"):
+				mappingCallCount++
+				if mappingCallCount == 1 {
+					// step 2: explicit device lookup — found
+					return fakeRow{scanFn: func(dest ...any) error {
+						*(dest[0].(*string)) = devID
+						return nil
+					}}
+				}
+				// step 3b: enrollment policy re-check — device absent
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			case strings.Contains(sql, "FROM app_access_policies"):
+				// policy: require_enrolled=true
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*bool)) = true  // require_enrolled
+					*(dest[1].(*bool)) = false // require_disk_encrypted
+					*(dest[2].(*bool)) = false // require_no_critical_vulns
+					*(dest[3].(**int)) = nil
+					return nil
+				}}
+			default:
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+	}
+
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			t.Fatal("Fleet must not be called when enrollment check denies")
+			return nil, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, AppID: appID, DeviceID: devID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Fatal("expected allow=false for unenrolled explicit device with require_enrolled policy")
+	}
+	found := false
+	for _, r := range resp.Reasons {
+		if r == "app policy requires an enrolled device" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'app policy requires an enrolled device' reason, got: %v", resp.Reasons)
+	}
+}
+
+// TestAccessEvalRequireEnrolledAllowsEnrolledExplicitDevice verifies that
+// when an app policy has require_enrolled=true and the requested deviceId IS
+// in the user's mapping with clean posture, access is allowed.
+func TestAccessEvalRequireEnrolledAllowsEnrolledExplicitDevice(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const appID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	const devID = "dev-enrolled-clean"
+
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			switch {
+			case strings.Contains(sql, "FROM users "):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = userID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM users_devices_mapping"):
+				// both the step-2 device mapping check and the enrollment policy check succeed
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = devID
+					return nil
+				}}
+			case strings.Contains(sql, "FROM app_access_policies"):
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*bool)) = true  // require_enrolled
+					*(dest[1].(*bool)) = false // require_disk_encrypted
+					*(dest[2].(*bool)) = false // require_no_critical_vulns
+					*(dest[3].(**int)) = nil
+					return nil
+				}}
+			default:
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+		},
+	}
+
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			return &fleet.SecurityState{FirewallEnabled: true, DiskEncrypted: true}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, AppID: appID, DeviceID: devID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if !resp.Allow {
+		t.Fatalf("expected allow=true for enrolled device with clean posture and require_enrolled policy, got reasons: %v", resp.Reasons)
+	}
+}
