@@ -240,6 +240,7 @@ APP_ENV=production ALLOW_DEV_SETUP=true CREATE_DEMO_USER=false make kc-setup
 
 ## Documentation
 
+- [docs/PARITY.md](docs/PARITY.md) — feature parity matrix vs JumpCloud.
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — zero-to-running in under 5 minutes.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design, data flows, and security model.
 - [docs/API.md](docs/API.md) — full REST API reference and environment variable table.
