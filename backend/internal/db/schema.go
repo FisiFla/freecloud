@@ -124,6 +124,11 @@ var migrations = []migration{
 		name:      "provisioning_state_and_config",
 		statement: Migration036,
 	},
+	{
+		id:        37,
+		name:      "federation_sources",
+		statement: Migration037,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -558,6 +563,25 @@ CREATE TABLE IF NOT EXISTS app_provisioning_config (
 CREATE INDEX IF NOT EXISTS idx_provisioning_state_app_user ON provisioning_state(app_id, user_id);
 CREATE INDEX IF NOT EXISTS idx_provisioning_state_status ON provisioning_state(status);
 CREATE INDEX IF NOT EXISTS idx_provisioning_state_next_retry ON provisioning_state(next_retry_at) WHERE next_retry_at IS NOT NULL;
+`
+
+// Migration037 creates the federation_sources table for LDAP/AD directory
+// federation (C1). Each row represents one configured LDAP/AD source with its
+// Keycloak user-storage component ID and last-sync metadata.
+const Migration037 = `
+CREATE TABLE IF NOT EXISTS federation_sources (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    provider_type TEXT NOT NULL DEFAULT 'ldap',
+    vendor TEXT NOT NULL DEFAULT 'other',
+    config JSONB NOT NULL DEFAULT '{}',
+    keycloak_component_id TEXT UNIQUE,
+    last_sync_at TIMESTAMPTZ,
+    last_sync_status TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_federation_sources_provider_type ON federation_sources(provider_type);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

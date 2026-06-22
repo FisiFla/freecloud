@@ -59,6 +59,8 @@ type Handler struct {
 	// provisionEngine drives outbound SCIM/Slack/GitHub provisioning (A1).
 	// Nil when no provisioning-enabled apps are configured.
 	provisionEngine *provisioning.Engine
+	// ldapBindPassword is the bind password for LDAP/AD federation sources (C1).
+	ldapBindPassword string
 }
 
 // SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment
@@ -115,6 +117,8 @@ func (h *Handler) SetSnapshotter(s *snapshot.Snapshotter) {
 func (h *Handler) SetProvisionEngine(e *provisioning.Engine) {
 	h.provisionEngine = e
 }
+// SetLDAPBindPassword wires the LDAP bind password (resolved via config.LDAPBindPassword).
+func (h *Handler) SetLDAPBindPassword(pw string) { h.ldapBindPassword = pw }
 
 // Health returns a simple health check response.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {

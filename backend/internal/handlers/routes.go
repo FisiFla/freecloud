@@ -129,6 +129,12 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			// A4: Outbound provisioning config + resync — write endpoints.
 			r.With(middleware.RequirePermission(middleware.PermManageApps)).Put("/api/v1/apps/{appId}/provisioning", h.UpsertProvisioningConfig)
 			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/{appId}/provisioning/resync/{userId}", h.ResyncUser)
+			// C1: LDAP/AD federation sources — write endpoints.
+			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Post("/api/v1/federation/sources", h.CreateFederationSource)
+			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Patch("/api/v1/federation/sources/{id}", h.UpdateFederationSource)
+			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Delete("/api/v1/federation/sources/{id}", h.DeleteFederationSource)
+			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Post("/api/v1/federation/sources/{id}/test", h.TestFederationConnection)
+			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Post("/api/v1/federation/sources/{id}/sync", h.TriggerFederationSync)
 		})
 
 		r.With(middleware.RequirePermission(middleware.PermSelfService)).Post("/api/v1/auth/device-check", h.DeviceCheck)
@@ -224,6 +230,10 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.Get("/api/v1/approval-requests", h.ListApprovalRequests)
 			r.Patch("/api/v1/approval-requests/{id}", h.DecideApproval)
 		})
+
+		// C1: LDAP/AD federation sources — read endpoints.
+		r.With(middleware.RequirePermission(middleware.PermManageUsers)).Get("/api/v1/federation/sources", h.ListFederationSources)
+		r.With(middleware.RequirePermission(middleware.PermManageUsers)).Get("/api/v1/federation/sources/{id}", h.GetFederationSource)
 	})
 
 	// Test-only enrollment-token helper — ONLY registered when APP_ENV=test.

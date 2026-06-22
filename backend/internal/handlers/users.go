@@ -22,6 +22,9 @@ type User struct {
 	CreatedAt      string   `json:"createdAt,omitempty"`
 	UpdatedAt      string   `json:"updatedAt,omitempty"`
 	Devices        []Device `json:"devices,omitempty"`
+	// C2: federated-user awareness
+	IsFederated    bool   `json:"isFederated,omitempty"`
+	FederationLink string `json:"federationLink,omitempty"`
 }
 
 // Device represents a row in the devices table.
@@ -193,6 +196,14 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 
 	if u.Devices == nil {
 		u.Devices = []Device{}
+	}
+
+	// C2: annotate federated-identity status from Keycloak.
+	if h.keycloak != nil {
+		if kcUser, kcErr := h.keycloak.GetUserByID(ctx, userID); kcErr == nil && kcUser != nil && kcUser.FederationLink != nil && *kcUser.FederationLink != "" {
+			u.IsFederated = true
+			u.FederationLink = *kcUser.FederationLink
+		}
 	}
 
 	respondJSON(w, http.StatusOK, u)
