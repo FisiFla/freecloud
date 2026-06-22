@@ -125,6 +125,11 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A3: Deactivate remote accounts on provisioning-enabled apps (best-effort).
+	if h.provisionEngine != nil && h.db != nil {
+		h.triggerDeprovisioningForUser(ctx, userID)
+	}
+
 	if h.db != nil {
 		if auditErr := h.writeAuditEntryBestEffort(actorID, "offboard", "user", userID, map[string]interface{}{
 			"devices_wiped":  devicesWiped,
@@ -169,3 +174,43 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		Warnings:                warnings,
 	})
 }
+
+// triggerDeprovisioningForUser queries provisioned remote accounts for userID
+// and calls DeprovisionUser on each. Best-effort: errors are logged and audited.
+func (h *Handler) triggerDeprovisioningForUser(ctx context.Context, userID string) {
+	rows, err := h.db.Query(ctx,
+		`SELECT app_id::TEXT FROM provisioning_state WHERE user_id = $1 AND status = 'provisioned'`,
+		userID,
+	)
+	if err != nil {
+		h.logger.Warn("triggerDeprovisioning: query provisioned apps failed",
+			zap.String("user_id", userID), zap.Error(err))
+		return
+	}
+	defer rows.Close()
+
+	var appIDs []string
+	for rows.Next() {
+		var appID string
+		if err := rows.Scan(&appID); err != nil {
+			continue
+		}
+		appIDs = append(appIDs, appID)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Warn("triggerDeprovisioning: iterate rows failed", zap.Error(err))
+	}
+
+	for _, appID := range appIDs {
+		if err := h.provisionEngine.DeprovisionUser(ctx, appID, userID); err != nil {
+			h.logger.Warn("triggerDeprovisioning: deprovision failed",
+				zap.String("app_id", appID), zap.String("user_id", userID), zap.Error(err))
+			_ = h.writeAuditEntryBestEffort("system:provisioning", "deprovision_failed", "user", userID,
+				map[string]interface{}{"app_id": appID, "error": err.Error()})
+		} else {
+			_ = h.writeAuditEntryBestEffort("system:provisioning", "deprovision_success", "user", userID,
+				map[string]interface{}{"app_id": appID})
+		}
+	}
+}
+

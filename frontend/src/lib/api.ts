@@ -824,3 +824,55 @@ export async function portalGetRecoveryCodesStatus(): Promise<RecoveryCodesStatu
 export async function portalGenerateRecoveryCodes(): Promise<RecoveryCodesResponse> {
   return request<RecoveryCodesResponse>("POST", "/api/v1/portal/me/recovery-codes");
 }
+
+// A4: Outbound provisioning
+
+export interface ProvisioningConfig {
+  appId: string;
+  enabled: boolean;
+  connectorType: "scim" | "slack" | "github";
+  endpointUrl?: string;
+  bearerTokenConfigured: boolean;
+  attributeMap: Record<string, string>;
+}
+
+export interface ProvisioningStateEntry {
+  id: string;
+  userId: string;
+  userEmail?: string;
+  remoteId?: string;
+  status: "pending" | "provisioned" | "deprovisioned" | "error" | "permanent_error";
+  lastSyncAt?: string;
+  lastError?: string;
+  retryCount: number;
+}
+
+export async function getProvisioningConfig(appId: string): Promise<ProvisioningConfig> {
+  return request<ProvisioningConfig>("GET", `/api/v1/apps/${appId}/provisioning`);
+}
+
+export async function upsertProvisioningConfig(
+  appId: string,
+  body: {
+    enabled: boolean;
+    connectorType: "scim" | "slack" | "github";
+    endpointUrl?: string;
+    bearerToken?: string;
+    attributeMap?: Record<string, string>;
+  },
+): Promise<ProvisioningConfig> {
+  return request<ProvisioningConfig>("PUT", `/api/v1/apps/${appId}/provisioning`, body);
+}
+
+export async function listProvisioningState(
+  appId: string,
+): Promise<ProvisioningStateEntry[]> {
+  return request<ProvisioningStateEntry[]>("GET", `/api/v1/apps/${appId}/provisioning/state`);
+}
+
+export async function resyncUser(appId: string, userId: string): Promise<{ queued: boolean }> {
+  return request<{ queued: boolean }>(
+    "POST",
+    `/api/v1/apps/${appId}/provisioning/resync/${userId}`,
+  );
+}

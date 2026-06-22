@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/FisiFla/freecloud/backend/internal/provisioning"
 )
 
 // OnboardRequest is the JSON request body for the onboard endpoint.
@@ -177,6 +178,20 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	}
 	persisted = true
 
+	// A3: Trigger outbound provisioning on provisioning-enabled apps (best-effort).
+	if h.provisionEngine != nil {
+		capturedID := kcUserID
+		capturedReq := req
+		go func() {
+			provCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := h.triggerProvisioningForUser(provCtx, capturedID, capturedReq.Email, capturedReq.FirstName, capturedReq.LastName, capturedReq.Department); err != nil {
+				logger.Warn("onboard: provisioning trigger failed (best-effort)",
+					zap.String("user_id", capturedID), zap.Error(err))
+			}
+		}()
+	}
+
 	// Devices are linked when a host enrolls and FleetDM calls our enrollment
 	// callback with this token (see handlers/enrollment.go), not pre-populated
 	// here. The token is what the admin/Fleet uses; there is no user-facing URL.
@@ -235,4 +250,49 @@ func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req Onboa
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// triggerProvisioningForUser queries apps with provisioning enabled that are
+// assigned to userID and calls the engine for each. Best-effort: errors are
+// logged but never fatal.
+func (h *Handler) triggerProvisioningForUser(ctx context.Context, userID, email, firstName, lastName, department string) error {
+	if h.db == nil || h.provisionEngine == nil {
+		return nil
+	}
+	rows, err := h.db.Query(ctx,
+		`SELECT aa.app_id::TEXT
+		 FROM app_assignments aa
+		 JOIN app_provisioning_config apc ON apc.app_id = aa.app_id
+		 WHERE aa.user_id = $1 AND apc.enabled = true`,
+		userID,
+	)
+	if err != nil {
+		return fmt.Errorf("triggerProvisioning: query apps: %w", err)
+	}
+	defer rows.Close()
+
+	user := provisioning.ProvisionableUser{
+		ID:         userID,
+		Email:      email,
+		FirstName:  firstName,
+		LastName:   lastName,
+		Department: department,
+	}
+
+	for rows.Next() {
+		var appID string
+		if err := rows.Scan(&appID); err != nil {
+			continue
+		}
+		if err := h.provisionEngine.ProvisionUser(ctx, appID, user); err != nil {
+			h.logger.Warn("triggerProvisioning: provision failed",
+				zap.String("app_id", appID), zap.String("user_id", userID), zap.Error(err))
+			_ = h.writeAuditEntryBestEffort("system:provisioning", "provision_failed", "user", userID,
+				map[string]interface{}{"app_id": appID, "error": err.Error()})
+		} else {
+			_ = h.writeAuditEntryBestEffort("system:provisioning", "provision_success", "user", userID,
+				map[string]interface{}{"app_id": appID})
+		}
+	}
+	return rows.Err()
 }

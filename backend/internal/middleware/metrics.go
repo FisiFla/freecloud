@@ -21,7 +21,17 @@ var (
 		Help:    "HTTP request latency in seconds by method and route.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"method", "route"})
+
+	provisioningErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "freecloud_provisioning_errors_total",
+		Help: "Total outbound provisioning errors by app_id and connector type.",
+	}, []string{"app_id", "connector"})
 )
+
+// IncProvisioningError increments the provisioning error counter for the given app and connector.
+func IncProvisioningError(appID, connector string) {
+	provisioningErrors.WithLabelValues(appID, connector).Inc()
+}
 
 // statusRecorder captures the response status code for metrics labelling.
 type statusRecorder struct {

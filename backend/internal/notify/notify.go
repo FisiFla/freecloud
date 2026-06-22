@@ -24,11 +24,11 @@ import (
 
 // Event type constants.
 const (
-	EventOffboardCompleted = "offboard_completed"
-	EventReconcileDrift    = "reconcile_drift"
-	EventComplianceFailure = "compliance_failure"
-	// TODO(epic-a-A4): wire EventAccessBlocked when access-blocked event source is available.
-	EventAccessBlocked = "access_blocked"
+	EventOffboardCompleted  = "offboard_completed"
+	EventReconcileDrift     = "reconcile_drift"
+	EventComplianceFailure  = "compliance_failure"
+	EventAccessBlocked      = "access_blocked"      // fired by access_eval when posture denies (A4)
+	EventProvisioningFailed = "provisioning_failed" // fired when outbound provisioning fails (A4)
 )
 
 // notifyErrors counts notification failures by channel and event type.
@@ -56,9 +56,11 @@ type Notifier interface {
 // All fields default to true (notify on all events). Setting a field to false
 // suppresses delivery to all channels for that event type.
 type EventToggles struct {
-	Offboard   bool
-	Drift      bool
-	Compliance bool
+	Offboard      bool
+	Drift         bool
+	Compliance    bool
+	AccessBlocked bool
+	Provisioning  bool
 }
 
 // MultiNotifier fans out to multiple Notifiers. A per-notifier failure is
@@ -114,6 +116,10 @@ func (m *MultiNotifier) eventEnabled(eventType string) bool {
 		return m.toggles.Drift
 	case EventComplianceFailure:
 		return m.toggles.Compliance
+	case EventAccessBlocked:
+		return m.toggles.AccessBlocked
+	case EventProvisioningFailed:
+		return m.toggles.Provisioning
 	}
 	return true
 }
