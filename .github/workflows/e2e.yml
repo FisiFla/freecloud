@@ -103,6 +103,8 @@ jobs:
           E2E_WEBHOOK_SECRET: e2e-webhook-secret
           # A4 (FCEX3-8): access eval token for posture enforcement e2e tests.
           E2E_ACCESS_EVAL_TOKEN: e2e-access-eval-token
+          # F2: LDAP URL exposed for reference (tests use the compose service name internally).
+          E2E_LDAP_URL: ldap://localhost:1389
         run: |
           cd backend && go test -tags=e2e -v -timeout 5m ./internal/e2e/...
 
