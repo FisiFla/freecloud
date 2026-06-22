@@ -47,6 +47,14 @@ type fakeKeycloak struct {
 	// B1: MFA self-service credential operations
 	getUserCredentialsFullFn func(ctx context.Context, userID string) ([]*gocloak.CredentialRepresentation, error)
 	deleteCredentialFn       func(ctx context.Context, userID, credentialID string) error
+	// C1: LDAP/AD federation
+	createFederationComponentFn func(ctx context.Context, name, connectionURL, bindDN, bindPassword, usersDN, vendor string) (string, error)
+	getFederationComponentsFn   func(ctx context.Context) ([]*gocloak.Component, error)
+	updateFederationComponentFn func(ctx context.Context, componentID, name, connectionURL, bindDN, bindPassword, usersDN, vendor string) error
+	deleteFederationComponentFn func(ctx context.Context, componentID string) error
+	testLDAPConnectionFn        func(ctx context.Context, componentID, connectionURL, bindDN, bindPassword string) error
+	triggerFederationSyncFn     func(ctx context.Context, componentID, action string) error
+	getUserByIDFn               func(ctx context.Context, userID string) (*gocloak.User, error)
 }
 
 func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -278,4 +286,54 @@ func (f *fakeKeycloak) UpdateRealmPolicy(ctx context.Context, req keycloak.Updat
 		return f.updateRealmPolicyFn(ctx, req)
 	}
 	return nil
+}
+// C1: LDAP/AD federation fakes
+
+func (f *fakeKeycloak) CreateFederationComponent(ctx context.Context, name, connectionURL, bindDN, bindPassword, usersDN, vendor string) (string, error) {
+	if f.createFederationComponentFn != nil {
+		return f.createFederationComponentFn(ctx, name, connectionURL, bindDN, bindPassword, usersDN, vendor)
+	}
+	return "fake-component-id", nil
+}
+
+func (f *fakeKeycloak) GetFederationComponents(ctx context.Context) ([]*gocloak.Component, error) {
+	if f.getFederationComponentsFn != nil {
+		return f.getFederationComponentsFn(ctx)
+	}
+	return []*gocloak.Component{}, nil
+}
+
+func (f *fakeKeycloak) UpdateFederationComponent(ctx context.Context, componentID, name, connectionURL, bindDN, bindPassword, usersDN, vendor string) error {
+	if f.updateFederationComponentFn != nil {
+		return f.updateFederationComponentFn(ctx, componentID, name, connectionURL, bindDN, bindPassword, usersDN, vendor)
+	}
+	return nil
+}
+
+func (f *fakeKeycloak) DeleteFederationComponent(ctx context.Context, componentID string) error {
+	if f.deleteFederationComponentFn != nil {
+		return f.deleteFederationComponentFn(ctx, componentID)
+	}
+	return nil
+}
+
+func (f *fakeKeycloak) TestLDAPConnection(ctx context.Context, componentID, connectionURL, bindDN, bindPassword string) error {
+	if f.testLDAPConnectionFn != nil {
+		return f.testLDAPConnectionFn(ctx, componentID, connectionURL, bindDN, bindPassword)
+	}
+	return nil
+}
+
+func (f *fakeKeycloak) TriggerFederationSync(ctx context.Context, componentID, action string) error {
+	if f.triggerFederationSyncFn != nil {
+		return f.triggerFederationSyncFn(ctx, componentID, action)
+	}
+	return nil
+}
+
+func (f *fakeKeycloak) GetUserByID(ctx context.Context, userID string) (*gocloak.User, error) {
+	if f.getUserByIDFn != nil {
+		return f.getUserByIDFn(ctx, userID)
+	}
+	return &gocloak.User{ID: &userID}, nil
 }

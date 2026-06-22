@@ -83,6 +83,22 @@ func (f *fakeKC) GetUserCredentialsFull(_ context.Context, _ string) ([]*gocloak
 	return nil, nil
 }
 func (f *fakeKC) DeleteCredential(_ context.Context, _, _ string) error { return nil }
+// C1: LDAP/AD federation (not used by reconciler — satisfy interface)
+func (f *fakeKC) CreateFederationComponent(_ context.Context, _, _, _, _, _, _ string) (string, error) {
+	return "fake-component-id", nil
+}
+func (f *fakeKC) GetFederationComponents(_ context.Context) ([]*gocloak.Component, error) {
+	return nil, nil
+}
+func (f *fakeKC) UpdateFederationComponent(_ context.Context, _, _, _, _, _, _, _ string) error {
+	return nil
+}
+func (f *fakeKC) DeleteFederationComponent(_ context.Context, _ string) error { return nil }
+func (f *fakeKC) TestLDAPConnection(_ context.Context, _, _, _, _ string) error { return nil }
+func (f *fakeKC) TriggerFederationSync(_ context.Context, _, _ string) error    { return nil }
+func (f *fakeKC) GetUserByID(_ context.Context, userID string) (*gocloak.User, error) {
+	return &gocloak.User{ID: &userID}, nil
+}
 
 // fakeRows implements pgx.Rows backed by a string slice.
 type fakeRows struct {
