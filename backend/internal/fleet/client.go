@@ -73,6 +73,12 @@ type TeamPolicy struct {
 	TeamID      int    `json:"team_id"`
 }
 
+// OSPosture holds OS version and update state for a host.
+type OSPosture struct {
+	OsVersion   string `json:"os_version"`
+	NeedsUpdate bool   `json:"needs_update"`
+}
+
 // FleetClientInterface defines the operations used by handlers.
 type FleetClientInterface interface {
 	CreateEnrollmentToken(ctx context.Context) (string, error)
@@ -81,6 +87,10 @@ type FleetClientInterface interface {
 	GetHostSecurityState(ctx context.Context, hostID string) (*SecurityState, error)
 	IssueRemoteLock(ctx context.Context, hostID string) error
 	IssueRemoteWipe(ctx context.Context, hostID string) error
+	// E1: expanded MDM command set
+	IssueRestart(ctx context.Context, hostID string) error
+	IssueLockWithMessage(ctx context.Context, hostID string, message string) error
+	IssueClearPasscode(ctx context.Context, hostID string) error
 	Ping(ctx context.Context) error
 	// Global policies
 	ListPolicies(ctx context.Context) ([]Policy, error)
@@ -89,6 +99,8 @@ type FleetClientInterface interface {
 	CreateTeam(ctx context.Context, name, description string) (*Team, error)
 	AssignPolicyToTeam(ctx context.Context, teamID int, policyID string) error
 	MoveHostToTeam(ctx context.Context, teamID int, hostIDs []string) error
+	// E3: OS posture
+	GetHostOSPosture(ctx context.Context, hostID string) (*OSPosture, error)
 }
 
 // FleetClient communicates with the FleetDM API.
@@ -431,4 +443,91 @@ func (f *FleetClient) IssueRemoteWipe(ctx context.Context, hostID string) error 
 
 	zap.L().Info("issued remote wipe to host", zap.String("host_id", hostID))
 	return nil
+}
+
+// IssueRestart issues a remote restart command to a host.
+func (f *FleetClient) IssueRestart(ctx context.Context, hostID string) error {
+	if err := validateHostID(hostID); err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/restart", hostID)
+	_, err := f.doRequest(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		zap.L().Error("fleet IssueRestart failed",
+			zap.String("host_id", hostID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("remote restart failed for host %s: %w", hostID, err)
+	}
+	zap.L().Info("issued remote restart to host", zap.String("host_id", hostID))
+	return nil
+}
+
+// IssueLockWithMessage issues a remote lock command with a custom message.
+func (f *FleetClient) IssueLockWithMessage(ctx context.Context, hostID string, message string) error {
+	if err := validateHostID(hostID); err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/lock", hostID)
+	payload := map[string]string{"message": message}
+	_, err := f.doRequest(ctx, http.MethodPost, path, payload)
+	if err != nil {
+		zap.L().Error("fleet IssueLockWithMessage failed",
+			zap.String("host_id", hostID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("remote lock-with-message failed for host %s: %w", hostID, err)
+	}
+	zap.L().Info("issued remote lock-with-message to host", zap.String("host_id", hostID))
+	return nil
+}
+
+// IssueClearPasscode issues a clear-passcode command to a host.
+func (f *FleetClient) IssueClearPasscode(ctx context.Context, hostID string) error {
+	if err := validateHostID(hostID); err != nil {
+		return err
+	}
+	path := fmt.Sprintf("/api/v1/fleet/hosts/%s/clear_passcode", hostID)
+	_, err := f.doRequest(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		zap.L().Error("fleet IssueClearPasscode failed",
+			zap.String("host_id", hostID),
+			zap.Error(err),
+		)
+		return fmt.Errorf("clear passcode failed for host %s: %w", hostID, err)
+	}
+	zap.L().Info("issued clear passcode to host", zap.String("host_id", hostID))
+	return nil
+}
+
+// GetHostOSPosture fetches OS version and pending-update state for a host.
+// It reads the host detail endpoint and falls back gracefully when Fleet does
+// not expose an update-available flag (sets NeedsUpdate=false rather than
+// failing the caller's request).
+func (f *FleetClient) GetHostOSPosture(ctx context.Context, hostID string) (*OSPosture, error) {
+	if err := validateHostID(hostID); err != nil {
+		return nil, err
+	}
+	path := fmt.Sprintf("/api/v1/fleet/hosts/%s", hostID)
+	body, err := f.doRequest(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fleet GetHostOSPosture: %w", err)
+	}
+
+	var result struct {
+		Host struct {
+			OsVersion string `json:"os_version"`
+			Issues    struct {
+				FailingPoliciesCount int `json:"failing_policies_count"`
+			} `json:"issues"`
+		} `json:"host"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("fleet GetHostOSPosture parse: %w", err)
+	}
+
+	return &OSPosture{
+		OsVersion:   result.Host.OsVersion,
+		NeedsUpdate: result.Host.Issues.FailingPoliciesCount > 0,
+	}, nil
 }

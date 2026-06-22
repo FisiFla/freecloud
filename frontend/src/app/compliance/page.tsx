@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ShieldCheck, ShieldAlert, AlertCircle, CheckCircle, XCircle, Monitor, RefreshCw } from "lucide-react";
+import { ShieldCheck, ShieldAlert, AlertCircle, CheckCircle, XCircle, Monitor, RefreshCw, AlertTriangle } from "lucide-react";
 import LoadingRows from "@/components/LoadingRows";
 import { getOrgCompliance } from "@/lib/api";
 import type { ComplianceResponse } from "@/lib/api";
@@ -13,6 +13,8 @@ export default function ComplianceDashboardPage() {
   const [data, setData] = useState<ComplianceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // E3: filter to only show devices needing OS update
+  const [showNeedsUpdateOnly, setShowNeedsUpdateOnly] = useState(false);
 
   const fetchData = async () => {
     try {
@@ -65,7 +67,7 @@ export default function ComplianceDashboardPage() {
       ) : !data ? null : (
         <>
           {/* Summary row */}
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
             <SummaryCard label="Total Devices" value={String(data.summary.totalDevices)} sub="" color="slate" />
             <SummaryCard
               label="Compliant"
@@ -91,6 +93,12 @@ export default function ComplianceDashboardPage() {
               sub={data.summary.devicesWithVulns > 0 ? "needs attention" : "clean fleet"}
               color={data.summary.devicesWithVulns > 0 ? "red" : "green"}
             />
+            <SummaryCard
+              label="Needs Update"
+              value={String(data.summary.needsUpdateDevices ?? 0)}
+              sub={(data.summary.needsUpdateDevices ?? 0) > 0 ? "OS updates pending" : "up to date"}
+              color={(data.summary.needsUpdateDevices ?? 0) > 0 ? "amber" : "green"}
+            />
           </div>
 
           {/* Compliance rate bar */}
@@ -111,6 +119,26 @@ export default function ComplianceDashboardPage() {
             </div>
           )}
 
+          {/* E3: filter toggle */}
+          <div className="mt-4 flex items-center gap-3">
+            <button
+              onClick={() => setShowNeedsUpdateOnly((v) => !v)}
+              className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                showNeedsUpdateOnly
+                  ? "border-amber-300 bg-amber-50 text-amber-700"
+                  : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+              }`}
+            >
+              <AlertTriangle className="h-3.5 w-3.5" />
+              {showNeedsUpdateOnly ? "Showing: needs update" : "Show only: needs update"}
+            </button>
+            {showNeedsUpdateOnly && (
+              <span className="text-xs text-slate-400">
+                {data.devices.filter((d) => d.needsUpdate).length} device(s)
+              </span>
+            )}
+          </div>
+
           {/* Device table */}
           {data.devices.length === 0 ? (
             <div className="mt-8 rounded-xl border border-dashed border-slate-200 bg-white p-12 text-center dark:border-slate-700 dark:bg-slate-900">
@@ -118,7 +146,7 @@ export default function ComplianceDashboardPage() {
               <p className="mt-3 text-sm text-slate-400 dark:text-slate-500">No devices are enrolled yet.</p>
             </div>
           ) : (
-            <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
@@ -129,11 +157,14 @@ export default function ComplianceDashboardPage() {
                       <th className="px-5 py-3">Firewall</th>
                       <th className="px-5 py-3">MDM</th>
                       <th className="px-5 py-3">Vulns</th>
+                      <th className="px-5 py-3">Update</th>
                       <th className="px-5 py-3">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {data.devices.map((device) => (
+                    {data.devices
+                      .filter((d) => !showNeedsUpdateOnly || d.needsUpdate)
+                      .map((device) => (
                       <tr key={device.deviceId} className="hover:bg-slate-50 transition-colors dark:hover:bg-slate-800">
                         <td className="px-5 py-3">
                           <div className="flex items-center gap-2">
@@ -162,6 +193,16 @@ export default function ComplianceDashboardPage() {
                             </span>
                           ) : (
                             <span className="text-xs text-slate-400 dark:text-slate-500">None</span>
+                          )}
+                        </td>
+                        <td className="px-5 py-3">
+                          {device.needsUpdate ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-300">
+                              <AlertTriangle className="h-3 w-3" />
+                              Update
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-400 dark:text-slate-500">—</span>
                           )}
                         </td>
                         <td className="px-5 py-3">

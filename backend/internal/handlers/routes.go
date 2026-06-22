@@ -113,6 +113,10 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.With(middleware.RequirePermission(middleware.PermManageMFA)).Post("/api/v1/users/{id}/require-mfa", h.RequireMFA) // C2
 			// B1: remote lock (distinct from wipe which runs in offboard)
 			r.With(middleware.RequirePermission(middleware.PermManageDevices)).Post("/api/v1/devices/{id}/lock", h.RemoteLock)
+			// E1: expanded MDM command set
+			r.With(middleware.RequirePermission(middleware.PermManageDevices)).Post("/api/v1/devices/{id}/restart", h.RemoteRestart)
+			r.With(middleware.RequirePermission(middleware.PermManageDevices)).Post("/api/v1/devices/{id}/lock-message", h.RemoteLockWithMessage)
+			r.With(middleware.RequirePermission(middleware.PermManageDevices)).Post("/api/v1/devices/{id}/clear-passcode", h.RemoteClearPasscode)
 
 			// A3: per-app access policy write
 			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Put("/api/v1/apps/{appId}/policy", h.UpsertAppAccessPolicy)
@@ -145,6 +149,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		// B3: compliance posture
 		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/users/{id}/devices/compliance", h.GetUserCompliance)
 		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/compliance", h.GetOrgCompliance)
+		// E2: device command history
+		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/devices/{id}/commands", h.GetDeviceCommandHistory)
 		// B2: list policies and teams
 		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/policies", h.ListPolicies)
 		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/teams", h.ListTeams)
