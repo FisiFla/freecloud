@@ -129,3 +129,77 @@ docker compose \
 
 See [docs/OBSERVABILITY.md](OBSERVABILITY.md) for metrics reference, dashboard,
 and alert rules.
+
+## Outbound Provisioning
+
+Per-app outbound provisioning lets FreeCloud push user create/update/deactivate
+events to external systems when group membership or app assignment changes.
+
+**Configure via the UI** at `/apps/{id}/provisioning`, or via the API:
+
+```
+PUT /api/v1/apps/{appId}/provisioning
+```
+
+**Supported connectors:**
+
+| Connector | Status |
+|---|---|
+| Generic SCIM 2.0 | Fully functional — use this for real provisioning |
+| Slack | Config + token stored; live sync not yet implemented |
+| GitHub Org | Config + token stored; live sync not yet implemented |
+
+**Bearer token encryption:** connector tokens are encrypted at rest using
+AES-256-GCM. Set `PROVISIONING_MASTER_KEY` to a base64-encoded 32-byte key:
+
+```bash
+openssl rand -base64 32   # generate the key
+```
+
+Add it to `.env.prod`:
+
+```
+PROVISIONING_MASTER_KEY=<output of the command above>
+```
+
+In development / test mode (key absent) tokens are stored base64-only without
+encryption. The backend will log a warning at startup if the key is missing and
+`APP_ENV=production`.
+
+> **Note:** Slack and GitHub connectors store configuration but do not perform
+> live sync. Use the Generic SCIM 2.0 connector for production outbound
+> provisioning until those connectors are fully implemented.
+
+## Directory Federation (LDAP / Active Directory)
+
+FreeCloud can federate with an existing LDAP directory or Active Directory,
+importing users and groups via Keycloak's built-in LDAP provider.
+
+**Configure via the UI** at Settings → Directory Federation, or via the API:
+
+```
+POST /api/v1/federation/sources
+```
+
+**Prerequisites:**
+
+1. A running Keycloak instance (already required for the core stack).
+2. `LDAP_BIND_PASSWORD` set in the backend's environment before creating any
+   federation source — the backend passes this to Keycloak when it creates the
+   federation component. Omitting it will cause the creation call to fail with
+   `400 Bad Request`.
+
+**How it works:** the backend stores the federation source config in its own DB
+and creates a matching Keycloak LDAP federation component. Keycloak handles the
+actual LDAP connection, credential binding, and attribute mapping.
+
+**Trigger a sync** from the UI (Settings → Directory Federation → Sync Now), or
+via the API:
+
+```
+POST /api/v1/federation/sources/{id}/sync
+```
+
+Sync is manual — there is no automatic periodic sync in v1.4. Schedule it
+externally (e.g. a cron job calling the API endpoint with a valid API token) if
+continuous sync is required.
