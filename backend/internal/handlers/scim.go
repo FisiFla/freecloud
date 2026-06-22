@@ -619,7 +619,7 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 		 ON CONFLICT (user_id) DO UPDATE SET version = $2, updated_at = NOW()`,
 		userID, newVersion)
 
-	if err := h.writeAuditEntryDetached("scim-provisioner", "scim_patch_user", "user", userID, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort("scim-provisioner", "scim_patch_user", "user", userID, map[string]interface{}{
 		"disabled": disabled,
 	}); err != nil {
 		h.logger.Warn("failed to write SCIM patch audit log", zap.Error(err))
@@ -666,7 +666,7 @@ func (h *Handler) SCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 	_, _ = h.db.Exec(ctx,
 		`UPDATE users SET disabled=true, updated_at=NOW() WHERE keycloak_user_id=$1`, userID)
 
-	if err := h.writeAuditEntryDetached("scim-provisioner", "scim_delete_user", "user", userID, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort("scim-provisioner", "scim_delete_user", "user", userID, map[string]interface{}{
 		"email": email,
 	}); err != nil {
 		h.logger.Warn("failed to write SCIM delete audit log", zap.Error(err))

@@ -101,7 +101,7 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryDetached(actorID, "fleet_team_create", "team", team.Name, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(actorID, "fleet_team_create", "team", team.Name, map[string]interface{}{
 			"team_name": team.Name,
 			"team_id":   team.ID,
 		}); err != nil {
@@ -152,7 +152,7 @@ func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryDetached(actorID, "fleet_team_policy_assign", "team", teamIDStr, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(actorID, "fleet_team_policy_assign", "team", teamIDStr, map[string]interface{}{
 			"team_id":   teamID,
 			"policy_id": req.PolicyID,
 		}); err != nil {
@@ -191,6 +191,10 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "hostIds must not be empty")
 		return
 	}
+	if len(req.HostIDs) > 500 {
+		respondError(w, http.StatusBadRequest, "too many host IDs (max 500)")
+		return
+	}
 
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
@@ -206,7 +210,7 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryDetached(actorID, "fleet_host_move_team", "team", teamIDStr, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(actorID, "fleet_host_move_team", "team", teamIDStr, map[string]interface{}{
 			"team_id":  teamID,
 			"host_ids": req.HostIDs,
 		}); err != nil {

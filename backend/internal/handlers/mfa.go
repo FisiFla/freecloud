@@ -103,7 +103,7 @@ func (h *Handler) RequireMFA(w http.ResponseWriter, r *http.Request) {
 	// Audit log — best-effort, detached context.
 	if h.db != nil {
 		actorID := middleware.GetActorID(r.Context())
-		if auditErr := h.writeAuditEntryDetached(actorID, "require_mfa", "user", userID, map[string]interface{}{
+		if auditErr := h.writeAuditEntryBestEffort(actorID, "require_mfa", "user", userID, map[string]interface{}{
 			"mfa_type": req.Type, "action": action,
 		}); auditErr != nil {
 			h.logger.Warn("failed to write audit log for require_mfa", zap.Error(auditErr))
