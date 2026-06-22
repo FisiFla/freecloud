@@ -78,6 +78,11 @@ func (f *fakeKC) GetRealmPolicy(_ context.Context) (*keycloakpkg.RealmPolicyResu
 func (f *fakeKC) UpdateRealmPolicy(_ context.Context, _ keycloakpkg.UpdateRealmPolicyRequest) error {
 	return nil
 }
+// B1: MFA self-service credential operations (not used by reconciler)
+func (f *fakeKC) GetUserCredentialsFull(_ context.Context, _ string) ([]*gocloak.CredentialRepresentation, error) {
+	return nil, nil
+}
+func (f *fakeKC) DeleteCredential(_ context.Context, _, _ string) error { return nil }
 
 // fakeRows implements pgx.Rows backed by a string slice.
 type fakeRows struct {

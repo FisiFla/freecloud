@@ -218,11 +218,18 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		"PATCH /scim/v2/Groups/{id}":  true,
 		"DELETE /scim/v2/Groups/{id}": true,
 		// Self-service — gated by PermSelfService, which end-user holds.
-		"POST /api/v1/auth/device-check":      true,
-		"GET /api/v1/portal/me/devices":       true,
-		"GET /api/v1/portal/me/apps":          true,
-		"GET /api/v1/portal/me/compliance":    true,
-		"POST /api/v1/portal/access-requests": true,
+		"POST /api/v1/auth/device-check":                   true,
+		"GET /api/v1/portal/me/devices":                    true,
+		"GET /api/v1/portal/me/apps":                       true,
+		"GET /api/v1/portal/me/compliance":                 true,
+		"POST /api/v1/portal/access-requests":              true,
+		// B1: MFA self-service — gated by PermSelfService, which end-user holds.
+		"GET /api/v1/portal/me/mfa/factors":                true,
+		"POST /api/v1/portal/me/mfa/totp/enroll":           true,
+		"POST /api/v1/portal/me/mfa/webauthn/enroll":       true,
+		"DELETE /api/v1/portal/me/mfa/factors/{credId}":    true,
+		"GET /api/v1/portal/me/recovery-codes":             true,
+		"POST /api/v1/portal/me/recovery-codes":            true,
 	}
 
 	paramRe := regexp.MustCompile(`\{[^}]*\}`)
