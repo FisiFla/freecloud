@@ -703,3 +703,48 @@ export async function decideApprovalRequest(
     decision,
   });
 }
+
+// D1: Password & account policy
+export interface AccountPolicy {
+  passwordPolicy: string;
+  bruteForceProtected: boolean;
+  failureFactor: number;
+  waitIncrementSeconds: number;
+  maxFailureWaitSeconds: number;
+  quickLoginCheckMilliSeconds: number;
+  minimumQuickLoginWaitSeconds: number;
+  maxDeltaTimeSeconds: number;
+  // Parsed convenience fields
+  minLength: number;
+  upperCase: number;
+  lowerCase: number;
+  digits: number;
+  specialChars: number;
+  passwordHistory: number;
+  passwordExpireDays: number;
+}
+
+export interface UpdateAccountPolicyRequest {
+  minLength: number;
+  upperCase: number;
+  lowerCase: number;
+  digits: number;
+  specialChars: number;
+  passwordHistory: number;
+  passwordExpireDays: number;
+  bruteForceProtected: boolean;
+  failureFactor: number;
+  waitIncrementSeconds: number;
+  maxFailureWaitSeconds: number;
+  quickLoginCheckMilliSeconds: number;
+  minimumQuickLoginWaitSeconds: number;
+  maxDeltaTimeSeconds: number;
+}
+
+export async function getAccountPolicy(): Promise<AccountPolicy> {
+  return request<AccountPolicy>("GET", "/api/v1/account-policy");
+}
+
+export async function updateAccountPolicy(req: UpdateAccountPolicyRequest): Promise<{ updated: boolean; passwordPolicy: string }> {
+  return request<{ updated: boolean; passwordPolicy: string }>("PUT", "/api/v1/account-policy", req);
+}
