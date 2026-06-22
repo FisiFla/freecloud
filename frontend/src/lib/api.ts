@@ -782,3 +782,45 @@ export async function getAccountPolicy(): Promise<AccountPolicy> {
 export async function updateAccountPolicy(req: UpdateAccountPolicyRequest): Promise<{ updated: boolean; passwordPolicy: string }> {
   return request<{ updated: boolean; passwordPolicy: string }>("PUT", "/api/v1/account-policy", req);
 }
+
+// B1/B2: MFA self-service (portal Security section)
+
+export interface MFAFactor {
+  id: string;
+  type: "otp" | "webauthn" | string;
+  createdDate?: number;
+}
+
+export interface RecoveryCodesResponse {
+  codes: string[];
+  createdAt: string;
+}
+
+export interface RecoveryCodesStatus {
+  hasRecoveryCodes: boolean;
+  remainingCodeCount: number;
+}
+
+export async function portalListMFAFactors(): Promise<MFAFactor[]> {
+  return request<MFAFactor[]>("GET", "/api/v1/portal/me/mfa/factors");
+}
+
+export async function portalEnrollTOTP(): Promise<{ userId: string; action: string; pending: boolean; message: string }> {
+  return request("POST", "/api/v1/portal/me/mfa/totp/enroll");
+}
+
+export async function portalEnrollWebAuthn(): Promise<{ userId: string; action: string; pending: boolean; message: string }> {
+  return request("POST", "/api/v1/portal/me/mfa/webauthn/enroll");
+}
+
+export async function portalRemoveMFAFactor(credId: string): Promise<{ removed: boolean; credentialId: string }> {
+  return request("DELETE", `/api/v1/portal/me/mfa/factors/${credId}`);
+}
+
+export async function portalGetRecoveryCodesStatus(): Promise<RecoveryCodesStatus> {
+  return request<RecoveryCodesStatus>("GET", "/api/v1/portal/me/recovery-codes");
+}
+
+export async function portalGenerateRecoveryCodes(): Promise<RecoveryCodesResponse> {
+  return request<RecoveryCodesResponse>("POST", "/api/v1/portal/me/recovery-codes");
+}

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
-import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers } from "lucide-react";
+import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers, Lock } from "lucide-react";
 import DarkModeToggle from "./DarkModeToggle";
 
 const navLinks = [
@@ -15,6 +15,7 @@ const navLinks = [
   { href: "/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/audit-log", label: "Audit Log", icon: Shield },
   { href: "/portal", label: "My Portal", icon: LayoutDashboard },
+  { href: "/portal/security", label: "Security", icon: Lock },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
