@@ -71,6 +71,14 @@ func (f *fakeKC) ListGroupMembers(_ context.Context, _ string) ([]*gocloak.User,
 func (f *fakeKC) RenameGroup(_ context.Context, _, _ string) error { return nil }
 func (f *fakeKC) DeleteGroup(_ context.Context, _ string) error    { return nil }
 
+// D1: account policy (not used by reconciler — satisfy interface)
+func (f *fakeKC) GetRealmPolicy(_ context.Context) (*keycloakpkg.RealmPolicyResult, error) {
+	return &keycloakpkg.RealmPolicyResult{}, nil
+}
+func (f *fakeKC) UpdateRealmPolicy(_ context.Context, _ keycloakpkg.UpdateRealmPolicyRequest) error {
+	return nil
+}
+
 // fakeRows implements pgx.Rows backed by a string slice.
 type fakeRows struct {
 	ids []string

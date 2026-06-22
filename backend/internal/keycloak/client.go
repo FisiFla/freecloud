@@ -51,6 +51,13 @@ type KeycloakClientInterface interface {
 	// job to detect Keycloak↔DB drift.
 	ListUsers(ctx context.Context) ([]gocloak.User, error)
 
+	// D1: Account / password policy.
+	// GetRealmPolicy returns the realm's current password-policy string and
+	// brute-force protection settings.
+	GetRealmPolicy(ctx context.Context) (*RealmPolicyResult, error)
+	// UpdateRealmPolicy writes new password-policy + brute-force settings to the realm.
+	UpdateRealmPolicy(ctx context.Context, req UpdateRealmPolicyRequest) error
+
 	// B1: SCIM Group operations.
 
 	// GetGroupByID fetches a single group by its Keycloak ID.
@@ -870,6 +877,99 @@ func (k *KeycloakClient) RenameGroup(ctx context.Context, groupID, newName strin
 		return fmt.Errorf("rename group %s: %w", groupID, err)
 	}
 	zap.L().Info("renamed group", zap.String("group_id", groupID), zap.String("name", newName))
+	return nil
+}
+
+// RealmPolicyResult holds the realm's password-policy string and brute-force settings.
+type RealmPolicyResult struct {
+	PasswordPolicy string `json:"passwordPolicy"`
+	// Brute-force protection fields.
+	BruteForceProtected bool  `json:"bruteForceProtected"`
+	FailureFactor       int   `json:"failureFactor"`
+	WaitIncrementSeconds int  `json:"waitIncrementSeconds"`
+	MaxFailureWaitSeconds int  `json:"maxFailureWaitSeconds"`
+	QuickLoginCheckMilliSeconds int64 `json:"quickLoginCheckMilliSeconds"`
+	MinimumQuickLoginWaitSeconds int  `json:"minimumQuickLoginWaitSeconds"`
+	MaxDeltaTimeSeconds  int   `json:"maxDeltaTimeSeconds"`
+}
+
+// UpdateRealmPolicyRequest holds the fields to write back to the realm.
+type UpdateRealmPolicyRequest struct {
+	PasswordPolicy      string `json:"passwordPolicy"`
+	BruteForceProtected bool   `json:"bruteForceProtected"`
+	FailureFactor       int    `json:"failureFactor"`
+	WaitIncrementSeconds int   `json:"waitIncrementSeconds"`
+	MaxFailureWaitSeconds int  `json:"maxFailureWaitSeconds"`
+	QuickLoginCheckMilliSeconds int64 `json:"quickLoginCheckMilliSeconds"`
+	MinimumQuickLoginWaitSeconds int  `json:"minimumQuickLoginWaitSeconds"`
+	MaxDeltaTimeSeconds  int   `json:"maxDeltaTimeSeconds"`
+}
+
+// GetRealmPolicy reads the realm representation and returns the password-policy
+// string plus brute-force protection settings.
+func (k *KeycloakClient) GetRealmPolicy(ctx context.Context) (*RealmPolicyResult, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	realm, err := k.client.GetRealm(ctx, token, k.realm)
+	if err != nil {
+		return nil, fmt.Errorf("get realm %s: %w", k.realm, err)
+	}
+
+	result := &RealmPolicyResult{}
+	if realm.PasswordPolicy != nil {
+		result.PasswordPolicy = *realm.PasswordPolicy
+	}
+	if realm.BruteForceProtected != nil {
+		result.BruteForceProtected = *realm.BruteForceProtected
+	}
+	if realm.FailureFactor != nil {
+		result.FailureFactor = *realm.FailureFactor
+	}
+	if realm.WaitIncrementSeconds != nil {
+		result.WaitIncrementSeconds = *realm.WaitIncrementSeconds
+	}
+	if realm.MaxFailureWaitSeconds != nil {
+		result.MaxFailureWaitSeconds = *realm.MaxFailureWaitSeconds
+	}
+	if realm.QuickLoginCheckMilliSeconds != nil {
+		result.QuickLoginCheckMilliSeconds = *realm.QuickLoginCheckMilliSeconds
+	}
+	if realm.MinimumQuickLoginWaitSeconds != nil {
+		result.MinimumQuickLoginWaitSeconds = *realm.MinimumQuickLoginWaitSeconds
+	}
+	if realm.MaxDeltaTimeSeconds != nil {
+		result.MaxDeltaTimeSeconds = *realm.MaxDeltaTimeSeconds
+	}
+	return result, nil
+}
+
+// UpdateRealmPolicy applies new password-policy and brute-force settings to the realm.
+// It reads the current realm first to avoid clobbering unrelated fields.
+func (k *KeycloakClient) UpdateRealmPolicy(ctx context.Context, req UpdateRealmPolicyRequest) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	realm, err := k.client.GetRealm(ctx, token, k.realm)
+	if err != nil {
+		return fmt.Errorf("get realm %s before update: %w", k.realm, err)
+	}
+
+	realm.PasswordPolicy = &req.PasswordPolicy
+	realm.BruteForceProtected = &req.BruteForceProtected
+	realm.FailureFactor = &req.FailureFactor
+	realm.WaitIncrementSeconds = &req.WaitIncrementSeconds
+	realm.MaxFailureWaitSeconds = &req.MaxFailureWaitSeconds
+	realm.QuickLoginCheckMilliSeconds = &req.QuickLoginCheckMilliSeconds
+	realm.MinimumQuickLoginWaitSeconds = &req.MinimumQuickLoginWaitSeconds
+	realm.MaxDeltaTimeSeconds = &req.MaxDeltaTimeSeconds
+
+	if err := k.client.UpdateRealm(ctx, token, *realm); err != nil {
+		return fmt.Errorf("update realm %s policy: %w", k.realm, err)
+	}
+	zap.L().Info("updated realm account policy", zap.String("realm", k.realm))
 	return nil
 }
 
