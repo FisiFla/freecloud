@@ -50,7 +50,8 @@ const (
 	PermManageCampaigns Permission = "manage:campaigns"
 	PermReviewCampaigns Permission = "review:campaigns"
 	PermApproveRequests Permission = "approve:requests"
-	PermSubmitApprovals Permission = "submit:approvals"
+	PermSubmitApprovals    Permission = "submit:approvals"
+	PermManageAccountPolicy Permission = "manage:account-policy"
 )
 
 // permissionMatrix maps each permission to the roles that hold it.
@@ -73,7 +74,8 @@ var permissionMatrix = map[Permission][]Role{
 	PermManageCampaigns: {RoleSuperAdmin},
 	PermReviewCampaigns: {RoleSuperAdmin, RoleAuditor},
 	PermApproveRequests: {RoleSuperAdmin},
-	PermSubmitApprovals: {RoleSuperAdmin, RoleHelpdesk},
+	PermSubmitApprovals:    {RoleSuperAdmin, RoleHelpdesk},
+	PermManageAccountPolicy: {RoleSuperAdmin},
 }
 
 // roleHasPermission checks whether a role holds a permission.

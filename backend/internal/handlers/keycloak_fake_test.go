@@ -40,6 +40,9 @@ type fakeKeycloak struct {
 	listGroupMembersFn func(ctx context.Context, groupID string) ([]*gocloak.User, error)
 	renameGroupFn      func(ctx context.Context, groupID, newName string) error
 	deleteGroupFn      func(ctx context.Context, groupID string) error
+	// D1: account policy
+	getRealmPolicyFn    func(ctx context.Context) (*keycloak.RealmPolicyResult, error)
+	updateRealmPolicyFn func(ctx context.Context, req keycloak.UpdateRealmPolicyRequest) error
 }
 
 func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -237,6 +240,24 @@ func (f *fakeKeycloak) RenameGroup(ctx context.Context, groupID, newName string)
 func (f *fakeKeycloak) DeleteGroup(ctx context.Context, groupID string) error {
 	if f.deleteGroupFn != nil {
 		return f.deleteGroupFn(ctx, groupID)
+	}
+	return nil
+}
+
+func (f *fakeKeycloak) GetRealmPolicy(ctx context.Context) (*keycloak.RealmPolicyResult, error) {
+	if f.getRealmPolicyFn != nil {
+		return f.getRealmPolicyFn(ctx)
+	}
+	return &keycloak.RealmPolicyResult{
+		PasswordPolicy:      "length(12) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)",
+		BruteForceProtected: true,
+		FailureFactor:       5,
+	}, nil
+}
+
+func (f *fakeKeycloak) UpdateRealmPolicy(ctx context.Context, req keycloak.UpdateRealmPolicyRequest) error {
+	if f.updateRealmPolicyFn != nil {
+		return f.updateRealmPolicyFn(ctx, req)
 	}
 	return nil
 }

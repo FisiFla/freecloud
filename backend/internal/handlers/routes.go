@@ -191,6 +191,10 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		// D2: analytics time-series snapshots.
 		r.With(middleware.RequirePermission(middleware.PermReadCompliance)).Get("/api/v1/analytics/snapshots", h.GetAnalyticsSnapshots)
 
+		// D1: password & account policy (super-admin only).
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Get("/api/v1/account-policy", h.GetAccountPolicy)
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Put("/api/v1/account-policy", h.UpdateAccountPolicy)
+
 		// C4 (FCEX3-16) — Approval workflow.
 		// Helpdesk submits a request; super-admin approves/rejects via PermApproveRequests.
 		r.With(middleware.RequirePermission(middleware.PermSubmitApprovals)).Post("/api/v1/approval-requests", h.SubmitApproval)
