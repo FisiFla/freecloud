@@ -73,7 +73,9 @@ services:
 
   # F2: OpenLDAP container for LDAP/AD federation e2e tests.
   openldap-e2e:
-    image: bitnami/openldap:latest
+    # Bitnami relocated free images to the bitnamilegacy namespace (Aug 2025);
+    # bitnami/openldap:latest now 404s with "manifest unknown".
+    image: bitnamilegacy/openldap:latest
     ports:
       - "1389:1389"
     environment:
