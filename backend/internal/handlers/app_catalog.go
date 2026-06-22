@@ -164,6 +164,12 @@ func (h *Handler) CreateAppFromTemplate(w http.ResponseWriter, r *http.Request) 
 	}
 
 	baseURL := strings.TrimSpace(req.Fields["baseURL"])
+	if baseURL != "" {
+		if err := validateRedirectURI(baseURL); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid baseURL: "+err.Error())
+			return
+		}
+	}
 
 	// Build redirect URIs from template-specific fields.
 	var redirectURIs []string

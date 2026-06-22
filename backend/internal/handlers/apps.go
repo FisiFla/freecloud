@@ -97,6 +97,12 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "at least one redirect URI is required for OIDC apps")
 		return
 	}
+	if req.BaseURL != "" {
+		if err := validateRedirectURI(req.BaseURL); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid baseURL: "+err.Error())
+			return
+		}
+	}
 	if len(req.RedirectURIs) > 20 {
 		respondValidationErrors(w, []ValidationError{{
 			Field:   "redirectURIs",
