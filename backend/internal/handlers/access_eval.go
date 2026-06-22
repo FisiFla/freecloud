@@ -41,6 +41,9 @@ type AccessEvalResponse struct {
 
 // appPolicy holds the per-app posture requirements loaded from app_access_policies.
 type appPolicy struct {
+	// RequireEnrolled is reserved/no-op today: device enrollment is enforced
+	// unconditionally for the explicit-device override path in step 2 (users_devices_mapping
+	// check), so a policy-layer re-check here would be dead code.
 	RequireEnrolled        bool
 	RequireDiskEncrypted   bool
 	RequireNoCriticalVulns bool
@@ -291,7 +294,7 @@ func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons 
 		"allow":   allow,
 		"reasons": reasons,
 	}
-	if err := h.writeAuditEntryDetached(actorID, "access_eval", "user", userID, details); err != nil {
+	if err := h.writeAuditEntryBestEffort(actorID, "access_eval", "user", userID, details); err != nil {
 		h.logger.Warn("access eval: failed to write audit log", zap.Error(err))
 	}
 }

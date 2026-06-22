@@ -126,7 +126,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if auditErr := h.writeAuditEntryDetached(actorID, "offboard", "user", userID, map[string]interface{}{
+		if auditErr := h.writeAuditEntryBestEffort(actorID, "offboard", "user", userID, map[string]interface{}{
 			"devices_wiped":  devicesWiped,
 			"devices_failed": devicesFailed,
 			"device_ids":     deviceIDs,

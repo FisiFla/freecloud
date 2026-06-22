@@ -309,7 +309,7 @@ func (h *Handler) CompleteCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.writeAuditEntryDetached(actorID, "complete_campaign", "campaign", campaignID, map[string]interface{}{}); err != nil {
+	if err := h.writeAuditEntryBestEffort(actorID, "complete_campaign", "campaign", campaignID, map[string]interface{}{}); err != nil {
 		h.logger.Warn("failed to write campaign completion audit log", zap.Error(err))
 	}
 

@@ -42,6 +42,12 @@ func WriteEntry(ctx context.Context, db DBPool, actorID, action, targetType, tar
 		detailsBytes = []byte("{}")
 	}
 
+	// When db is a pgx.Tx (called from within a caller's transaction), Begin
+	// creates a SAVEPOINT rather than a real transaction. In that case the
+	// pg_advisory_xact_lock below is held by the OUTER transaction and is
+	// released at its commit or rollback — this is intentional and safe, because
+	// the chain must remain consistent for the full duration of the enclosing
+	// transaction, not just the inner SAVEPOINT.
 	tx, err := db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin audit write transaction: %w", err)

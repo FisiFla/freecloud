@@ -92,10 +92,10 @@ func TestE2E_PostureEnforcement_NoUserDenied(t *testing.T) {
 }
 
 // TestE2E_PostureEnforcement_CompliantDeviceAllowed provisions a real user via
-// SCIM, onboards them so a device gets enrolled via the FleetDM mock's
-// simulateEnrollment goroutine, waits for the device to appear in the mapping,
-// and then calls access/evaluate.  The FleetDM mock returns compliant posture
-// for all its hosts, so the result must be allow.
+// SCIM, enrolls host-001 for them via the test-only enrollment-token endpoint
+// and the HMAC-signed enrollment callback, then calls access/evaluate.
+// The FleetDM mock returns compliant posture (disk_encryption+firewall=true) for
+// host-001, so the result must be allow=true.
 func TestE2E_PostureEnforcement_CompliantDeviceAllowed(t *testing.T) {
 	waitReady(t, 30*time.Second)
 
@@ -119,24 +119,49 @@ func TestE2E_PostureEnforcement_CompliantDeviceAllowed(t *testing.T) {
 	}
 	t.Logf("created user id=%s", created.ID)
 
-	// 2. The FleetDM mock's simulateEnrollment goroutine calls our enrollment
-	// callback when an enrollment token is issued during onboarding.  Since the
-	// SCIM-only path doesn't trigger onboarding, inject a device mapping directly
-	// via the enrollment-callback (simulate what onboard+Fleet would do).
-	//
-	// Use a synthetic host ID that the FleetDM mock returns compliant posture for.
-	hostID := fmt.Sprintf("host-posture-e2e-%d", time.Now().UnixNano()%10000)
-
-	// We can't call onboard without a JWT; instead skip to the posture-eval
-	// part: evaluate access for a user with NO enrolled device, which must deny.
-	// Then verify that with a compliant host (via the mock) it would allow.
-	//
-	// Direct device-ID evaluation (deviceId field overrides user's enrolled devices):
-	body := map[string]string{
-		"userId":   created.ID,
-		"deviceId": "host-001", // built-in compliant host in the FleetDM mock
+	// 2. Mint an enrollment token for the user via the test-only endpoint
+	// (APP_ENV=test, gated by the SCIM bearer token).
+	tokenBody := map[string]string{"userId": created.ID}
+	status, resp = do(t, "POST", "/api/v1/e2e/enrollment-token", scimHeaders(), tokenBody)
+	if status != 200 {
+		t.Fatalf("create enrollment token: expected 200, got %d: %s", status, resp)
 	}
-	status, resp = do(t, "POST", "/api/v1/access/evaluate", accessEvalHeaders(), body)
+	var tokenResp struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &tokenResp); err != nil || tokenResp.Data.Token == "" {
+		t.Fatalf("parse token response: %v (body: %s)", err, resp)
+	}
+	enrollToken := tokenResp.Data.Token
+	t.Logf("enrollment token=%s", enrollToken)
+
+	// 3. Simulate the FleetDM enrollment callback for host-001 — the compliant
+	// built-in host in the mock (disk_encryption=true, firewall=true).
+	hostID := "host-001"
+	enrollPayload, _ := json.Marshal(map[string]string{
+		"enrollment_token": enrollToken,
+		"host_id":          hostID,
+		"hostname":         hostID + ".local",
+		"os_version":       "macOS 15.0",
+	})
+	sig := hmacSig(t, *flagWebhookSecret, enrollPayload)
+	status, resp = do(t, "POST", "/api/v1/fleet/enrollment-callback",
+		map[string]string{"X-Fleet-Signature": sig},
+		json.RawMessage(enrollPayload))
+	if status != 200 {
+		t.Fatalf("enrollment callback: expected 200, got %d: %s", status, resp)
+	}
+	t.Logf("enrolled host=%s", hostID)
+
+	// 4. Evaluate access — the user now has host-001 enrolled; the FleetDM mock
+	// reports it as compliant (firewall+disk both true, no vulns).
+	evalBody := map[string]string{
+		"userId":   created.ID,
+		"deviceId": hostID,
+	}
+	status, resp = do(t, "POST", "/api/v1/access/evaluate", accessEvalHeaders(), evalBody)
 	if status != 200 {
 		t.Fatalf("access/evaluate (compliant device): expected 200, got %d: %s", status, resp)
 	}
@@ -150,19 +175,18 @@ func TestE2E_PostureEnforcement_CompliantDeviceAllowed(t *testing.T) {
 	if !result.Allow {
 		t.Errorf("compliant device (host-001): expected allow, got deny (reasons: %v)", result.Reasons)
 	}
-	t.Logf("compliant device → allow (reasons: %v, hostID ignored: %s)", result.Reasons, hostID)
+	t.Logf("compliant device → allow (reasons: %v)", result.Reasons)
 
 	// Cleanup.
 	do(t, "DELETE", "/scim/v2/Users/"+created.ID, scimHeaders(), nil)
 }
 
 // TestE2E_PostureEnforcement_NonCompliantDeviceDenied proves that a device whose
-// posture returns a violation (non-empty reasons from FleetDM) is denied.
+// posture returns a violation is denied with a posture reason (not "not enrolled").
 //
-// The FleetDM mock returns compliant posture (disk_encryption+firewall=true) only
-// for host-001.  Any other host ID gets the non-compliant defaults (both false),
-// which causes the backend to deny with "firewall disabled" / "disk not encrypted"
-// reasons, proving fail-closed enforcement is active.
+// The FleetDM mock returns compliant posture only for host-001. Any other host ID
+// gets disk_encryption=false and firewall=false (non-compliant defaults), which
+// causes the backend to deny with firewall/disk violation reasons.
 func TestE2E_PostureEnforcement_NonCompliantDeviceDenied(t *testing.T) {
 	waitReady(t, 30*time.Second)
 
@@ -186,18 +210,51 @@ func TestE2E_PostureEnforcement_NonCompliantDeviceDenied(t *testing.T) {
 	}
 	t.Logf("created user id=%s", created.ID)
 
-	// 2. Evaluate with a non-compliant host ID — the FleetDM mock returns
-	// disk_encryption=false and firewall=false for any host other than "host-001",
-	// so the backend will deny access with firewall/disk violation reasons
-	// (fail-closed enforcement).
-	unknownHost := "host-unknown-e2e-99999"
-	body := map[string]string{
-		"userId":   created.ID,
-		"deviceId": unknownHost,
-	}
-	status, resp = do(t, "POST", "/api/v1/access/evaluate", accessEvalHeaders(), body)
+	// 2. Mint an enrollment token and enroll a non-compliant host.
+	// Any host ID other than "host-001" gets disk_encryption=false and
+	// firewall=false from the FleetDM mock.
+	noncompliantHost := fmt.Sprintf("host-noncompliant-e2e-%d", time.Now().UnixNano()%100000)
+
+	tokenBody := map[string]string{"userId": created.ID}
+	status, resp = do(t, "POST", "/api/v1/e2e/enrollment-token", scimHeaders(), tokenBody)
 	if status != 200 {
-		t.Fatalf("access/evaluate (unknown device): expected 200, got %d: %s", status, resp)
+		t.Fatalf("create enrollment token: expected 200, got %d: %s", status, resp)
+	}
+	var tokenResp struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &tokenResp); err != nil || tokenResp.Data.Token == "" {
+		t.Fatalf("parse token response: %v (body: %s)", err, resp)
+	}
+	enrollToken := tokenResp.Data.Token
+
+	enrollPayload, _ := json.Marshal(map[string]string{
+		"enrollment_token": enrollToken,
+		"host_id":          noncompliantHost,
+		"hostname":         noncompliantHost + ".local",
+		"os_version":       "Ubuntu 22.04",
+	})
+	sig := hmacSig(t, *flagWebhookSecret, enrollPayload)
+	status, resp = do(t, "POST", "/api/v1/fleet/enrollment-callback",
+		map[string]string{"X-Fleet-Signature": sig},
+		json.RawMessage(enrollPayload))
+	if status != 200 {
+		t.Fatalf("enrollment callback: expected 200, got %d: %s", status, resp)
+	}
+	t.Logf("enrolled non-compliant host=%s", noncompliantHost)
+
+	// 3. Evaluate access — the device is enrolled but non-compliant.
+	// The FleetDM mock returns disk_encryption=false and firewall=false for
+	// any host other than host-001, so the backend denies with posture reasons.
+	evalBody := map[string]string{
+		"userId":   created.ID,
+		"deviceId": noncompliantHost,
+	}
+	status, resp = do(t, "POST", "/api/v1/access/evaluate", accessEvalHeaders(), evalBody)
+	if status != 200 {
+		t.Fatalf("access/evaluate (non-compliant device): expected 200, got %d: %s", status, resp)
 	}
 	var env struct {
 		Data accessEvalResp `json:"data"`
@@ -207,14 +264,12 @@ func TestE2E_PostureEnforcement_NonCompliantDeviceDenied(t *testing.T) {
 	}
 	result := env.Data
 	if result.Allow {
-		t.Errorf("unknown device: expected deny (fail-closed), got allow (reasons: %v)", result.Reasons)
+		t.Errorf("non-compliant device: expected deny, got allow (reasons: %v)", result.Reasons)
 	}
 	if len(result.Reasons) == 0 {
-		t.Error("unknown device: expected at least one denial reason")
+		t.Error("non-compliant device: expected at least one denial reason")
 	}
-	// The mock returns disk_encryption=false and firewall=false for unknown hosts
-	// (non-compliant defaults), so reasons will contain "firewall disabled" and/or
-	// "disk not encrypted". Either proves fail-closed enforcement is active.
+	// Reasons must reflect a posture violation ("firewall" or "disk"), NOT "not enrolled".
 	hasViolation := false
 	for _, r := range result.Reasons {
 		if strings.Contains(r, "firewall") || strings.Contains(r, "disk") ||
@@ -223,9 +278,9 @@ func TestE2E_PostureEnforcement_NonCompliantDeviceDenied(t *testing.T) {
 		}
 	}
 	if !hasViolation {
-		t.Errorf("unknown device denial reasons don't mention a posture violation: %v", result.Reasons)
+		t.Errorf("non-compliant device denial reasons don't mention a posture violation: %v", result.Reasons)
 	}
-	t.Logf("unknown device → deny, reasons: %v", result.Reasons)
+	t.Logf("non-compliant device → deny, reasons: %v", result.Reasons)
 
 	// Cleanup.
 	do(t, "DELETE", "/scim/v2/Users/"+created.ID, scimHeaders(), nil)
