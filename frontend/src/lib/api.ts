@@ -110,6 +110,7 @@ export interface Device {
   osVersion?: string;
   lastSeenAt?: string;
   createdAt?: string;
+  needsUpdate?: boolean;
 }
 
 export interface User {
@@ -160,6 +161,19 @@ export interface RemoteLockResponse {
   locked: boolean;
 }
 
+// E1: Expanded MDM commands
+export interface DeviceCommand {
+  id: string;
+  hostId: string;
+  commandType: string;
+  status: "pending" | "sent" | "done" | "failed";
+  requestedBy: string;
+  requestedAt: string;
+  updatedAt: string;
+  fleetCommandUuid?: string;
+  result?: string;
+}
+
 // B2
 export interface SoftwareEntry {
   name: string;
@@ -189,6 +203,7 @@ export interface DeviceHostPosture {
   vulnerabilities: string[];
   unknownVulns: boolean;
   compliant: boolean;
+  needsUpdate?: boolean;
 }
 
 export interface ComplianceSummary {
@@ -197,6 +212,7 @@ export interface ComplianceSummary {
   encryptedDevices: number;
   firewallEnabled: number;
   devicesWithVulns: number;
+  needsUpdateDevices: number;
 }
 
 export interface ComplianceResponse {
@@ -504,6 +520,24 @@ export async function resetPassword(userId: string): Promise<{ sent: boolean }> 
 // B1: Remote lock
 export async function lockDevice(deviceId: string): Promise<RemoteLockResponse> {
   return request<RemoteLockResponse>("POST", `/api/v1/devices/${deviceId}/lock`);
+}
+
+// E1: Expanded MDM commands
+export async function restartDevice(deviceId: string): Promise<{ deviceId: string; restarted: boolean }> {
+  return request("POST", `/api/v1/devices/${deviceId}/restart`);
+}
+
+export async function lockDeviceWithMessage(deviceId: string, message: string): Promise<{ deviceId: string; locked: boolean; message: string }> {
+  return request("POST", `/api/v1/devices/${deviceId}/lock-message`, { message });
+}
+
+export async function clearPasscode(deviceId: string): Promise<{ deviceId: string; cleared: boolean }> {
+  return request("POST", `/api/v1/devices/${deviceId}/clear-passcode`);
+}
+
+// E2: Device command history
+export async function getDeviceCommandHistory(deviceId: string): Promise<{ commands: DeviceCommand[] }> {
+  return request("GET", `/api/v1/devices/${deviceId}/commands`);
 }
 
 // B2: Software inventory for a user's devices

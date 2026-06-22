@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle, Pencil, KeyRound, Lock, Package, ShieldCheck, ShieldAlert, ChevronRight } from "lucide-react";
+import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle, Pencil, KeyRound, Lock, Package, ShieldCheck, ShieldAlert, ChevronRight, RotateCcw, KeySquare, ChevronDown } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
-import { offboardUser, getUser, patchUser, resetPassword, getMFAStatus, requireMFA, lockDevice, listPolicies } from "@/lib/api";
-import type { OffboardResponse, Device, PatchUserRequest, MFAStatus, Policy } from "@/lib/api";
+import { offboardUser, getUser, patchUser, resetPassword, getMFAStatus, requireMFA, lockDevice, listPolicies, restartDevice, lockDeviceWithMessage, clearPasscode, getDeviceCommandHistory } from "@/lib/api";
+import type { OffboardResponse, Device, PatchUserRequest, MFAStatus, Policy, DeviceCommand } from "@/lib/api";
 import { useApiReady } from "../../providers";
 
 interface EmployeeDetail {
@@ -67,6 +67,20 @@ export default function EmployeeDetailPage() {
   const [selectedPolicyId, setSelectedPolicyId] = useState<string>("");
   const [policySuccess, setPolicySuccess] = useState<string | null>(null);
   const [policyError, setPolicyError] = useState<string | null>(null);
+
+  // E1: new MDM commands
+  const [restartConfirmDeviceId, setRestartConfirmDeviceId] = useState<string | null>(null);
+  const [restartingDeviceId, setRestartingDeviceId] = useState<string | null>(null);
+  const [lockMsgConfirmDeviceId, setLockMsgConfirmDeviceId] = useState<string | null>(null);
+  const [lockMsgDeviceId, setLockMsgDeviceId] = useState<string | null>(null);
+  const [lockMsgText, setLockMsgText] = useState<string>("");
+  const [clearPasscodeConfirmDeviceId, setClearPasscodeConfirmDeviceId] = useState<string | null>(null);
+  const [clearingPasscodeDeviceId, setClearingPasscodeDeviceId] = useState<string | null>(null);
+
+  // E2: command history per device
+  const [commandHistoryDeviceId, setCommandHistoryDeviceId] = useState<string | null>(null);
+  const [commandHistory, setCommandHistory] = useState<DeviceCommand[]>([]);
+  const [commandHistoryLoading, setCommandHistoryLoading] = useState(false);
 
   useEffect(() => {
     if (!apiReady) return;
@@ -216,6 +230,69 @@ export default function EmployeeDetailPage() {
     setPolicySuccess("Policy assignment is now managed via Fleet Teams. Use the Teams page to assign policies to teams and move devices there.");
     setAssigningPolicyForDeviceId(null);
     setSelectedPolicyId("");
+  };
+
+  // E1: restart device
+  const handleRestartDevice = async () => {
+    if (!restartConfirmDeviceId) return;
+    setRestartingDeviceId(restartConfirmDeviceId);
+    setRestartConfirmDeviceId(null);
+    try {
+      await restartDevice(restartConfirmDeviceId);
+      setLockSuccess(`Restart command sent to device ${restartConfirmDeviceId}.`);
+    } catch (err: unknown) {
+      setLockError(err instanceof Error ? err.message : "Failed to send restart command.");
+    } finally {
+      setRestartingDeviceId(null);
+    }
+  };
+
+  // E1: lock with message
+  const handleLockWithMessage = async () => {
+    if (!lockMsgDeviceId) return;
+    try {
+      await lockDeviceWithMessage(lockMsgDeviceId, lockMsgText);
+      setLockSuccess(`Lock command sent to device ${lockMsgDeviceId}.`);
+    } catch (err: unknown) {
+      setLockError(err instanceof Error ? err.message : "Failed to send lock command.");
+    } finally {
+      setLockMsgDeviceId(null);
+      setLockMsgConfirmDeviceId(null);
+      setLockMsgText("");
+    }
+  };
+
+  // E1: clear passcode
+  const handleClearPasscode = async () => {
+    if (!clearPasscodeConfirmDeviceId) return;
+    setClearingPasscodeDeviceId(clearPasscodeConfirmDeviceId);
+    setClearPasscodeConfirmDeviceId(null);
+    try {
+      await clearPasscode(clearPasscodeConfirmDeviceId);
+      setLockSuccess(`Clear passcode command sent to device ${clearPasscodeConfirmDeviceId}.`);
+    } catch (err: unknown) {
+      setLockError(err instanceof Error ? err.message : "Failed to send clear passcode command.");
+    } finally {
+      setClearingPasscodeDeviceId(null);
+    }
+  };
+
+  // E2: toggle command history for a device
+  const toggleCommandHistory = async (deviceId: string) => {
+    if (commandHistoryDeviceId === deviceId) {
+      setCommandHistoryDeviceId(null);
+      return;
+    }
+    setCommandHistoryDeviceId(deviceId);
+    setCommandHistoryLoading(true);
+    try {
+      const data = await getDeviceCommandHistory(deviceId);
+      setCommandHistory(data.commands);
+    } catch {
+      setCommandHistory([]);
+    } finally {
+      setCommandHistoryLoading(false);
+    }
   };
 
   if (loading) {
@@ -576,21 +653,61 @@ export default function EmployeeDetailPage() {
                       </div>
                     </div>
 
-                    {/* B1: Lock device button */}
-                    <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3">
-                      <button
-                        onClick={() => setLockConfirmDeviceId(device.fleetHostId)}
-                        disabled={lockingDeviceId === device.fleetHostId}
-                        className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-50"
-                        title="Send a remote lock command to this device"
-                      >
-                        <Lock className="h-3.5 w-3.5" />
-                        {lockingDeviceId === device.fleetHostId ? "Locking..." : "Lock Device"}
-                      </button>
+                    {/* B1 + E1: device action buttons */}
+                    <div className="mt-3 border-t border-slate-100 pt-3 space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => setLockConfirmDeviceId(device.fleetHostId)}
+                          disabled={lockingDeviceId === device.fleetHostId}
+                          className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 disabled:opacity-50"
+                          title="Send a remote lock command to this device"
+                        >
+                          <Lock className="h-3.5 w-3.5" />
+                          {lockingDeviceId === device.fleetHostId ? "Locking..." : "Lock"}
+                        </button>
+
+                        <button
+                          onClick={() => setRestartConfirmDeviceId(device.fleetHostId)}
+                          disabled={restartingDeviceId === device.fleetHostId}
+                          className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                          title="Send a remote restart command to this device"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          {restartingDeviceId === device.fleetHostId ? "Restarting..." : "Restart"}
+                        </button>
+
+                        <button
+                          onClick={() => { setLockMsgConfirmDeviceId(device.fleetHostId); setLockMsgText(""); }}
+                          className="flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100"
+                          title="Lock device and display a custom message"
+                        >
+                          <Lock className="h-3.5 w-3.5" />
+                          Lock + Message
+                        </button>
+
+                        <button
+                          onClick={() => setClearPasscodeConfirmDeviceId(device.fleetHostId)}
+                          disabled={clearingPasscodeDeviceId === device.fleetHostId}
+                          className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50"
+                          title="Clear device passcode"
+                        >
+                          <KeySquare className="h-3.5 w-3.5" />
+                          {clearingPasscodeDeviceId === device.fleetHostId ? "Clearing..." : "Clear Passcode"}
+                        </button>
+
+                        {/* E2: command history toggle */}
+                        <button
+                          onClick={() => toggleCommandHistory(device.fleetHostId)}
+                          className="ml-auto flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700"
+                        >
+                          History
+                          <ChevronDown className={`h-3.5 w-3.5 transition-transform ${commandHistoryDeviceId === device.fleetHostId ? "rotate-180" : ""}`} />
+                        </button>
+                      </div>
 
                       {/* B4: Assign policy — inline picker */}
                       {policies.length > 0 && (
-                        <div className="flex items-center gap-1.5 flex-1">
+                        <div className="flex items-center gap-1.5">
                           <select
                             value={assigningPolicyForDeviceId === device.fleetHostId ? selectedPolicyId : ""}
                             onChange={(e) => {
@@ -611,6 +728,51 @@ export default function EmployeeDetailPage() {
                             >
                               Apply
                             </button>
+                          )}
+                        </div>
+                      )}
+
+                      {/* E2: command history panel */}
+                      {commandHistoryDeviceId === device.fleetHostId && (
+                        <div className="mt-1 rounded-lg border border-slate-100 bg-slate-50 p-3">
+                          <p className="text-xs font-medium text-slate-600 mb-2">Command History</p>
+                          {commandHistoryLoading ? (
+                            <p className="text-xs text-slate-400">Loading…</p>
+                          ) : commandHistory.length === 0 ? (
+                            <p className="text-xs text-slate-400">No commands issued yet.</p>
+                          ) : (
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="text-left text-slate-500">
+                                    <th className="pb-1 pr-3">Type</th>
+                                    <th className="pb-1 pr-3">Status</th>
+                                    <th className="pb-1 pr-3">By</th>
+                                    <th className="pb-1">Time</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {commandHistory.map((cmd) => (
+                                    <tr key={cmd.id}>
+                                      <td className="py-1 pr-3 font-medium text-slate-700">{cmd.commandType}</td>
+                                      <td className="py-1 pr-3">
+                                        <span className={`rounded-full px-1.5 py-0.5 ${
+                                          cmd.status === "sent" || cmd.status === "done"
+                                            ? "bg-emerald-50 text-emerald-700"
+                                            : cmd.status === "failed"
+                                            ? "bg-red-50 text-red-700"
+                                            : "bg-slate-100 text-slate-600"
+                                        }`}>
+                                          {cmd.status}
+                                        </span>
+                                      </td>
+                                      <td className="py-1 pr-3 text-slate-500">{cmd.requestedBy}</td>
+                                      <td className="py-1 text-slate-400">{new Date(cmd.requestedAt).toLocaleString()}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
                           )}
                         </div>
                       )}
@@ -747,6 +909,60 @@ export default function EmployeeDetailPage() {
         title="Lock Device?"
         message={`This will send a remote lock command to device ${lockConfirmDeviceId}. The device will be locked immediately. Unlike a wipe, data is preserved and the device can be unlocked later.`}
         confirmLabel="Yes, Lock Device"
+        variant="default"
+      />
+
+      {/* E1: Confirm restart */}
+      <ConfirmDialog
+        isOpen={restartConfirmDeviceId !== null}
+        onClose={() => setRestartConfirmDeviceId(null)}
+        onConfirm={handleRestartDevice}
+        title="Restart Device?"
+        message={`This will send a remote restart command to device ${restartConfirmDeviceId}. Any unsaved work may be lost.`}
+        confirmLabel="Yes, Restart"
+        variant="default"
+      />
+
+      {/* E1: Lock with message modal */}
+      {lockMsgConfirmDeviceId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black/40" onClick={() => setLockMsgConfirmDeviceId(null)} />
+          <div className="relative w-full max-w-md rounded-xl bg-white p-6 shadow-2xl">
+            <h3 className="text-lg font-semibold text-slate-800">Lock Device with Message</h3>
+            <p className="mt-1 text-sm text-slate-500">The message will be displayed on the device lock screen.</p>
+            <textarea
+              className="mt-4 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+              rows={3}
+              placeholder="e.g. Please return this device to IT…"
+              value={lockMsgText}
+              onChange={(e) => setLockMsgText(e.target.value)}
+            />
+            <div className="mt-4 flex justify-end gap-3">
+              <button
+                onClick={() => setLockMsgConfirmDeviceId(null)}
+                className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { setLockMsgDeviceId(lockMsgConfirmDeviceId); handleLockWithMessage(); }}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700"
+              >
+                Lock Device
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* E1: Confirm clear passcode */}
+      <ConfirmDialog
+        isOpen={clearPasscodeConfirmDeviceId !== null}
+        onClose={() => setClearPasscodeConfirmDeviceId(null)}
+        onConfirm={handleClearPasscode}
+        title="Clear Passcode?"
+        message={`This will clear the passcode on device ${clearPasscodeConfirmDeviceId}. The device will need a new passcode to be set.`}
+        confirmLabel="Yes, Clear Passcode"
         variant="default"
       />
     </div>
