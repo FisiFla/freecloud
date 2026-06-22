@@ -11,13 +11,17 @@ package handlers
 // token (ACCESS_EVAL_TOKEN), registered OUTSIDE the user-JWT group.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/notify"
 )
 
 // AccessEvalRequest is the JSON request body for the posture evaluation endpoint.
@@ -282,7 +286,8 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 }
 
 // auditAccessDecision writes an access_eval audit log entry using a detached
-// context so the write survives request cancellation.
+// context so the write survives request cancellation. When access is denied,
+// it also fires the EventAccessBlocked notification (A4).
 func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons []string) {
 	if h.db == nil {
 		return
@@ -296,5 +301,20 @@ func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons 
 	}
 	if err := h.writeAuditEntryBestEffort(actorID, "access_eval", "user", userID, details); err != nil {
 		h.logger.Warn("access eval: failed to write audit log", zap.Error(err))
+	}
+
+	// A4: fire EventAccessBlocked notification when posture denies access.
+	if !allow && h.notifier != nil {
+		n := h.notifier
+		go func() {
+			notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = n.Notify(notifyCtx, notify.Event{
+				Type:     notify.EventAccessBlocked,
+				ActorID:  actorID,
+				TargetID: userID,
+				Details:  map[string]any{"app_id": appID, "reasons": reasons},
+			})
+		}()
 	}
 }
