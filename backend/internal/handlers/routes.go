@@ -125,6 +125,10 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Post("/api/v1/teams", h.CreateTeam)
 			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Post("/api/v1/teams/{id}/policies", h.AssignTeamPolicy)
 			r.With(middleware.RequirePermission(middleware.PermManageDevices)).Post("/api/v1/teams/{id}/hosts", h.MoveHostToTeam)
+
+			// A4: Outbound provisioning config + resync — write endpoints.
+			r.With(middleware.RequirePermission(middleware.PermManageApps)).Put("/api/v1/apps/{appId}/provisioning", h.UpsertProvisioningConfig)
+			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/{appId}/provisioning/resync/{userId}", h.ResyncUser)
 		})
 
 		r.With(middleware.RequirePermission(middleware.PermSelfService)).Post("/api/v1/auth/device-check", h.DeviceCheck)
@@ -133,6 +137,9 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/templates", h.ListAppTemplates)
 		// A3: per-app access policy read
 		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/{appId}/policy", h.GetAppAccessPolicy)
+		// A4: Outbound provisioning config + state — read endpoints.
+		r.With(middleware.RequirePermission(middleware.PermManageApps)).Get("/api/v1/apps/{appId}/provisioning", h.GetProvisioningConfig)
+		r.With(middleware.RequirePermission(middleware.PermManageApps)).Get("/api/v1/apps/{appId}/provisioning/state", h.ListProvisioningState)
 		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs", h.ListAuditLogs)
 		r.With(middleware.RequirePermission(middleware.PermExportAuditLogs)).Get("/api/v1/audit-logs/export", h.ExportAuditLogs) // C4
 		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs/verify", h.VerifyAuditChain)  // C1

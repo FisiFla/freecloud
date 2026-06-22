@@ -119,6 +119,11 @@ var migrations = []migration{
 		name:      "mfa_self_service",
 		statement: Migration035,
 	},
+	{
+		id:        36,
+		name:      "provisioning_state_and_config",
+		statement: Migration036,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -518,6 +523,41 @@ CREATE TABLE IF NOT EXISTS mfa_coverage_cache (
     has_mfa    BOOLEAN     NOT NULL DEFAULT FALSE,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+`
+
+// Migration036 creates the provisioning_state and app_provisioning_config tables
+// for Epic A outbound provisioning (A1).
+const Migration036 = `
+CREATE TABLE IF NOT EXISTS provisioning_state (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    app_id          UUID NOT NULL REFERENCES connected_apps(id) ON DELETE CASCADE,
+    user_id         UUID NOT NULL REFERENCES users(keycloak_user_id) ON DELETE CASCADE,
+    remote_id       TEXT,
+    status          TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'provisioned', 'deprovisioned', 'error', 'permanent_error')),
+    last_sync_at    TIMESTAMPTZ,
+    last_error      TEXT,
+    retry_count     INTEGER NOT NULL DEFAULT 0,
+    next_retry_at   TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (app_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS app_provisioning_config (
+    app_id              UUID PRIMARY KEY REFERENCES connected_apps(id) ON DELETE CASCADE,
+    enabled             BOOLEAN NOT NULL DEFAULT false,
+    connector_type      TEXT NOT NULL DEFAULT 'scim',
+    endpoint_url        TEXT,
+    bearer_token_hash   TEXT,
+    bearer_token_enc    TEXT,
+    attribute_map       JSONB NOT NULL DEFAULT '{}',
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_provisioning_state_app_user ON provisioning_state(app_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_provisioning_state_status ON provisioning_state(status);
+CREATE INDEX IF NOT EXISTS idx_provisioning_state_next_retry ON provisioning_state(next_retry_at) WHERE next_retry_at IS NOT NULL;
 `
 
 // RunMigrations applies any pending migrations in order, recording each in
