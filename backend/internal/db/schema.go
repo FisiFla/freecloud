@@ -110,9 +110,9 @@ var migrations = []migration{
 		statement: Migration033,
 	},
 	{
-		id:        39,
+		id:        34,
 		name:      "device_commands",
-		statement: Migration039,
+		statement: Migration034,
 	},
 }
 
@@ -473,10 +473,10 @@ CREATE TABLE IF NOT EXISTS audit_chain_anchors (
 );
 `
 
-// Migration039 adds the device_commands table for E2 (command status/history).
+// Migration034 adds the device_commands table for E2 (command status/history).
 // Records every MDM command issued via the FreeCloud API so admins can audit
 // what was sent to each device and whether Fleet acknowledged it.
-const Migration039 = `
+const Migration034 = `
 CREATE TABLE IF NOT EXISTS device_commands (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     host_id           TEXT NOT NULL,
