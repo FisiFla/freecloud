@@ -109,6 +109,11 @@ var migrations = []migration{
 		name:      "audit_chain_anchors",
 		statement: Migration033,
 	},
+	{
+		id:        34,
+		name:      "device_commands",
+		statement: Migration034,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -466,6 +471,25 @@ CREATE TABLE IF NOT EXISTS audit_chain_anchors (
     pruned_before TIMESTAMPTZ NOT NULL,
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+`
+
+// Migration034 adds the device_commands table for E2 (command status/history).
+// Records every MDM command issued via the FreeCloud API so admins can audit
+// what was sent to each device and whether Fleet acknowledged it.
+const Migration034 = `
+CREATE TABLE IF NOT EXISTS device_commands (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    host_id           TEXT NOT NULL,
+    command_type      TEXT NOT NULL CHECK (command_type IN ('lock','lock_message','restart','clear_passcode','wipe')),
+    status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent','done','failed')),
+    requested_by      TEXT NOT NULL,
+    requested_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    fleet_command_uuid TEXT,
+    result            TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_device_commands_host_id      ON device_commands(host_id);
+CREATE INDEX IF NOT EXISTS idx_device_commands_requested_at ON device_commands(requested_at DESC);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

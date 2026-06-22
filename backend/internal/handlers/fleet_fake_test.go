@@ -16,13 +16,19 @@ type fakeFleet struct {
 	getHostSecurityStateFn  func(ctx context.Context, hostID string) (*fleet.SecurityState, error)
 	issueRemoteLockFn       func(ctx context.Context, hostID string) error
 	issueRemoteWipeFn       func(ctx context.Context, hostID string) error
-	pingFn                  func(ctx context.Context) error
-	listPoliciesFn          func(ctx context.Context) ([]fleet.Policy, error)
+	// E1: expanded MDM command set
+	issueRestartFn         func(ctx context.Context, hostID string) error
+	issueLockWithMessageFn func(ctx context.Context, hostID string, message string) error
+	issueClearPasscodeFn   func(ctx context.Context, hostID string) error
+	pingFn                 func(ctx context.Context) error
+	listPoliciesFn         func(ctx context.Context) ([]fleet.Policy, error)
 	// B2: team-scoped policy
 	listTeamsFn          func(ctx context.Context) ([]fleet.Team, error)
 	createTeamFn         func(ctx context.Context, name, description string) (*fleet.Team, error)
 	assignPolicyToTeamFn func(ctx context.Context, teamID int, policyID string) error
 	moveHostToTeamFn     func(ctx context.Context, teamID int, hostIDs []string) error
+	// E3: OS posture
+	getHostOSPostureFn func(ctx context.Context, hostID string) (*fleet.OSPosture, error)
 }
 
 func (f *fakeFleet) CreateEnrollmentToken(ctx context.Context) (string, error) {
@@ -85,4 +91,24 @@ func (f *fakeFleet) AssignPolicyToTeam(ctx context.Context, teamID int, policyID
 func (f *fakeFleet) MoveHostToTeam(ctx context.Context, teamID int, hostIDs []string) error {
 	if f.moveHostToTeamFn != nil { return f.moveHostToTeamFn(ctx, teamID, hostIDs) }
 	return nil
+}
+
+func (f *fakeFleet) IssueRestart(ctx context.Context, hostID string) error {
+	if f.issueRestartFn != nil { return f.issueRestartFn(ctx, hostID) }
+	return nil
+}
+
+func (f *fakeFleet) IssueLockWithMessage(ctx context.Context, hostID string, message string) error {
+	if f.issueLockWithMessageFn != nil { return f.issueLockWithMessageFn(ctx, hostID, message) }
+	return nil
+}
+
+func (f *fakeFleet) IssueClearPasscode(ctx context.Context, hostID string) error {
+	if f.issueClearPasscodeFn != nil { return f.issueClearPasscodeFn(ctx, hostID) }
+	return nil
+}
+
+func (f *fakeFleet) GetHostOSPosture(ctx context.Context, hostID string) (*fleet.OSPosture, error) {
+	if f.getHostOSPostureFn != nil { return f.getHostOSPostureFn(ctx, hostID) }
+	return &fleet.OSPosture{OsVersion: "macOS 15", NeedsUpdate: false}, nil
 }
