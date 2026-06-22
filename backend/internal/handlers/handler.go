@@ -12,6 +12,7 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/notify"
+	"github.com/FisiFla/freecloud/backend/internal/provisioning"
 	"github.com/FisiFla/freecloud/backend/internal/reconcile"
 	"github.com/FisiFla/freecloud/backend/internal/snapshot"
 )
@@ -54,6 +55,10 @@ type Handler struct {
 
 	// snapshotter serves the analytics series endpoint (D2). Nil means disabled.
 	snapshotter *snapshot.Snapshotter
+
+	// provisionEngine drives outbound SCIM/Slack/GitHub provisioning (A1).
+	// Nil when no provisioning-enabled apps are configured.
+	provisionEngine *provisioning.Engine
 }
 
 // SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment
@@ -104,6 +109,11 @@ func (h *Handler) SetNotifier(n notify.Notifier) {
 // SetSnapshotter wires the analytics snapshotter (D2 / FCEX2-18).
 func (h *Handler) SetSnapshotter(s *snapshot.Snapshotter) {
 	h.snapshotter = s
+}
+
+// SetProvisionEngine wires the outbound provisioning engine (A1 / v1.4).
+func (h *Handler) SetProvisionEngine(e *provisioning.Engine) {
+	h.provisionEngine = e
 }
 
 // Health returns a simple health check response.
