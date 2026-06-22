@@ -79,6 +79,10 @@ type Config struct {
 	// AuditRetainFor is the retention window. 0 = keep forever.
 	AuditPruneInterval time.Duration
 	AuditRetainFor     time.Duration
+
+	// C1 (LDAP/AD federation) — bind password for LDAP user-storage providers.
+	// Resolved via env/file/vault (LDAP_BIND_PASSWORD / LDAP_BIND_PASSWORD_FILE).
+	LDAPBindPassword string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -130,6 +134,9 @@ func Load() *Config {
 		// C1 — Audit retention
 		AuditPruneInterval: parseDuration(getEnv("AUDIT_PRUNE_INTERVAL", "0")),
 		AuditRetainFor:     parseDuration(getEnv("AUDIT_RETAIN_FOR", "0")),
+
+		// C1 (LDAP/AD federation)
+		LDAPBindPassword: resolveSecret("LDAP_BIND_PASSWORD", ""),
 	}
 }
 

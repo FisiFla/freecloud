@@ -125,6 +125,9 @@ export interface User {
   createdAt?: string;
   updatedAt?: string;
   devices?: Device[];
+  // C2: federation awareness
+  isFederated?: boolean;
+  federationLink?: string;
 }
 
 export interface HealthStatus {
@@ -874,5 +877,73 @@ export async function resyncUser(appId: string, userId: string): Promise<{ queue
   return request<{ queued: boolean }>(
     "POST",
     `/api/v1/apps/${appId}/provisioning/resync/${userId}`,
+  );
+}
+
+// C1: LDAP/AD federation sources
+export interface FederationSource {
+  id: string;
+  name: string;
+  providerType: string;
+  vendor: string;
+  config: Record<string, unknown>;
+  keycloakComponentId?: string;
+  lastSyncAt?: string;
+  lastSyncStatus?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CreateFederationSourceRequest {
+  name: string;
+  vendor: string;
+  connectionUrl: string;
+  bindDn: string;
+  usersDn: string;
+}
+
+export interface UpdateFederationSourceRequest {
+  name?: string;
+  vendor?: string;
+  connectionUrl?: string;
+  bindDn?: string;
+  usersDn?: string;
+}
+
+export async function listFederationSources(): Promise<FederationSource[]> {
+  return request<FederationSource[]>("GET", "/api/v1/federation/sources");
+}
+
+export async function createFederationSource(
+  req: CreateFederationSourceRequest,
+): Promise<FederationSource> {
+  return request<FederationSource>("POST", "/api/v1/federation/sources", req);
+}
+
+export async function updateFederationSource(
+  id: string,
+  req: UpdateFederationSourceRequest,
+): Promise<FederationSource> {
+  return request<FederationSource>("PATCH", `/api/v1/federation/sources/${id}`, req);
+}
+
+export async function deleteFederationSource(id: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>("DELETE", `/api/v1/federation/sources/${id}`);
+}
+
+export async function testFederationConnection(id: string): Promise<{ success: boolean; error?: string }> {
+  return request<{ success: boolean; error?: string }>(
+    "POST",
+    `/api/v1/federation/sources/${id}/test`,
+  );
+}
+
+export async function triggerFederationSync(
+  id: string,
+  action: "triggerFullSync" | "triggerChangedUsersSync" = "triggerFullSync",
+): Promise<{ synced: boolean; status?: string }> {
+  return request<{ synced: boolean; status?: string }>(
+    "POST",
+    `/api/v1/federation/sources/${id}/sync?action=${action}`,
   );
 }

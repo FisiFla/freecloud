@@ -1,8 +1,12 @@
 package keycloak
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +79,15 @@ type KeycloakClientInterface interface {
 	RenameGroup(ctx context.Context, groupID, newName string) error
 	// DeleteGroup removes a group from the realm.
 	DeleteGroup(ctx context.Context, groupID string) error
+
+	// C1 (LDAP/AD federation)
+	CreateFederationComponent(ctx context.Context, name, connectionURL, bindDN, bindPassword, usersDN, vendor string) (string, error)
+	GetFederationComponents(ctx context.Context) ([]*gocloak.Component, error)
+	UpdateFederationComponent(ctx context.Context, componentID, name, connectionURL, bindDN, bindPassword, usersDN, vendor string) error
+	DeleteFederationComponent(ctx context.Context, componentID string) error
+	TestLDAPConnection(ctx context.Context, componentID, connectionURL, bindDN, bindPassword string) error
+	TriggerFederationSync(ctx context.Context, componentID, action string) error
+	GetUserByID(ctx context.Context, userID string) (*gocloak.User, error)
 }
 
 // CreateUserResult holds the outcome of a CreateUser operation.
@@ -95,6 +108,7 @@ type KeycloakClient struct {
 	clientID     string
 	clientSecret string
 	realm        string
+	baseURL      string
 
 	// Cached client-credentials admin token. Keycloak admin tokens are short
 	// lived (default 60s), and previously every operation fetched a fresh one —
@@ -111,6 +125,7 @@ func NewClient(url, clientID, clientSecret, realm string) *KeycloakClient {
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		realm:        realm,
+		baseURL:      strings.TrimRight(url, "/"),
 	}
 }
 
@@ -1019,4 +1034,170 @@ func (k *KeycloakClient) DeleteGroup(ctx context.Context, groupID string) error 
 	}
 	zap.L().Info("deleted group", zap.String("group_id", groupID))
 	return nil
+}
+
+// CreateFederationComponent creates an LDAP/AD user-storage provider component in Keycloak.
+func (k *KeycloakClient) CreateFederationComponent(ctx context.Context, name, connectionURL, bindDN, bindPassword, usersDN, vendor string) (string, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return "", err
+	}
+	providerType := "org.keycloak.storage.UserStorageProvider"
+	providerID := "ldap"
+	config := map[string][]string{
+		"connectionUrl":         {connectionURL},
+		"bindDn":                {bindDN},
+		"bindCredential":        {bindPassword},
+		"usersDn":               {usersDN},
+		"vendor":                {vendor},
+		"usernameLDAPAttribute": {"uid"},
+		"uuidLDAPAttribute":     {"entryUUID"},
+		"userObjectClasses":     {"inetOrgPerson, organizationalPerson"},
+		"editMode":              {"READ_ONLY"},
+		"syncRegistrations":     {"false"},
+		"importEnabled":         {"true"},
+	}
+	comp := gocloak.Component{
+		Name:            &name,
+		ProviderID:      &providerID,
+		ProviderType:    &providerType,
+		ComponentConfig: &config,
+	}
+	id, err := k.client.CreateComponent(ctx, token, k.realm, comp)
+	if err != nil {
+		return "", fmt.Errorf("create ldap component: %w", err)
+	}
+	return id, nil
+}
+
+// GetFederationComponents returns all LDAP/AD user-storage provider components.
+func (k *KeycloakClient) GetFederationComponents(ctx context.Context) ([]*gocloak.Component, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	providerType := "org.keycloak.storage.UserStorageProvider"
+	comps, err := k.client.GetComponentsWithParams(ctx, token, k.realm, gocloak.GetComponentsParams{ProviderType: &providerType})
+	if err != nil {
+		return nil, fmt.Errorf("get federation components: %w", err)
+	}
+	return comps, nil
+}
+
+// UpdateFederationComponent updates an existing LDAP/AD user-storage component.
+func (k *KeycloakClient) UpdateFederationComponent(ctx context.Context, componentID, name, connectionURL, bindDN, bindPassword, usersDN, vendor string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	providerType := "org.keycloak.storage.UserStorageProvider"
+	providerID := "ldap"
+	config := map[string][]string{
+		"connectionUrl":         {connectionURL},
+		"bindDn":                {bindDN},
+		"bindCredential":        {bindPassword},
+		"usersDn":               {usersDN},
+		"vendor":                {vendor},
+		"usernameLDAPAttribute": {"uid"},
+		"uuidLDAPAttribute":     {"entryUUID"},
+		"userObjectClasses":     {"inetOrgPerson, organizationalPerson"},
+		"editMode":              {"READ_ONLY"},
+		"syncRegistrations":     {"false"},
+		"importEnabled":         {"true"},
+	}
+	comp := gocloak.Component{
+		ID:              &componentID,
+		Name:            &name,
+		ProviderID:      &providerID,
+		ProviderType:    &providerType,
+		ComponentConfig: &config,
+	}
+	if err := k.client.UpdateComponent(ctx, token, k.realm, comp); err != nil {
+		return fmt.Errorf("update ldap component %s: %w", componentID, err)
+	}
+	return nil
+}
+
+// DeleteFederationComponent removes an LDAP/AD user-storage component from Keycloak.
+func (k *KeycloakClient) DeleteFederationComponent(ctx context.Context, componentID string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.DeleteComponent(ctx, token, k.realm, componentID); err != nil {
+		return fmt.Errorf("delete ldap component %s: %w", componentID, err)
+	}
+	return nil
+}
+
+// TestLDAPConnection tests connectivity to an LDAP server via Keycloak's test endpoint.
+func (k *KeycloakClient) TestLDAPConnection(ctx context.Context, componentID, connectionURL, bindDN, bindPassword string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	bodyMap := map[string]string{
+		"action":         "testConnection",
+		"connectionUrl":  connectionURL,
+		"bindDn":         bindDN,
+		"bindCredential": bindPassword,
+		"componentId":    componentID,
+	}
+	bodyBytes, _ := json.Marshal(bodyMap)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s/admin/realms/%s/testLDAPConnection", k.baseURL, k.realm),
+		bytes.NewReader(bodyBytes))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("test ldap connection: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("test ldap connection: status %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+// TriggerFederationSync triggers a full or incremental sync for an LDAP/AD source.
+func (k *KeycloakClient) TriggerFederationSync(ctx context.Context, componentID, action string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	syncURL := fmt.Sprintf("%s/admin/realms/%s/user-storage/%s/sync?action=%s",
+		k.baseURL, k.realm, componentID, action)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, syncURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("trigger federation sync: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("trigger federation sync: status %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+// GetUserByID returns a single Keycloak user by their ID.
+func (k *KeycloakClient) GetUserByID(ctx context.Context, userID string) (*gocloak.User, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	user, err := k.client.GetUserByID(ctx, token, k.realm, userID)
+	if err != nil {
+		return nil, fmt.Errorf("get user %s: %w", userID, err)
+	}
+	return user, nil
 }

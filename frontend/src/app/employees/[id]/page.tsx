@@ -16,6 +16,8 @@ interface EmployeeDetail {
   department: string;
   role: string;
   disabled: boolean;
+  // C2: federation awareness
+  isFederated: boolean;
 }
 
 export default function EmployeeDetailPage() {
@@ -98,6 +100,7 @@ export default function EmployeeDetailPage() {
           department: String(userData.department || ""),
           role: String(userData.role || ""),
           disabled: Boolean(userData.disabled),
+          isFederated: Boolean(userData.isFederated),
         });
         setDevices(Array.isArray(userData.devices) ? userData.devices : []);
 
@@ -154,6 +157,7 @@ export default function EmployeeDetailPage() {
         department: String(updated.department || ""),
         role: String(updated.role || ""),
         disabled: Boolean(updated.disabled),
+        isFederated: Boolean(updated.isFederated),
       });
       setSaveSuccess(true);
       setTimeout(() => { setShowEdit(false); setSaveSuccess(false); }, 1200);
@@ -476,10 +480,17 @@ export default function EmployeeDetailPage() {
                   >
                     {employee.disabled || employee.role.includes("(DISABLED)") ? "Disabled" : "Active"}
                   </span>
-                  {/* A5 — password reset */}
+                  {/* C2: LDAP/AD federated badge */}
+                  {employee.isFederated && (
+                    <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                      LDAP
+                    </span>
+                  )}
+                  {/* A5 — password reset (disabled for federated users) */}
                   <button
                     onClick={handlePasswordReset}
-                    disabled={resetSending || employee.disabled}
+                    disabled={resetSending || employee.disabled || employee.isFederated}
+                    title={employee.isFederated ? "Password is managed by the directory" : undefined}
                     className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <KeyRound className="h-3.5 w-3.5" />
@@ -510,23 +521,37 @@ export default function EmployeeDetailPage() {
                   )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs font-medium text-slate-700">First Name</label>
+                      <label className="block text-xs font-medium text-slate-700">
+                        First Name
+                        {employee?.isFederated && (
+                          <span className="ml-1 text-xs text-blue-500">(managed by directory)</span>
+                        )}
+                      </label>
                       <input
                         type="text"
                         value={editFirst}
                         onChange={(e) => setEditFirst(e.target.value)}
                         required
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                        disabled={employee?.isFederated}
+                        title={employee?.isFederated ? "Managed by the connected directory" : undefined}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-700">Last Name</label>
+                      <label className="block text-xs font-medium text-slate-700">
+                        Last Name
+                        {employee?.isFederated && (
+                          <span className="ml-1 text-xs text-blue-500">(managed by directory)</span>
+                        )}
+                      </label>
                       <input
                         type="text"
                         value={editLast}
                         onChange={(e) => setEditLast(e.target.value)}
                         required
-                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                        disabled={employee?.isFederated}
+                        title={employee?.isFederated ? "Managed by the connected directory" : undefined}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 disabled:bg-slate-50 disabled:text-slate-400 disabled:cursor-not-allowed"
                       />
                     </div>
                   </div>

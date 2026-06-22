@@ -167,6 +167,7 @@ func main() {
 		handler.SetNotifier(eventNotifier)
 	}
 	handler.SetSnapshotter(snap)
+	handler.SetLDAPBindPassword(cfg.LDAPBindPassword)
 
 	// Initialize JWT auth middleware, wrapping it with API token support (C2).
 	baseAuth := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)

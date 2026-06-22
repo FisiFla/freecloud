@@ -88,6 +88,16 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// C2: block name/enabled mutations on federated users (managed by the directory).
+	if req.FirstName != nil || req.LastName != nil {
+		if h.keycloak != nil {
+			if kcUser, kcErr := h.keycloak.GetUserByID(ctx, userID); kcErr == nil && kcUser != nil && kcUser.FederationLink != nil && *kcUser.FederationLink != "" {
+				respondError(w, http.StatusConflict, "cannot change name of a federated user; update the record in your directory instead")
+				return
+			}
+		}
+	}
+
 	// Load current values from DB to merge
 	var (
 		curFirstName, curLastName, curDepartment, curRole string
@@ -195,6 +205,14 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 			}
 			h.logger.Error("failed to look up user for password reset", zap.Error(err))
 			respondError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+	}
+
+	// C2: block password reset for federated users (password managed by the directory).
+	if h.keycloak != nil {
+		if kcUser, kcErr := h.keycloak.GetUserByID(ctx, userID); kcErr == nil && kcUser != nil && kcUser.FederationLink != nil && *kcUser.FederationLink != "" {
+			respondError(w, http.StatusConflict, "cannot reset password of a federated user; reset the password in your directory instead")
 			return
 		}
 	}
