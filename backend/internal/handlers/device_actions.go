@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -50,6 +52,7 @@ func (h *Handler) RemoteLock(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			h.logger.Warn("failed to write audit log for remote lock", zap.Error(err))
 		}
+		persistDeviceCommand(r.Context(), h, deviceID, "lock", actorID)
 	}
 
 	respondJSON(w, http.StatusOK, RemoteLockResponse{
@@ -168,15 +171,17 @@ type DeviceHostPosture struct {
 	Vulnerabilities []string `json:"vulnerabilities"`
 	UnknownVulns    bool     `json:"unknownVulns"`
 	Compliant       bool     `json:"compliant"`
+	NeedsUpdate     bool     `json:"needsUpdate"`
 }
 
 // ComplianceSummary aggregates compliance metrics.
 type ComplianceSummary struct {
-	TotalDevices     int `json:"totalDevices"`
-	CompliantDevices int `json:"compliantDevices"`
-	EncryptedDevices int `json:"encryptedDevices"`
-	FirewallEnabled  int `json:"firewallEnabled"`
-	DevicesWithVulns int `json:"devicesWithVulns"`
+	TotalDevices       int `json:"totalDevices"`
+	CompliantDevices   int `json:"compliantDevices"`
+	EncryptedDevices   int `json:"encryptedDevices"`
+	FirewallEnabled    int `json:"firewallEnabled"`
+	DevicesWithVulns   int `json:"devicesWithVulns"`
+	NeedsUpdateDevices int `json:"needsUpdateDevices"`
 }
 
 // ComplianceResponse is returned by the compliance endpoints.
@@ -236,6 +241,8 @@ func (h *Handler) GetUserCompliance(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetOrgCompliance returns compliance posture across all org devices.
+// Optional query param ?needs_update=true filters the device list to only
+// those with pending OS updates (summary always reflects the full fleet).
 // Route: GET /api/v1/compliance (requires PermReadCompliance).
 func (h *Handler) GetOrgCompliance(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -264,6 +271,17 @@ func (h *Handler) GetOrgCompliance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	postures, summary := h.buildCompliancePostures(ctx, deviceList)
+
+	// E3: optional filter — only return devices that need an OS update.
+	if r.URL.Query().Get("needs_update") == "true" {
+		filtered := postures[:0]
+		for _, p := range postures {
+			if p.NeedsUpdate {
+				filtered = append(filtered, p)
+			}
+		}
+		postures = filtered
+	}
 
 	respondJSON(w, http.StatusOK, ComplianceResponse{
 		Summary: summary,
@@ -327,16 +345,32 @@ func (h *Handler) buildCompliancePostures(ctx context.Context, deviceList []comp
 		mdmEnrolled := true
 		compliant := state.DiskEncrypted && state.FirewallEnabled && len(vulns) == 0 && !state.UnknownVulns
 
+		// E3: fetch OS posture best-effort; don't fail on error.
+		osVersion := dr.osVersion
+		needsUpdate := false
+		if osPosture, posErr := h.fleet.GetHostOSPosture(ctx, dr.id); posErr == nil {
+			needsUpdate = osPosture.NeedsUpdate
+			if osVersion == "" && osPosture.OsVersion != "" {
+				osVersion = osPosture.OsVersion
+			}
+		} else {
+			h.logger.Warn("failed to get OS posture",
+				zap.String("device_id", dr.id),
+				zap.Error(posErr),
+			)
+		}
+
 		postures = append(postures, DeviceHostPosture{
 			DeviceID:        dr.id,
 			Hostname:        dr.hostname,
-			OsVersion:       dr.osVersion,
+			OsVersion:       osVersion,
 			DiskEncrypted:   state.DiskEncrypted,
 			FirewallEnabled: state.FirewallEnabled,
 			MDMEnrolled:     mdmEnrolled,
 			Vulnerabilities: vulns,
 			UnknownVulns:    state.UnknownVulns,
 			Compliant:       compliant,
+			NeedsUpdate:     needsUpdate,
 		})
 
 		if compliant {
@@ -351,7 +385,225 @@ func (h *Handler) buildCompliancePostures(ctx context.Context, deviceList []comp
 		if len(vulns) > 0 {
 			summary.DevicesWithVulns++
 		}
+		if needsUpdate {
+			summary.NeedsUpdateDevices++
+		}
 	}
 
 	return postures, summary
+}
+
+// ----- E1: Expanded MDM command set -----
+
+// RemoteRestartResponse is returned by POST /api/v1/devices/{id}/restart.
+type RemoteRestartResponse struct {
+	DeviceID  string `json:"deviceId"`
+	Restarted bool   `json:"restarted"`
+}
+
+// RemoteLockWithMessageResponse is returned by POST /api/v1/devices/{id}/lock-message.
+type RemoteLockWithMessageResponse struct {
+	DeviceID string `json:"deviceId"`
+	Locked   bool   `json:"locked"`
+	Message  string `json:"message"`
+}
+
+// RemoteClearPasscodeResponse is returned by POST /api/v1/devices/{id}/clear-passcode.
+type RemoteClearPasscodeResponse struct {
+	DeviceID string `json:"deviceId"`
+	Cleared  bool   `json:"cleared"`
+}
+
+// RemoteRestart issues a remote restart command to the given Fleet host.
+// Route: POST /api/v1/devices/{id}/restart (requires PermManageDevices).
+func (h *Handler) RemoteRestart(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	if deviceID == "" {
+		respondError(w, http.StatusBadRequest, "device id is required")
+		return
+	}
+
+	actorID := middleware.GetActorID(r.Context())
+	ctx := r.Context()
+
+	if err := h.fleet.IssueRestart(ctx, deviceID); err != nil {
+		h.logger.Error("remote restart failed", zap.String("device_id", deviceID), zap.Error(err))
+		respondError(w, http.StatusBadGateway, "remote restart command failed")
+		return
+	}
+
+	if h.db != nil {
+		if err := h.writeAuditEntryBestEffort(actorID, "device_restart", "device", deviceID, map[string]interface{}{
+			"device_id": deviceID,
+		}); err != nil {
+			h.logger.Warn("failed to write audit log for remote restart", zap.Error(err))
+		}
+		persistDeviceCommand(ctx, h, deviceID, "restart", actorID)
+	}
+
+	respondJSON(w, http.StatusOK, RemoteRestartResponse{DeviceID: deviceID, Restarted: true})
+}
+
+// RemoteLockWithMessage issues a remote lock command with a custom message.
+// Route: POST /api/v1/devices/{id}/lock-message (requires PermManageDevices).
+func (h *Handler) RemoteLockWithMessage(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	if deviceID == "" {
+		respondError(w, http.StatusBadRequest, "device id is required")
+		return
+	}
+
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	actorID := middleware.GetActorID(r.Context())
+	ctx := r.Context()
+
+	if err := h.fleet.IssueLockWithMessage(ctx, deviceID, body.Message); err != nil {
+		h.logger.Error("remote lock-with-message failed", zap.String("device_id", deviceID), zap.Error(err))
+		respondError(w, http.StatusBadGateway, "remote lock command failed")
+		return
+	}
+
+	if h.db != nil {
+		if err := h.writeAuditEntryBestEffort(actorID, "device_lock_message", "device", deviceID, map[string]interface{}{
+			"device_id": deviceID,
+			"message":   body.Message,
+		}); err != nil {
+			h.logger.Warn("failed to write audit log for remote lock-with-message", zap.Error(err))
+		}
+		persistDeviceCommand(ctx, h, deviceID, "lock_message", actorID)
+	}
+
+	respondJSON(w, http.StatusOK, RemoteLockWithMessageResponse{
+		DeviceID: deviceID,
+		Locked:   true,
+		Message:  body.Message,
+	})
+}
+
+// RemoteClearPasscode issues a clear-passcode command to the given Fleet host.
+// Route: POST /api/v1/devices/{id}/clear-passcode (requires PermManageDevices).
+func (h *Handler) RemoteClearPasscode(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	if deviceID == "" {
+		respondError(w, http.StatusBadRequest, "device id is required")
+		return
+	}
+
+	actorID := middleware.GetActorID(r.Context())
+	ctx := r.Context()
+
+	if err := h.fleet.IssueClearPasscode(ctx, deviceID); err != nil {
+		h.logger.Error("remote clear-passcode failed", zap.String("device_id", deviceID), zap.Error(err))
+		respondError(w, http.StatusBadGateway, "clear passcode command failed")
+		return
+	}
+
+	if h.db != nil {
+		if err := h.writeAuditEntryBestEffort(actorID, "device_clear_passcode", "device", deviceID, map[string]interface{}{
+			"device_id": deviceID,
+		}); err != nil {
+			h.logger.Warn("failed to write audit log for remote clear-passcode", zap.Error(err))
+		}
+		persistDeviceCommand(ctx, h, deviceID, "clear_passcode", actorID)
+	}
+
+	respondJSON(w, http.StatusOK, RemoteClearPasscodeResponse{DeviceID: deviceID, Cleared: true})
+}
+
+// ----- E2: Device command history -----
+
+// DeviceCommand represents a persisted MDM command record.
+type DeviceCommand struct {
+	ID               string `json:"id"`
+	HostID           string `json:"hostId"`
+	CommandType      string `json:"commandType"`
+	Status           string `json:"status"`
+	RequestedBy      string `json:"requestedBy"`
+	RequestedAt      string `json:"requestedAt"`
+	UpdatedAt        string `json:"updatedAt"`
+	FleetCommandUUID string `json:"fleetCommandUuid,omitempty"`
+	Result           string `json:"result,omitempty"`
+}
+
+// persistDeviceCommand inserts a device_commands row best-effort (logs on failure,
+// never blocks the response).
+func persistDeviceCommand(ctx context.Context, h *Handler, hostID, commandType, requestedBy string) {
+	if h.db == nil {
+		return
+	}
+	_, err := h.db.Exec(ctx,
+		`INSERT INTO device_commands (host_id, command_type, status, requested_by)
+		 VALUES ($1, $2, 'sent', $3)`,
+		hostID, commandType, requestedBy,
+	)
+	if err != nil {
+		h.logger.Warn("failed to persist device command",
+			zap.String("host_id", hostID),
+			zap.String("command_type", commandType),
+			zap.Error(err),
+		)
+	}
+}
+
+// GetDeviceCommandHistory returns the last 50 commands issued to a device.
+// Route: GET /api/v1/devices/{id}/commands (requires PermReadCompliance).
+func (h *Handler) GetDeviceCommandHistory(w http.ResponseWriter, r *http.Request) {
+	deviceID := chi.URLParam(r, "id")
+	if deviceID == "" {
+		respondError(w, http.StatusBadRequest, "device id is required")
+		return
+	}
+
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	rows, err := h.db.Query(r.Context(),
+		`SELECT id, host_id, command_type, status, requested_by,
+		        requested_at, updated_at,
+		        COALESCE(fleet_command_uuid, ''), COALESCE(result, '')
+		 FROM device_commands
+		 WHERE host_id = $1
+		 ORDER BY requested_at DESC
+		 LIMIT 50`,
+		deviceID,
+	)
+	if err != nil {
+		h.logger.Error("failed to query device commands", zap.String("device_id", deviceID), zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	defer rows.Close()
+
+	commands := make([]DeviceCommand, 0)
+	for rows.Next() {
+		var cmd DeviceCommand
+		var requestedAt, updatedAt time.Time
+		if err := rows.Scan(
+			&cmd.ID, &cmd.HostID, &cmd.CommandType, &cmd.Status, &cmd.RequestedBy,
+			&requestedAt, &updatedAt,
+			&cmd.FleetCommandUUID, &cmd.Result,
+		); err != nil {
+			h.logger.Warn("failed to scan device command row", zap.Error(err))
+			continue
+		}
+		cmd.RequestedAt = requestedAt.UTC().Format(time.RFC3339)
+		cmd.UpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+		commands = append(commands, cmd)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("error iterating device command rows", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]interface{}{"commands": commands})
 }

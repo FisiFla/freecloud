@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -411,3 +412,278 @@ func TestListPolicies_FleetError(t *testing.T) {
 // B2: The host-scoped AssignDevicePolicy was replaced by the team-scoped
 // AssignTeamPolicy / MoveHostToTeam flow. Coverage for those handlers lives in
 // fleet_teams_test.go. These placeholder tests document the removal.
+
+// ----- E1: RemoteRestart -----
+
+func TestRemoteRestart_HappyPath(t *testing.T) {
+	restartCalled := false
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+		issueRestartFn: func(_ context.Context, hostID string) error {
+			restartCalled = true
+			if hostID != "host-001" {
+				t.Errorf("unexpected host ID: %s", hostID)
+			}
+			return nil
+		},
+	}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/restart", nil)
+	req = chiCtxWithID(req, "id", "host-001")
+	req = withAdminClaims(req)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
+	rec := httptest.NewRecorder()
+
+	h.RemoteRestart(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !restartCalled {
+		t.Error("expected IssueRestart to be called")
+	}
+	var resp APIResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Success {
+		t.Error("expected success=true")
+	}
+}
+
+func TestRemoteRestart_MissingDeviceID(t *testing.T) {
+	h := setupTestHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices//restart", nil)
+	req = chiCtxWithID(req, "id", "")
+	req = withAdminClaims(req)
+	rec := httptest.NewRecorder()
+	h.RemoteRestart(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestRemoteRestart_FleetError(t *testing.T) {
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+		issueRestartFn: func(_ context.Context, hostID string) error {
+			return errors.New("fleet unreachable")
+		},
+	}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/restart", nil)
+	req = chiCtxWithID(req, "id", "host-001")
+	req = withAdminClaims(req)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
+	rec := httptest.NewRecorder()
+
+	h.RemoteRestart(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d", rec.Code)
+	}
+}
+
+// ----- E1: RemoteLockWithMessage -----
+
+func TestRemoteLockWithMessage_HappyPath(t *testing.T) {
+	var gotMessage string
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+		issueLockWithMessageFn: func(_ context.Context, hostID string, message string) error {
+			gotMessage = message
+			return nil
+		},
+	}, zap.NewNop())
+
+	body := `{"message":"Please return this device"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/lock-message",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = chiCtxWithID(req, "id", "host-001")
+	req = withAdminClaims(req)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
+	rec := httptest.NewRecorder()
+
+	h.RemoteLockWithMessage(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gotMessage != "Please return this device" {
+		t.Errorf("unexpected message: %q", gotMessage)
+	}
+}
+
+func TestRemoteLockWithMessage_MissingDeviceID(t *testing.T) {
+	h := setupTestHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices//lock-message",
+		strings.NewReader(`{"message":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = chiCtxWithID(req, "id", "")
+	rec := httptest.NewRecorder()
+	h.RemoteLockWithMessage(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestRemoteLockWithMessage_FleetError(t *testing.T) {
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+		issueLockWithMessageFn: func(_ context.Context, _ string, _ string) error {
+			return errors.New("fleet down")
+		},
+	}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/lock-message",
+		strings.NewReader(`{"message":"test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = chiCtxWithID(req, "id", "host-001")
+	req = withAdminClaims(req)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
+	rec := httptest.NewRecorder()
+
+	h.RemoteLockWithMessage(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d", rec.Code)
+	}
+}
+
+// ----- E1: RemoteClearPasscode -----
+
+func TestRemoteClearPasscode_HappyPath(t *testing.T) {
+	clearCalled := false
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+		issueClearPasscodeFn: func(_ context.Context, hostID string) error {
+			clearCalled = true
+			return nil
+		},
+	}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/clear-passcode", nil)
+	req = chiCtxWithID(req, "id", "host-001")
+	req = withAdminClaims(req)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
+	rec := httptest.NewRecorder()
+
+	h.RemoteClearPasscode(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !clearCalled {
+		t.Error("expected IssueClearPasscode to be called")
+	}
+}
+
+func TestRemoteClearPasscode_MissingDeviceID(t *testing.T) {
+	h := setupTestHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices//clear-passcode", nil)
+	req = chiCtxWithID(req, "id", "")
+	rec := httptest.NewRecorder()
+	h.RemoteClearPasscode(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestRemoteClearPasscode_FleetError(t *testing.T) {
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+		issueClearPasscodeFn: func(_ context.Context, hostID string) error {
+			return errors.New("fleet down")
+		},
+	}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/clear-passcode", nil)
+	req = chiCtxWithID(req, "id", "host-001")
+	req = withAdminClaims(req)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
+	rec := httptest.NewRecorder()
+
+	h.RemoteClearPasscode(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("expected 502, got %d", rec.Code)
+	}
+}
+
+// ----- E2: GetDeviceCommandHistory -----
+
+func TestGetDeviceCommandHistory_NilDB(t *testing.T) {
+	h := setupTestHandler(t) // nil DB
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/host-001/commands", nil)
+	req = chiCtxWithID(req, "id", "host-001")
+	rec := httptest.NewRecorder()
+
+	h.GetDeviceCommandHistory(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 (nil DB), got %d", rec.Code)
+	}
+}
+
+func TestGetDeviceCommandHistory_HappyPath(t *testing.T) {
+	fakeRows := &fakeQueryRows{
+		rows: [][]interface{}{
+			// id, host_id, command_type, status, requested_by, requested_at, updated_at, fleet_command_uuid, result
+			{"uuid-001", "host-001", "lock", "sent", "admin",
+				"2024-01-01T10:00:00Z", "2024-01-01T10:00:01Z", "", ""},
+			{"uuid-002", "host-001", "restart", "sent", "admin",
+				"2024-01-02T10:00:00Z", "2024-01-02T10:00:01Z", "", ""},
+		},
+	}
+	db := &fakeDB{
+		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+			return fakeRows, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/host-001/commands", nil)
+	req = chiCtxWithID(req, "id", "host-001")
+	rec := httptest.NewRecorder()
+
+	h.GetDeviceCommandHistory(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	var resp APIResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.Success {
+		t.Errorf("expected success=true")
+	}
+}
+
+// ----- E3: NeedsUpdate in buildCompliancePostures -----
+
+func TestBuildCompliancePostures_NeedsUpdate(t *testing.T) {
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+		getHostSecurityStateFn: func(_ context.Context, hostID string) (*fleet.SecurityState, error) {
+			return &fleet.SecurityState{
+				FirewallEnabled: true,
+				DiskEncrypted:   true,
+				Vulnerabilities: nil,
+				UnknownVulns:    false,
+			}, nil
+		},
+		getHostOSPostureFn: func(_ context.Context, hostID string) (*fleet.OSPosture, error) {
+			return &fleet.OSPosture{OsVersion: "macOS 14", NeedsUpdate: true}, nil
+		},
+	}, zap.NewNop())
+
+	devices := []complianceDevice{{id: "host-001", hostname: "laptop", osVersion: "macOS 14"}}
+	postures, summary := h.buildCompliancePostures(context.Background(), devices)
+
+	if len(postures) != 1 {
+		t.Fatalf("expected 1 posture, got %d", len(postures))
+	}
+	if !postures[0].NeedsUpdate {
+		t.Error("expected NeedsUpdate=true")
+	}
+	if summary.NeedsUpdateDevices != 1 {
+		t.Errorf("expected NeedsUpdateDevices=1, got %d", summary.NeedsUpdateDevices)
+	}
+}
