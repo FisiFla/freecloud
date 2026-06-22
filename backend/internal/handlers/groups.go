@@ -6,6 +6,7 @@ package handlers
 // All writes are audited via a detached context.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -134,6 +135,13 @@ func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A3: Sync group membership to provisioning-enabled apps (best-effort).
+	if h.provisionEngine != nil {
+		capturedUserID := userID
+		capturedCtx := ctx
+		go h.triggerGroupSyncForUser(capturedCtx, capturedUserID)
+	}
+
 	respondJSON(w, http.StatusOK, map[string]bool{"assigned": true})
 }
 
@@ -166,7 +174,56 @@ func (h *Handler) UnassignUserFromGroup(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	// A3: Sync group membership to provisioning-enabled apps (best-effort).
+	if h.provisionEngine != nil {
+		capturedUserID := userID
+		capturedCtx := ctx
+		go h.triggerGroupSyncForUser(capturedCtx, capturedUserID)
+	}
+
 	respondJSON(w, http.StatusOK, map[string]bool{"unassigned": true})
+}
+
+// triggerGroupSyncForUser fetches the user's current Keycloak groups and pushes
+// membership to all provisioning-enabled apps for that user.
+func (h *Handler) triggerGroupSyncForUser(ctx context.Context, userID string) {
+	kcGroups, err := h.keycloak.GetUserGroups(ctx, userID)
+	if err != nil {
+		h.logger.Warn("triggerGroupSync: failed to get keycloak groups",
+			zap.String("user_id", userID), zap.Error(err))
+		return
+	}
+
+	var groupNames []string
+	for _, g := range kcGroups {
+		if g.Name != nil {
+			groupNames = append(groupNames, *g.Name)
+		}
+	}
+
+	if h.db == nil {
+		return
+	}
+	rows, err := h.db.Query(ctx,
+		`SELECT app_id::TEXT FROM provisioning_state WHERE user_id = $1 AND status = 'provisioned'`,
+		userID,
+	)
+	if err != nil {
+		h.logger.Warn("triggerGroupSync: query provisioned apps failed", zap.Error(err))
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var appID string
+		if err := rows.Scan(&appID); err != nil {
+			continue
+		}
+		if err := h.provisionEngine.SyncGroupMembership(ctx, appID, userID, groupNames); err != nil {
+			h.logger.Warn("triggerGroupSync: sync failed",
+				zap.String("app_id", appID), zap.String("user_id", userID), zap.Error(err))
+		}
+	}
 }
 
 // ListRealmRoles returns all realm-level roles.
