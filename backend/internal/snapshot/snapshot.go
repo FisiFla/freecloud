@@ -59,9 +59,23 @@ func (s *Snapshotter) TakeSnapshot(ctx context.Context) error {
 	// TODO: compute from a posture cache table when it exists.
 	var complianceRate float64
 
-	// MFA coverage: TODO — MFA state is in Keycloak, not in our DB yet.
-	// Track as 0.0 until a local mfa_state cache is introduced.
+	// MFA coverage: computed from the mfa_coverage_cache table which is kept
+	// up-to-date by the self-service MFA enrollment endpoints (B1). Each row
+	// records whether that user has at least one enrolled MFA factor.
+	// Users not yet in the cache are treated as not enrolled (conservative).
 	var mfaCoveragePct float64
+	var mfaTotal, mfaEnrolled int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE disabled IS NOT TRUE`).Scan(&mfaTotal); err != nil {
+		return err
+	}
+	if mfaTotal > 0 {
+		if err := s.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM mfa_coverage_cache WHERE has_mfa = TRUE`,
+		).Scan(&mfaEnrolled); err != nil {
+			return err
+		}
+		mfaCoveragePct = float64(mfaEnrolled) / float64(mfaTotal) * 100.0
+	}
 
 	// App count.
 	var appCount int
