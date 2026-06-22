@@ -71,6 +71,23 @@ services:
       timeout: 5s
       retries: 10
 
+  # F2: OpenLDAP container for LDAP/AD federation e2e tests.
+  openldap-e2e:
+    image: bitnami/openldap:latest
+    ports:
+      - "1389:1389"
+    environment:
+      LDAP_ADMIN_USERNAME: admin
+      LDAP_ADMIN_PASSWORD: adminpassword
+      LDAP_ROOT: dc=example,dc=com
+      LDAP_ADMIN_DN: cn=admin,dc=example,dc=com
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost:1389 -D 'cn=admin,dc=example,dc=com' -w adminpassword -b 'dc=example,dc=com' -s base >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
   backend-e2e:
     build:
       context: ../backend
@@ -91,10 +108,14 @@ services:
       SCIM_BEARER_TOKEN: e2e-scim-token
       ACCESS_EVAL_TOKEN: e2e-access-eval-token
       CORS_ORIGIN: http://localhost:3000
+      # F2: LDAP bind password for federation source creation.
+      LDAP_BIND_PASSWORD: adminpassword
     depends_on:
       postgres-e2e:
         condition: service_healthy
       fleetdm-e2e:
+        condition: service_healthy
+      openldap-e2e:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/healthz || exit 1"]
