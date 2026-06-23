@@ -7,3 +7,5 @@ bin/
 backend/.env
 frontend/.env
 frontend/tsconfig.tsbuildinfo
+# C1: auto-generated secrets — never commit
+.secrets/
