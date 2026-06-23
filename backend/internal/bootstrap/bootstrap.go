@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Nerzal/gocloak/v13"
 	"go.uber.org/zap"
@@ -72,9 +73,25 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	gc := gocloak.NewClient(cfg.KeycloakURL)
 
 	logger.Info("bootstrap: authenticating as master admin")
-	jwt, err := gc.LoginAdmin(ctx, cfg.AdminUsername, cfg.AdminPassword, "master")
-	if err != nil {
-		return nil, fmt.Errorf("bootstrap: master admin login: %w", err)
+	// Keycloak may still be starting when the backend boots (docker compose gives
+	// no readiness ordering between services). Retry the admin login with backoff
+	// until Keycloak is reachable or the context deadline passes.
+	var jwt *gocloak.JWT
+	var err error
+	for attempt := 1; ; attempt++ {
+		jwt, err = gc.LoginAdmin(ctx, cfg.AdminUsername, cfg.AdminPassword, "master")
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("bootstrap: master admin login failed (keycloak never became reachable): %w", err)
+		}
+		logger.Warn("bootstrap: keycloak not ready, retrying", zap.Int("attempt", attempt), zap.Error(err))
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("bootstrap: master admin login cancelled: %w", ctx.Err())
+		case <-time.After(3 * time.Second):
+		}
 	}
 	token := jwt.AccessToken
 

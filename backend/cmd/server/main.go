@@ -99,7 +99,12 @@ func main() {
 		}
 		defer func() { _, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(7919876543)") }()
 
-		result, err := bootstrap.Run(ctx, bootstrap.Config{
+		// Keycloak bootstrap can take minutes on a cold start (Keycloak boot +
+		// realm provisioning), well beyond the 10s DB context above — give it its
+		// own generous deadline.
+		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer bootstrapCancel()
+		result, err := bootstrap.Run(bootstrapCtx, bootstrap.Config{
 			KeycloakURL:                  cfg.KeycloakURL,
 			AdminUsername:                cfg.BootstrapAdminUser,
 			AdminPassword:                cfg.BootstrapAdminPassword,

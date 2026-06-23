@@ -49,12 +49,9 @@ services:
       postgres-e2e:
         condition: service_healthy
     command: start-dev
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 20
-      start_period: 60s
+    # No healthcheck: the Keycloak image ships without curl and KC's health
+    # endpoint needs KC_HEALTH_ENABLED on the management port. Readiness is
+    # handled by the backend, which retries the admin login until Keycloak is up.
 
   fleetdm-e2e:
     build:
@@ -122,7 +119,7 @@ services:
       postgres-e2e:
         condition: service_healthy
       keycloak-e2e:
-        condition: service_healthy
+        condition: service_started
       fleetdm-e2e:
         condition: service_healthy
       openldap-e2e:
