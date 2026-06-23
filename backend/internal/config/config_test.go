@@ -92,12 +92,14 @@ func TestValidateProductionRejectsLocalhostKeycloak(t *testing.T) {
 	}
 }
 
-func TestValidateProductionMissingKeycloakSecret(t *testing.T) {
+func TestValidateProductionKeycloakSecretIsOptional(t *testing.T) {
+	// KEYCLOAK_CLIENT_SECRET is optional: the bootstrap engine sets it at runtime.
+	// Validate() must not reject a missing secret — the operator may rely on bootstrap.
 	setSecureProdEnv(t)
 	t.Setenv("KEYCLOAK_CLIENT_SECRET", "")
 	cfg := Load()
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error for missing KEYCLOAK_CLIENT_SECRET in production, got nil")
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("KEYCLOAK_CLIENT_SECRET is self-managed by bootstrap; Validate() must accept an empty value, got: %v", err)
 	}
 }
 

@@ -60,41 +60,20 @@ jobs:
         run: |
           docker compose -f docker/docker-compose.e2e.yml up -d
 
-      - name: Bootstrap Keycloak realm
-        env:
-          APP_ENV: test
-          ALLOW_DEV_SETUP: "true"
-          CREATE_DEMO_USER: "false"
-          KEYCLOAK_URL: http://localhost:8083
-          KEYCLOAK_ADMIN: admin
-          KEYCLOAK_ADMIN_PASSWORD: admin
-          KEYCLOAK_REALM: freecloud-e2e
-          KEYCLOAK_CLIENT_SECRET: freecloud-secret
-        run: |
-          echo "Waiting for Keycloak admin API at http://localhost:8083..."
-          for i in $(seq 1 90); do
-            if curl -sf http://localhost:8083/realms/master >/dev/null 2>&1; then
-              echo "Keycloak ready."
-              break
-            fi
-            echo "  attempt $i/90..."
-            sleep 2
-          done
-          curl -sf http://localhost:8083/realms/master >/dev/null
-          bash backend/cmd/scripts/setup_realm.sh
-
       - name: Wait for backend to be ready
+        # Backend self-bootstraps Keycloak on startup (Epic A). Allow extra time
+        # for the first-run provisioning to complete.
         run: |
           echo "Waiting for backend at http://localhost:8085/healthz..."
-          for i in $(seq 1 30); do
+          for i in $(seq 1 60); do
             if curl -sf http://localhost:8085/healthz >/dev/null 2>&1; then
               echo "Backend ready."
               break
             fi
-            echo "  attempt $i/30..."
+            echo "  attempt $i/60..."
             sleep 5
           done
-          curl -sf http://localhost:8085/healthz || (echo "Backend not ready after 150s." && exit 1)
+          curl -sf http://localhost:8085/healthz || (echo "Backend not ready after 300s." && exit 1)
 
       - name: Run e2e tests
         env:

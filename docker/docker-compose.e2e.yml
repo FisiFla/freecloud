@@ -49,12 +49,9 @@ services:
       postgres-e2e:
         condition: service_healthy
     command: start-dev
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 20
-      start_period: 60s
+    # No healthcheck: the Keycloak image ships without curl and KC's health
+    # endpoint needs KC_HEALTH_ENABLED on the management port. Readiness is
+    # handled by the backend, which retries the admin login until Keycloak is up.
 
   fleetdm-e2e:
     build:
@@ -103,7 +100,13 @@ services:
       KEYCLOAK_URL: http://keycloak-e2e:8080
       KEYCLOAK_REALM: freecloud-e2e
       KEYCLOAK_CLIENT_ID: freecloud-service
+      # KEYCLOAK_CLIENT_SECRET pins the secret so e2e tests can authenticate
+      # as the service account with a known value. The bootstrap engine sees
+      # this and sets the same secret when provisioning freecloud-service.
       KEYCLOAK_CLIENT_SECRET: freecloud-secret
+      # Bootstrap credentials — master-admin used on startup to self-provision Keycloak.
+      KC_BOOTSTRAP_ADMIN: admin
+      KC_BOOTSTRAP_PASSWORD: admin
       FLEET_URL: http://fleetdm-e2e:8080
       FLEET_API_TOKEN: e2e-fleet-token
       FLEET_WEBHOOK_SECRET: e2e-webhook-secret
@@ -115,6 +118,8 @@ services:
     depends_on:
       postgres-e2e:
         condition: service_healthy
+      keycloak-e2e:
+        condition: service_started
       fleetdm-e2e:
         condition: service_healthy
       openldap-e2e:

@@ -13,10 +13,9 @@ import (
 // production database connection.
 const defaultDatabaseURL = "postgres://freecloud:freecloud@localhost:5432/freecloud?sslmode=disable"
 
-// defaultKeycloakClientID is Keycloak's built-in public client. It cannot
-// perform a confidential client-credentials grant with a secret, so Validate()
-// rejects it in production.
-const defaultKeycloakClientID = "admin-cli"
+// defaultKeycloakClientID is the service-account client created by the
+// bootstrap engine on first startup.
+const defaultKeycloakClientID = "freecloud-service"
 
 // defaultKeycloakURL is the local-dev Keycloak address; Validate() rejects it
 // outside development so production never points at a localhost identity provider.
@@ -83,6 +82,11 @@ type Config struct {
 	// C1 (LDAP/AD federation) — bind password for LDAP user-storage providers.
 	// Resolved via env/file/vault (LDAP_BIND_PASSWORD / LDAP_BIND_PASSWORD_FILE).
 	LDAPBindPassword string
+
+	// Bootstrap credentials for the self-bootstrap Keycloak provisioning on startup.
+	// KC_BOOTSTRAP_ADMIN / KC_BOOTSTRAP_PASSWORD (master-realm admin, dev default admin/admin).
+	BootstrapAdminUser     string
+	BootstrapAdminPassword string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -137,6 +141,10 @@ func Load() *Config {
 
 		// C1 (LDAP/AD federation)
 		LDAPBindPassword: resolveSecret("LDAP_BIND_PASSWORD", ""),
+
+		// Bootstrap credentials
+		BootstrapAdminUser:     getEnv("KC_BOOTSTRAP_ADMIN", "admin"),
+		BootstrapAdminPassword: resolveSecret("KC_BOOTSTRAP_PASSWORD", "admin"),
 	}
 }
 
@@ -172,11 +180,12 @@ func (c *Config) Validate() error {
 	var problems []string
 	add := func(msg string) { problems = append(problems, msg) }
 
-	if c.KeycloakClientSecret == "" {
-		add("KEYCLOAK_CLIENT_SECRET must be set")
-	}
-	if c.KeycloakClientID == "" || c.KeycloakClientID == defaultKeycloakClientID {
-		add("KEYCLOAK_CLIENT_ID must be a confidential client, not the default \"admin-cli\"")
+	// KEYCLOAK_CLIENT_SECRET is now optional in config: the bootstrap engine sets
+	// it at runtime from Keycloak. An explicit env override is still accepted.
+
+	// Reject the public admin-cli client (not the confidential service default).
+	if c.KeycloakClientID == "" || c.KeycloakClientID == "admin-cli" {
+		add("KEYCLOAK_CLIENT_ID must be a confidential client, not empty or the public \"admin-cli\"")
 	}
 	// An empty URL or audience silently disables the issuer/audience checks in
 	// the auth middleware, so both must be present.
