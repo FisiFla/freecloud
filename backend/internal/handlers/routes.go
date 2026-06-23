@@ -147,8 +147,10 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.With(middleware.RequirePermission(middleware.PermManageApps)).Get("/api/v1/apps/{appId}/provisioning", h.GetProvisioningConfig)
 		r.With(middleware.RequirePermission(middleware.PermManageApps)).Get("/api/v1/apps/{appId}/provisioning/state", h.ListProvisioningState)
 		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs", h.ListAuditLogs)
-		r.With(middleware.RequirePermission(middleware.PermExportAuditLogs)).Get("/api/v1/audit-logs/export", h.ExportAuditLogs) // C4
-		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs/verify", h.VerifyAuditChain)  // C1
+		r.With(middleware.RequirePermission(middleware.PermExportAuditLogs)).Get("/api/v1/audit-logs/export", h.ExportAuditLogs)    // C4
+		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs/verify", h.VerifyAuditChain)     // C1
+		r.With(middleware.RequirePermission(middleware.PermReadAuditLogs)).Get("/api/v1/audit-logs/integrity", h.GetAuditIntegrity) // B3
+		r.With(middleware.RequirePermission(middleware.PermExportAuditLogs)).Get("/api/v1/reports", h.DownloadReport)               // B2
 		r.With(middleware.RequirePermission(middleware.PermReadUsers)).Get("/api/v1/users", h.ListUsers)
 		r.With(middleware.RequirePermission(middleware.PermReadUsers)).Get("/api/v1/users/{id}", h.GetUser)
 
