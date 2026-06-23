@@ -139,6 +139,10 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 		r.With(middleware.RequirePermission(middleware.PermSelfService)).Post("/api/v1/auth/device-check", h.DeviceCheck)
 		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps", h.ListApps)
+		// C2: IdP-initiated SSO URL for a SAML app
+		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/{appId}/saml/idp-url", h.GetSAMLIdPInitiatedURL)
+		// C3: SAML IdP metadata XML download
+		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/{appId}/saml/metadata", h.GetSAMLMetadata)
 		// B4: App Catalog — list templates
 		r.With(middleware.RequirePermission(middleware.PermReadApps)).Get("/api/v1/apps/templates", h.ListAppTemplates)
 		// A3: per-app access policy read
