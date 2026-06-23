@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/FisiFla/freecloud/backend/internal/audit"
+	"github.com/FisiFla/freecloud/backend/internal/bootstrap"
 	"github.com/FisiFla/freecloud/backend/internal/config"
 	"github.com/FisiFla/freecloud/backend/internal/db"
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
@@ -84,11 +86,47 @@ func main() {
 		logger.Fatal("failed to run migrations", zap.Error(err))
 	}
 
+	// Self-bootstrap Keycloak idempotently under a pg advisory lock so only one
+	// replica runs provisioning at a time. Returns the active service-account secret.
+	kcSecret, err := func() (string, error) {
+		conn, err := pool.Acquire(ctx)
+		if err != nil {
+			return "", fmt.Errorf("acquire conn for bootstrap lock: %w", err)
+		}
+		defer conn.Release()
+		if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(7919876543)"); err != nil {
+			return "", fmt.Errorf("acquire bootstrap advisory lock: %w", err)
+		}
+		defer func() { _, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(7919876543)") }()
+
+		// Keycloak bootstrap can take minutes on a cold start (Keycloak boot +
+		// realm provisioning), well beyond the 10s DB context above — give it its
+		// own generous deadline.
+		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer bootstrapCancel()
+		result, err := bootstrap.Run(bootstrapCtx, bootstrap.Config{
+			KeycloakURL:                  cfg.KeycloakURL,
+			AdminUsername:                cfg.BootstrapAdminUser,
+			AdminPassword:                cfg.BootstrapAdminPassword,
+			TargetRealm:                  cfg.KeycloakRealm,
+			ServiceAccountSecretOverride: cfg.KeycloakClientSecret,
+			CreateDemoUser:               os.Getenv("CREATE_DEMO_USER") == "true",
+		})
+		if err != nil {
+			return "", err
+		}
+		return result.ServiceAccountSecret, nil
+	}()
+	if err != nil {
+		logger.Fatal("keycloak bootstrap failed", zap.Error(err))
+	}
+	logger.Info("keycloak bootstrap complete")
+
 	// Initialize Keycloak client
 	kcClient := keycloak.NewClient(
 		cfg.KeycloakURL,
 		cfg.KeycloakClientID,
-		cfg.KeycloakClientSecret,
+		kcSecret,
 		cfg.KeycloakRealm,
 	)
 
