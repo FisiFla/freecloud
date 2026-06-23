@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -24,7 +25,12 @@ type KeycloakClientInterface interface {
 	UpdateUser(ctx context.Context, userID, firstName, lastName, department string, enabled bool) error
 	LogoutAllSessions(ctx context.Context, userID string) error
 	GetUserSessions(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error)
-	CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
+	CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string, opts *SAMLOptions) (string, error)
+	// GetSAMLIdPInitiatedURL returns the full Keycloak IdP-initiated SSO URL for a SAML client.
+	GetSAMLIdPInitiatedURL(ctx context.Context, keycloakClientID string) (string, error)
+	// GetSAMLMetadataXML returns the Keycloak realm SAML IdP metadata XML.
+	// SPs import this to configure trust with FreeCloud as the IdP.
+	GetSAMLMetadataXML(ctx context.Context) (string, error)
 	DeleteClient(ctx context.Context, clientID string) error
 	AssignUserToClient(ctx context.Context, userID, clientID string) error
 	UnassignUserFromClient(ctx context.Context, userID, clientID string) error
@@ -463,10 +469,99 @@ func (k *KeycloakClient) AssignRealmRoleToUser(ctx context.Context, userID strin
 	return nil
 }
 
-// samlProtocolMappers returns the standard set of X.500/SAML attribute mappers
-// for email, firstName, lastName, and username. These are required for most SP
-// implementations to receive user identity in the assertion.
-func samlProtocolMappers() *[]gocloak.ProtocolMapperRepresentation {
+// SAMLOptions holds optional advanced SAML client configuration.
+// All fields are optional; zero/empty values retain existing safe defaults.
+type SAMLOptions struct {
+	// SigningAlgorithm is the XML signature algorithm.
+	// Allowed: "RSA_SHA256" (default), "RSA_SHA512", "RSA_SHA1".
+	SigningAlgorithm string
+	// EncryptAssertions controls whether Keycloak encrypts SAML assertions.
+	EncryptAssertions bool
+	// NameIDFormat overrides the NameID format.
+	// Allowed: "persistent" (default), "transient", "email", "unspecified".
+	NameIDFormat string
+	// AttributeMappings adds extra user-attribute mappers to the SAML client.
+	AttributeMappings []SAMLAttributeMapping
+}
+
+// SAMLAttributeMapping maps a Keycloak user attribute to a SAML assertion attribute.
+type SAMLAttributeMapping struct {
+	UserAttribute     string
+	SAMLAttributeName string
+}
+
+// nonAlphanumRe matches characters that are not URL-safe (not a-z0-9).
+var nonAlphanumRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// samlSlug converts an app name into a URL-safe slug for idpInitiatedSsoUrlName.
+func samlSlug(name string) string {
+	s := strings.ToLower(name)
+	s = nonAlphanumRe.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		s = "app"
+	}
+	return s
+}
+
+// validSigningAlgorithms is the set of Keycloak-supported SAML signing algorithms.
+var validSigningAlgorithms = map[string]bool{
+	"RSA_SHA256": true,
+	"RSA_SHA512": true,
+	"RSA_SHA1":   true,
+}
+
+// validNameIDFormats is the set of supported NameID formats.
+var validNameIDFormats = map[string]bool{
+	"persistent":  true,
+	"transient":   true,
+	"email":       true,
+	"unspecified": true,
+}
+
+// buildSAMLAttributes returns the Keycloak client attribute map for a SAML client.
+// This is extracted as a pure function so it can be unit-tested without HTTP.
+func buildSAMLAttributes(name, acsURL, entityID string, opts *SAMLOptions) map[string]string {
+	signingAlgo := "RSA_SHA256"
+	encryptAssertions := "false"
+	nameIDFormat := "persistent"
+
+	if opts != nil {
+		if validSigningAlgorithms[opts.SigningAlgorithm] {
+			signingAlgo = opts.SigningAlgorithm
+		}
+		if opts.EncryptAssertions {
+			encryptAssertions = "true"
+		}
+		if validNameIDFormats[opts.NameIDFormat] {
+			nameIDFormat = opts.NameIDFormat
+		}
+	}
+
+	return map[string]string{
+		"saml_name_id_format":    nameIDFormat,
+		"saml_sp_entity_id":      entityID,
+		"saml.assertion.consumer.service.post.binding.url": acsURL,
+		"saml_assertion_consumer_url_post":                 acsURL,
+		"saml.server.signature":                            "true",
+		"saml.assertion.signature":                         "true",
+		"saml.client.signature":                            "false",
+		"saml.authnstatement":                              "true",
+		"saml.onetimeuse.condition":                        "false",
+		"saml.server.signature.keyinfo.ext":                "false",
+		"saml.force.post.binding":                          "true",
+		"saml.multivalued.roles":                           "false",
+		"saml.encrypt":                                     encryptAssertions,
+		"saml.server.signature.logout":                     "true",
+		"saml_assertion_lifespan":                          "3600",
+		"saml.signature.algorithm":                         signingAlgo,
+		"saml.idp.initiated.sso.url.name":                 samlSlug(name),
+	}
+}
+
+// samlProtocolMappers returns the standard X.500/SAML attribute mappers plus any
+// extra attribute mappings specified in opts.
+func samlProtocolMappers(opts *SAMLOptions) *[]gocloak.ProtocolMapperRepresentation {
 	trueStr := "true"
 	mappers := []gocloak.ProtocolMapperRepresentation{
 		{
@@ -528,11 +623,31 @@ func samlProtocolMappers() *[]gocloak.ProtocolMapperRepresentation {
 			},
 		},
 	}
+	if opts != nil {
+		for _, m := range opts.AttributeMappings {
+			if m.UserAttribute == "" || m.SAMLAttributeName == "" {
+				continue
+			}
+			mappers = append(mappers, gocloak.ProtocolMapperRepresentation{
+				Name:            gocloak.StringP(m.SAMLAttributeName),
+				Protocol:        gocloak.StringP("saml"),
+				ProtocolMapper:  gocloak.StringP("saml-user-attribute-mapper"),
+				ConsentRequired: gocloak.BoolP(false),
+				Config: &map[string]string{
+					"attribute.nameformat": "Basic",
+					"user.attribute":       m.UserAttribute,
+					"attribute.name":       m.SAMLAttributeName,
+				},
+			})
+		}
+	}
 	return &mappers
 }
 
 // CreateClient creates an OIDC or SAML client in Keycloak and returns the client ID.
-func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error) {
+// For SAML clients, opts configures advanced signing, encryption, NameID, and attribute mapping;
+// nil opts retains safe interoperable defaults.
+func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string, opts *SAMLOptions) (string, error) {
 	logger := zap.L()
 	token, err := k.login(ctx)
 	if err != nil {
@@ -568,31 +683,9 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 			acsURL = redirectURIs[0]
 		}
 
-		client.Attributes = &map[string]string{
-			// NameID format: persistent is the most interoperable default.
-			"saml_name_id_format": "persistent",
-			// SP entity ID
-			"saml_sp_entity_id": entityID,
-			// ACS URL (POST binding)
-			"saml.assertion.consumer.service.post.binding.url": acsURL,
-			"saml_assertion_consumer_url_post":                 acsURL,
-			// Signing
-			"saml.server.signature":    "true",
-			"saml.assertion.signature": "true",
-			"saml.client.signature":    "false",
-			// Token details
-			"saml.authnstatement":               "true",
-			"saml.onetimeuse.condition":         "false",
-			"saml.server.signature.keyinfo.ext": "false",
-			"saml.force.post.binding":           "true",
-			"saml.multivalued.roles":            "false",
-			"saml.encrypt":                      "false",
-			// Logout
-			"saml.server.signature.logout": "true",
-			// Session
-			"saml_assertion_lifespan": "3600",
-		}
-		client.ProtocolMappers = samlProtocolMappers()
+		attrs := buildSAMLAttributes(name, acsURL, entityID, opts)
+		client.Attributes = &attrs
+		client.ProtocolMappers = samlProtocolMappers(opts)
 	}
 
 	createdID, err := k.client.CreateClient(ctx, token, k.realm, client)
@@ -607,6 +700,53 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 	)
 
 	return createdID, nil
+}
+
+// GetSAMLIdPInitiatedURL returns the full Keycloak IdP-initiated SSO URL for the given
+// SAML client. It fetches the client representation from Keycloak to read the
+// saml.idp.initiated.sso.url.name attribute set at creation time.
+// Returns an empty string (no error) if the attribute is absent or the client is not SAML.
+func (k *KeycloakClient) GetSAMLIdPInitiatedURL(ctx context.Context, keycloakClientID string) (string, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return "", err
+	}
+	c, err := k.client.GetClient(ctx, token, k.realm, keycloakClientID)
+	if err != nil {
+		return "", fmt.Errorf("get keycloak client %s: %w", keycloakClientID, err)
+	}
+	if c.Attributes == nil {
+		return "", nil
+	}
+	urlName := (*c.Attributes)["saml.idp.initiated.sso.url.name"]
+	if urlName == "" {
+		return "", nil
+	}
+	return k.baseURL + "/realms/" + k.realm + "/protocol/saml/clients/" + urlName, nil
+}
+
+// GetSAMLMetadataXML fetches the Keycloak realm SAML IdP metadata XML.
+// The descriptor endpoint is public — no admin token is required.
+// SPs import this document to configure trust with FreeCloud as the IdP.
+func (k *KeycloakClient) GetSAMLMetadataXML(ctx context.Context) (string, error) {
+	metaURL := k.baseURL + "/realms/" + k.realm + "/protocol/saml/descriptor"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build saml metadata request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch saml metadata: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read saml metadata body: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("saml metadata endpoint returned %d", resp.StatusCode)
+	}
+	return string(body), nil
 }
 
 // AssignUserToClient assigns a user to a Keycloak client (e.g., through a group or role).

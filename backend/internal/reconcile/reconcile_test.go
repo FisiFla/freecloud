@@ -31,9 +31,11 @@ func (f *fakeKC) LogoutAllSessions(_ context.Context, _ string) error { return n
 func (f *fakeKC) GetUserSessions(_ context.Context, _ string) ([]*gocloak.UserSessionRepresentation, error) {
 	return nil, nil
 }
-func (f *fakeKC) CreateClient(_ context.Context, _, _ string, _ []string, _ string) (string, error) {
+func (f *fakeKC) CreateClient(_ context.Context, _, _ string, _ []string, _ string, _ *keycloakpkg.SAMLOptions) (string, error) {
 	return "", nil
 }
+func (f *fakeKC) GetSAMLIdPInitiatedURL(_ context.Context, _ string) (string, error) { return "", nil }
+func (f *fakeKC) GetSAMLMetadataXML(_ context.Context) (string, error)               { return "", nil }
 func (f *fakeKC) DeleteClient(_ context.Context, _ string) error              { return nil }
 func (f *fakeKC) AssignUserToClient(_ context.Context, _, _ string) error     { return nil }
 func (f *fakeKC) UnassignUserFromClient(_ context.Context, _, _ string) error { return nil }

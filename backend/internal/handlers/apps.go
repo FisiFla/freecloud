@@ -14,15 +14,50 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
+	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
+// SAMLAttributeMappingRequest is one entry in the attribute mappings list.
+type SAMLAttributeMappingRequest struct {
+	UserAttribute     string `json:"userAttribute"`
+	SAMLAttributeName string `json:"samlAttributeName"`
+}
+
+// SAMLOptionsRequest carries optional advanced SAML configuration for app creation.
+type SAMLOptionsRequest struct {
+	SigningAlgorithm  string                        `json:"signingAlgorithm,omitempty"`
+	EncryptAssertions bool                          `json:"encryptAssertions"`
+	NameIDFormat      string                        `json:"nameIDFormat,omitempty"`
+	AttributeMappings []SAMLAttributeMappingRequest `json:"attributeMappings,omitempty"`
+}
+
 // CreateAppRequest is the JSON request body for creating an app.
 type CreateAppRequest struct {
-	Name         string   `json:"name"`
-	Protocol     string   `json:"protocol"`
-	RedirectURIs []string `json:"redirectURIs"`
-	BaseURL      string   `json:"baseURL"`
+	Name         string              `json:"name"`
+	Protocol     string              `json:"protocol"`
+	RedirectURIs []string            `json:"redirectURIs"`
+	BaseURL      string              `json:"baseURL"`
+	SAMLOptions  *SAMLOptionsRequest `json:"samlOptions,omitempty"`
+}
+
+// toKeycloakSAMLOptions converts the request DTO to the keycloak package type.
+func toKeycloakSAMLOptions(req *SAMLOptionsRequest) *keycloak.SAMLOptions {
+	if req == nil {
+		return nil
+	}
+	opts := &keycloak.SAMLOptions{
+		SigningAlgorithm:  req.SigningAlgorithm,
+		EncryptAssertions: req.EncryptAssertions,
+		NameIDFormat:      req.NameIDFormat,
+	}
+	for _, m := range req.AttributeMappings {
+		opts.AttributeMappings = append(opts.AttributeMappings, keycloak.SAMLAttributeMapping{
+			UserAttribute:     m.UserAttribute,
+			SAMLAttributeName: m.SAMLAttributeName,
+		})
+	}
+	return opts
 }
 
 // CreateAppResponse is the JSON response for creating an app.
@@ -30,11 +65,10 @@ type CreateAppResponse struct {
 	ID               string `json:"id"`
 	Name             string `json:"name"`
 	KeycloakClientID string `json:"keycloakClientId"`
-	// SAMLEntityID and SAMLAcsURL are only set when protocol is SAML.
-	// They reflect the SP metadata fields configured in Keycloak so the
-	// admin can copy them into the SP's configuration without guessing.
-	SAMLEntityID string `json:"samlEntityId,omitempty"`
-	SAMLAcsURL   string `json:"samlAcsUrl,omitempty"`
+	// SAMLEntityID, SAMLAcsURL, and SAMLIdPInitiatedURL are only set when protocol is SAML.
+	SAMLEntityID        string `json:"samlEntityId,omitempty"`
+	SAMLAcsURL          string `json:"samlAcsUrl,omitempty"`
+	SAMLIdPInitiatedURL string `json:"samlIdpInitiatedUrl,omitempty"`
 }
 
 // AssignAppRequest is the JSON request body for assigning a user to an app.
@@ -135,7 +169,7 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Create client in Keycloak
-	keycloakClientID, err := h.keycloak.CreateClient(ctx, req.Name, req.Protocol, req.RedirectURIs, req.BaseURL)
+	keycloakClientID, err := h.keycloak.CreateClient(ctx, req.Name, req.Protocol, req.RedirectURIs, req.BaseURL, toKeycloakSAMLOptions(req.SAMLOptions))
 	if err != nil {
 		h.logger.Error("failed to create keycloak client", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to create app in Keycloak")
@@ -485,6 +519,94 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, entries)
+}
+
+// GetSAMLIdPInitiatedURL returns the Keycloak IdP-initiated SSO URL for a SAML app.
+// GET /api/v1/apps/{appId}/saml/idp-url — requires PermReadApps.
+func (h *Handler) GetSAMLIdPInitiatedURL(w http.ResponseWriter, r *http.Request) {
+	appID := chi.URLParam(r, "appId")
+	if appID == "" {
+		respondError(w, http.StatusBadRequest, "appId is required")
+		return
+	}
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	ctx := r.Context()
+
+	var keycloakClientID, protocol string
+	err := h.db.QueryRow(ctx,
+		`SELECT keycloak_client_id, protocol FROM connected_apps WHERE id = $1`,
+		appID,
+	).Scan(&keycloakClientID, &protocol)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			respondError(w, http.StatusNotFound, "app not found")
+			return
+		}
+		h.logger.Error("failed to query app for saml idp url", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if strings.ToUpper(protocol) != "SAML" {
+		respondError(w, http.StatusBadRequest, "app is not a SAML application")
+		return
+	}
+
+	ssoURL, err := h.keycloak.GetSAMLIdPInitiatedURL(ctx, keycloakClientID)
+	if err != nil {
+		h.logger.Error("failed to get saml idp-initiated url", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to retrieve IdP-initiated SSO URL")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]string{"url": ssoURL})
+}
+
+// GetSAMLMetadata serves the Keycloak SAML IdP metadata XML for a configured SAML app.
+// The SP admin imports this XML to configure trust with FreeCloud as the IdP.
+// GET /api/v1/apps/{appId}/saml/metadata — requires PermReadApps.
+func (h *Handler) GetSAMLMetadata(w http.ResponseWriter, r *http.Request) {
+	appID := chi.URLParam(r, "appId")
+	if appID == "" {
+		respondError(w, http.StatusBadRequest, "appId is required")
+		return
+	}
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	ctx := r.Context()
+
+	var protocol string
+	err := h.db.QueryRow(ctx,
+		`SELECT protocol FROM connected_apps WHERE id = $1`,
+		appID,
+	).Scan(&protocol)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			respondError(w, http.StatusNotFound, "app not found")
+			return
+		}
+		h.logger.Error("failed to query app for saml metadata", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if strings.ToUpper(protocol) != "SAML" {
+		respondError(w, http.StatusBadRequest, "app is not a SAML application")
+		return
+	}
+
+	xml, err := h.keycloak.GetSAMLMetadataXML(ctx)
+	if err != nil {
+		h.logger.Error("failed to fetch saml metadata", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "failed to fetch SAML metadata")
+		return
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="saml-idp-metadata.xml"`)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, xml)
 }
 
 // validateRedirectURI checks that a redirect URI is valid and secure.

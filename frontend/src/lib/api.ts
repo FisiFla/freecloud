@@ -40,11 +40,24 @@ export interface DeviceCheckResponse {
   failures?: { type: string; detail: string }[];
 }
 
+export interface SAMLAttributeMappingRequest {
+  userAttribute: string;
+  samlAttributeName: string;
+}
+
+export interface SAMLOptionsRequest {
+  signingAlgorithm?: "RSA_SHA256" | "RSA_SHA512" | "RSA_SHA1";
+  encryptAssertions?: boolean;
+  nameIDFormat?: "persistent" | "transient" | "email" | "unspecified";
+  attributeMappings?: SAMLAttributeMappingRequest[];
+}
+
 export interface CreateAppRequest {
   name: string;
   protocol: "OIDC" | "SAML";
   redirectURIs: string[];
   baseURL: string;
+  samlOptions?: SAMLOptionsRequest;
 }
 export interface CreateAppResponse {
   id: string;
@@ -53,6 +66,7 @@ export interface CreateAppResponse {
   // SAML SP metadata — populated when protocol === "SAML"
   samlEntityId?: string;
   samlAcsUrl?: string;
+  samlIdpInitiatedUrl?: string;
 }
 
 export interface App {
@@ -253,6 +267,17 @@ export async function createAppFromTemplate(
   req: CreateAppFromTemplateRequest,
 ): Promise<CreateAppResponse> {
   return request<CreateAppResponse>("POST", `/api/v1/apps/templates/${templateId}/create`, req);
+}
+
+// C2: IdP-initiated SSO URL for a SAML app
+export async function getSAMLIdPInitiatedURL(appId: string): Promise<{ url: string }> {
+  return request<{ url: string }>("GET", `/api/v1/apps/${appId}/saml/idp-url`);
+}
+
+// C3: Trigger browser download of Keycloak SAML IdP metadata XML
+export function downloadSAMLMetadata(appId: string): void {
+  const base = getBaseUrl();
+  window.location.href = `${base}/api/v1/apps/${appId}/saml/metadata`;
 }
 
 // B4 (kept for global policy listing)

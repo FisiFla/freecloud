@@ -5,8 +5,8 @@ import { Plus, Globe, AlertCircle, UserPlus } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
 import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
-import { listApps, createApp, listUsers, assignAppToUser, getAppPolicy, upsertAppPolicy } from "@/lib/api";
-import type { App, User, CreateAppResponse, AppAccessPolicy } from "@/lib/api";
+import { listApps, createApp, listUsers, assignAppToUser, getAppPolicy, upsertAppPolicy, downloadSAMLMetadata } from "@/lib/api";
+import type { App, User, CreateAppResponse, AppAccessPolicy, SAMLAttributeMappingRequest } from "@/lib/api";
 import { useApiReady } from "../providers";
 
 export default function AppsPage() {
@@ -22,7 +22,13 @@ export default function AppsPage() {
   const [newBaseUrl, setNewBaseUrl] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [samlMetadata, setSamlMetadata] = useState<{ entityId: string; acsUrl: string } | null>(null);
+  const [samlMetadata, setSamlMetadata] = useState<{ entityId: string; acsUrl: string; idpInitiatedUrl?: string } | null>(null);
+
+  // SAML advanced options state
+  const [samlSigningAlgo, setSamlSigningAlgo] = useState<"RSA_SHA256" | "RSA_SHA512" | "RSA_SHA1">("RSA_SHA256");
+  const [samlEncrypt, setSamlEncrypt] = useState(false);
+  const [samlNameIDFormat, setSamlNameIDFormat] = useState<"persistent" | "transient" | "email" | "unspecified">("persistent");
+  const [samlAttrMappings, setSamlAttrMappings] = useState<SAMLAttributeMappingRequest[]>([]);
 
   // Policy dialog state
   const [policyAppId, setPolicyAppId] = useState<string | null>(null);
@@ -79,6 +85,12 @@ export default function AppsPage() {
         protocol: newProtocol,
         redirectURIs: newRedirectUris.split("\n").map((s) => s.trim()).filter(Boolean),
         baseURL: newBaseUrl,
+        samlOptions: newProtocol === "SAML" ? {
+          signingAlgorithm: samlSigningAlgo,
+          encryptAssertions: samlEncrypt,
+          nameIDFormat: samlNameIDFormat,
+          attributeMappings: samlAttrMappings.filter(m => m.userAttribute && m.samlAttributeName),
+        } : undefined,
       }) as CreateAppResponse & { enabled?: boolean; createdAt?: string };
       // Add to list (cast to App shape for display)
       setApps((prev) => [...prev, {
@@ -91,13 +103,21 @@ export default function AppsPage() {
       }]);
       // Surface SAML SP metadata so the admin can configure the SP
       if (newProtocol === "SAML" && created.samlEntityId) {
-        setSamlMetadata({ entityId: created.samlEntityId, acsUrl: created.samlAcsUrl ?? "" });
+        setSamlMetadata({
+          entityId: created.samlEntityId,
+          acsUrl: created.samlAcsUrl ?? "",
+          idpInitiatedUrl: created.samlIdpInitiatedUrl,
+        });
       } else {
         setShowAdd(false);
         setNewName("");
         setNewProtocol("OIDC");
         setNewRedirectUris("");
         setNewBaseUrl("");
+        setSamlSigningAlgo("RSA_SHA256");
+        setSamlEncrypt(false);
+        setSamlNameIDFormat("persistent");
+        setSamlAttrMappings([]);
       }
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : "Failed to create app");
@@ -225,7 +245,7 @@ export default function AppsPage() {
                 </div>
 
                 {/* Action buttons */}
-                <div className="mt-4 flex gap-2">
+                <div className="mt-4 flex gap-2 flex-wrap">
                   <button
                     onClick={() => { setAssignAppId(app.id); setAssignUserId(""); setAssignMessage(null); }}
                     className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 dark:border-slate-700 dark:text-slate-400"
@@ -239,6 +259,14 @@ export default function AppsPage() {
                   >
                     Access Policy
                   </button>
+                  {app.protocol === "SAML" && (
+                    <button
+                      onClick={() => downloadSAMLMetadata(app.id)}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 dark:border-slate-700 dark:text-slate-400"
+                    >
+                      Download SP Metadata
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -256,7 +284,7 @@ export default function AppsPage() {
       </div>
 
       {/* Add App Slide Over */}
-      <SlideOver isOpen={showAdd} onClose={() => { setShowAdd(false); setSamlMetadata(null); setNewName(""); setNewProtocol("OIDC"); setNewRedirectUris(""); setNewBaseUrl(""); }} title="Add Application">
+      <SlideOver isOpen={showAdd} onClose={() => { setShowAdd(false); setSamlMetadata(null); setNewName(""); setNewProtocol("OIDC"); setNewRedirectUris(""); setNewBaseUrl(""); setSamlSigningAlgo("RSA_SHA256"); setSamlEncrypt(false); setSamlNameIDFormat("persistent"); setSamlAttrMappings([]); }} title="Add Application">
         <form onSubmit={handleAddApp} className="space-y-5">
           {submitError && (
             <div className="flex items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
@@ -339,10 +367,93 @@ export default function AppsPage() {
           </div>
 
           {newProtocol === "SAML" && (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-              <p className="font-medium">SAML SP Metadata</p>
-              <p className="mt-1">After creation, copy the <strong>Entity ID</strong> and <strong>ACS URL</strong> into your Service Provider configuration. The Entity ID defaults to the Base URL; the ACS URL is the first Redirect URI you enter above.</p>
-            </div>
+            <>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                <p className="font-medium">SAML SP Metadata</p>
+                <p className="mt-1">After creation, copy the <strong>Entity ID</strong> and <strong>ACS URL</strong> into your Service Provider configuration. The Entity ID defaults to the Base URL; the ACS URL is the first Redirect URI you enter above.</p>
+              </div>
+
+              {/* Advanced SAML options */}
+              <details className="group rounded-lg border border-slate-200 dark:border-slate-700">
+                <summary className="cursor-pointer rounded-lg px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 select-none hover:bg-slate-50 dark:hover:bg-slate-800">
+                  Advanced SAML Options
+                </summary>
+                <div className="border-t border-slate-200 px-4 pb-4 pt-3 space-y-4 dark:border-slate-700">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">Signing Algorithm</label>
+                    <select
+                      value={samlSigningAlgo}
+                      onChange={(e) => setSamlSigningAlgo(e.target.value as typeof samlSigningAlgo)}
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                    >
+                      <option value="RSA_SHA256">RSA-SHA256 (recommended)</option>
+                      <option value="RSA_SHA512">RSA-SHA512</option>
+                      <option value="RSA_SHA1">RSA-SHA1 (legacy)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">NameID Format</label>
+                    <select
+                      value={samlNameIDFormat}
+                      onChange={(e) => setSamlNameIDFormat(e.target.value as typeof samlNameIDFormat)}
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                    >
+                      <option value="persistent">Persistent (recommended)</option>
+                      <option value="transient">Transient</option>
+                      <option value="email">Email</option>
+                      <option value="unspecified">Unspecified</option>
+                    </select>
+                  </div>
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={samlEncrypt}
+                      onChange={(e) => setSamlEncrypt(e.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span className="text-sm text-slate-700 dark:text-slate-300">Encrypt assertions</span>
+                  </label>
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-medium text-slate-600 dark:text-slate-400">Extra Attribute Mappings</label>
+                      <button
+                        type="button"
+                        onClick={() => setSamlAttrMappings(prev => [...prev, { userAttribute: "", samlAttributeName: "" }])}
+                        className="text-xs text-indigo-600 hover:underline dark:text-indigo-400"
+                      >
+                        + Add
+                      </button>
+                    </div>
+                    {samlAttrMappings.map((m, i) => (
+                      <div key={i} className="mt-2 flex gap-2 items-center">
+                        <input
+                          type="text"
+                          placeholder="Keycloak attribute"
+                          value={m.userAttribute}
+                          onChange={(e) => setSamlAttrMappings(prev => prev.map((x, j) => j === i ? { ...x, userAttribute: e.target.value } : x))}
+                          className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        />
+                        <span className="text-slate-400 text-xs">→</span>
+                        <input
+                          type="text"
+                          placeholder="SAML attribute name"
+                          value={m.samlAttributeName}
+                          onChange={(e) => setSamlAttrMappings(prev => prev.map((x, j) => j === i ? { ...x, samlAttributeName: e.target.value } : x))}
+                          className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setSamlAttrMappings(prev => prev.filter((_, j) => j !== i))}
+                          className="text-slate-400 hover:text-red-500 text-xs"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </details>
+            </>
           )}
 
           <button
@@ -366,8 +477,14 @@ export default function AppsPage() {
               <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">ACS URL (POST binding)</p>
               <code className="block mt-1 rounded bg-white px-2 py-1 text-xs text-slate-700 border border-emerald-200 break-all dark:bg-slate-800 dark:text-slate-300 dark:border-emerald-800">{samlMetadata.acsUrl || "—"}</code>
             </div>
+            {samlMetadata.idpInitiatedUrl && (
+              <div>
+                <p className="text-xs font-medium text-emerald-700 dark:text-emerald-400">IdP-Initiated SSO URL</p>
+                <code className="block mt-1 rounded bg-white px-2 py-1 text-xs text-slate-700 border border-emerald-200 break-all dark:bg-slate-800 dark:text-slate-300 dark:border-emerald-800">{samlMetadata.idpInitiatedUrl}</code>
+              </div>
+            )}
             <button
-              onClick={() => { setSamlMetadata(null); setShowAdd(false); setNewName(""); setNewProtocol("OIDC"); setNewRedirectUris(""); setNewBaseUrl(""); }}
+              onClick={() => { setSamlMetadata(null); setShowAdd(false); setNewName(""); setNewProtocol("OIDC"); setNewRedirectUris(""); setNewBaseUrl(""); setSamlSigningAlgo("RSA_SHA256"); setSamlEncrypt(false); setSamlNameIDFormat("persistent"); setSamlAttrMappings([]); }}
               className="w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
             >
               Done

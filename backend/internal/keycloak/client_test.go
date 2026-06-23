@@ -11,6 +11,94 @@ import (
 	"time"
 )
 
+// TestSAMLAttributesBuilt verifies that buildSAMLAttributes sets all overridable fields
+// when opts are fully specified.
+func TestSAMLAttributesBuilt(t *testing.T) {
+	opts := &SAMLOptions{
+		SigningAlgorithm:  "RSA_SHA512",
+		EncryptAssertions: true,
+		NameIDFormat:      "email",
+		AttributeMappings: []SAMLAttributeMapping{
+			{UserAttribute: "department", SAMLAttributeName: "dept"},
+		},
+	}
+	attrs := buildSAMLAttributes("my-app", "https://sp.example.com/acs", "https://sp.example.com", opts)
+
+	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA512" {
+		t.Errorf("signing algorithm: got %q, want RSA_SHA512", got)
+	}
+	if got := attrs["saml.encrypt"]; got != "true" {
+		t.Errorf("encrypt: got %q, want true", got)
+	}
+	if got := attrs["saml_name_id_format"]; got != "email" {
+		t.Errorf("nameIDFormat: got %q, want email", got)
+	}
+	if got := attrs["saml.idp.initiated.sso.url.name"]; got != "my-app" {
+		t.Errorf("idp initiated sso url name: got %q, want my-app", got)
+	}
+	if got := attrs["saml_sp_entity_id"]; got != "https://sp.example.com" {
+		t.Errorf("entity id: got %q", got)
+	}
+	if got := attrs["saml.assertion.consumer.service.post.binding.url"]; got != "https://sp.example.com/acs" {
+		t.Errorf("acs url: got %q", got)
+	}
+}
+
+// TestSAMLAttributesDefaults verifies that nil opts produces safe interoperable defaults.
+func TestSAMLAttributesDefaults(t *testing.T) {
+	attrs := buildSAMLAttributes("app", "https://sp.example.com/acs", "https://sp.example.com", nil)
+
+	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA256" {
+		t.Errorf("default signing algorithm: got %q, want RSA_SHA256", got)
+	}
+	if got := attrs["saml.encrypt"]; got != "false" {
+		t.Errorf("default encrypt: got %q, want false", got)
+	}
+	if got := attrs["saml_name_id_format"]; got != "persistent" {
+		t.Errorf("default nameIDFormat: got %q, want persistent", got)
+	}
+}
+
+// TestSAMLAttributesUnknownValuesReset verifies that invalid option values
+// fall back to safe defaults rather than passing invalid strings to Keycloak.
+func TestSAMLAttributesUnknownValuesReset(t *testing.T) {
+	opts := &SAMLOptions{
+		SigningAlgorithm: "BOGUS_ALGO",
+		NameIDFormat:     "invalid-format",
+	}
+	attrs := buildSAMLAttributes("app", "", "", opts)
+
+	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA256" {
+		t.Errorf("unknown algo should fall back to RSA_SHA256, got %q", got)
+	}
+	if got := attrs["saml_name_id_format"]; got != "persistent" {
+		t.Errorf("unknown nameIDFormat should fall back to persistent, got %q", got)
+	}
+}
+
+// TestSAMLNameSanitization verifies samlSlug produces valid URL-safe slugs.
+func TestSAMLNameSanitization(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"my-app", "my-app"},
+		{"My App", "my-app"},
+		{"My  App!!!", "my-app"},
+		{"  leading trailing  ", "leading-trailing"},
+		{"", "app"},
+		{"---", "app"},
+		{"Hello World 123", "hello-world-123"},
+		{"café", "caf"}, // accented char becomes '-' then trimmed by Trim
+	}
+	for _, tc := range cases {
+		got := samlSlug(tc.input)
+		if got != tc.want {
+			t.Errorf("samlSlug(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 // TestIsConflictErr confirms the helper correctly distinguishes a 409 Conflict
 // (which AssignUserToClient treats as "role already exists") from real errors.
 func TestIsConflictErr(t *testing.T) {

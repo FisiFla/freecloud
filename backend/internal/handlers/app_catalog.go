@@ -207,8 +207,8 @@ func (h *Handler) CreateAppFromTemplate(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 
-	// Create client in Keycloak.
-	keycloakClientID, err := h.keycloak.CreateClient(ctx, name, tmpl.Protocol, redirectURIs, baseURL)
+	// Create client in Keycloak. Template-created apps use default SAML options.
+	keycloakClientID, err := h.keycloak.CreateClient(ctx, name, tmpl.Protocol, redirectURIs, baseURL, nil)
 	if err != nil {
 		h.logger.Error("failed to create keycloak client from template", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to create app in Keycloak")
