@@ -144,6 +144,16 @@ var migrations = []migration{
 		name:      "review_schedules_and_due_dates",
 		statement: Migration040,
 	},
+	{
+		id:        41,
+		name:      "fleet_config",
+		statement: Migration041,
+	},
+	{
+		id:        42,
+		name:      "smtp_config",
+		statement: Migration042,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -644,6 +654,35 @@ CREATE TABLE IF NOT EXISTS review_schedules (
 );
 CREATE INDEX IF NOT EXISTS idx_review_schedules_next_run ON review_schedules(next_run_at) WHERE enabled = true;
 ALTER TABLE review_campaigns ADD COLUMN IF NOT EXISTS due_date TIMESTAMPTZ;
+`
+
+// Migration041 creates the fleet_config singleton table (D1).
+// A single row (id=1) stores the Fleet server URL and an encrypted API token.
+const Migration041 = `
+CREATE TABLE IF NOT EXISTS fleet_config (
+    id               INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    server_url       TEXT NOT NULL DEFAULT '',
+    api_token_enc    TEXT,
+    api_token_hash   TEXT,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO fleet_config (id) VALUES (1) ON CONFLICT DO NOTHING;
+`
+
+// Migration042 creates the smtp_config singleton table (D2).
+// A single row (id=1) stores the SMTP relay settings and an encrypted password.
+const Migration042 = `
+CREATE TABLE IF NOT EXISTS smtp_config (
+    id            INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    host          TEXT NOT NULL DEFAULT '',
+    port          TEXT NOT NULL DEFAULT '587',
+    username      TEXT NOT NULL DEFAULT '',
+    password_enc  TEXT,
+    password_hash TEXT,
+    from_address  TEXT NOT NULL DEFAULT '',
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO smtp_config (id) VALUES (1) ON CONFLICT DO NOTHING;
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

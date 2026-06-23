@@ -251,6 +251,22 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Get("/api/v1/account-policy", h.GetAccountPolicy)
 		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Put("/api/v1/account-policy", h.UpdateAccountPolicy)
 
+		// D1: Fleet server configuration (super-admin only).
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Get("/api/v1/settings/fleet", h.GetFleetConfig)
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Put("/api/v1/settings/fleet", h.UpsertFleetConfig)
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Post("/api/v1/settings/fleet/test", h.TestFleetConfig)
+
+		// D2: SMTP configuration (super-admin only).
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Get("/api/v1/settings/smtp", h.GetSMTPConfig)
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Put("/api/v1/settings/smtp", h.UpsertSMTPConfig)
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Post("/api/v1/settings/smtp/test", h.TestSMTPEmail)
+
+		// D3: Identity provider management (super-admin only).
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Get("/api/v1/settings/identity-providers", h.ListIdentityProviders)
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Post("/api/v1/settings/identity-providers", h.CreateIdentityProvider)
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Put("/api/v1/settings/identity-providers/{alias}", h.UpdateIdentityProvider)
+		r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Delete("/api/v1/settings/identity-providers/{alias}", h.DeleteIdentityProvider)
+
 		// C4 (FCEX3-16) — Approval workflow.
 		// Helpdesk submits a request; super-admin approves/rejects via PermApproveRequests.
 		r.With(middleware.RequirePermission(middleware.PermSubmitApprovals)).Post("/api/v1/approval-requests", h.SubmitApproval)

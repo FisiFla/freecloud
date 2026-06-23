@@ -217,8 +217,10 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		"GET /scim/v2/Groups/{id}":    true,
 		"PATCH /scim/v2/Groups/{id}":  true,
 		"DELETE /scim/v2/Groups/{id}": true,
+		// Test-only enrollment-token helper — SCIM-bearer-authenticated (APP_ENV=test only).
+		"POST /api/v1/e2e/enrollment-token": true,
 		// Self-service — gated by PermSelfService, which end-user holds.
-		"POST /api/v1/auth/device-check":                   true,
+		"POST /api/v1/auth/device-check": true,
 		"GET /api/v1/portal/me/devices":                    true,
 		"GET /api/v1/portal/me/apps":                       true,
 		"GET /api/v1/portal/me/compliance":                 true,

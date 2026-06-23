@@ -1145,3 +1145,99 @@ export async function createCampaign(req: CreateCampaignRequest): Promise<Review
 export async function completeCampaign(id: string): Promise<{ completed: boolean }> {
   return request<{ completed: boolean }>("POST", `/api/v1/campaigns/${id}/complete`);
 }
+
+// D1 (Epic D): Fleet configuration
+export interface FleetConfig {
+  serverUrl: string;
+  apiTokenConfigured: boolean;
+  updatedAt: string;
+}
+
+export interface UpsertFleetConfigRequest {
+  serverUrl: string;
+  apiToken?: string;
+}
+
+export interface FleetTestResult {
+  ok: boolean;
+  error?: string;
+}
+
+export async function getFleetConfig(): Promise<FleetConfig> {
+  return request<FleetConfig>("GET", "/api/v1/settings/fleet");
+}
+
+export async function updateFleetConfig(req: UpsertFleetConfigRequest): Promise<{ saved: boolean }> {
+  return request<{ saved: boolean }>("PUT", "/api/v1/settings/fleet", req);
+}
+
+export async function testFleetConnection(): Promise<FleetTestResult> {
+  return request<FleetTestResult>("POST", "/api/v1/settings/fleet/test");
+}
+
+// D2 (Epic D): SMTP configuration
+export interface SMTPConfig {
+  host: string;
+  port: string;
+  username: string;
+  fromAddress: string;
+  passwordConfigured: boolean;
+  updatedAt: string;
+}
+
+export interface UpsertSMTPConfigRequest {
+  host: string;
+  port: string;
+  username: string;
+  password?: string;
+  fromAddress: string;
+}
+
+export interface SMTPTestResult {
+  sent: boolean;
+  error?: string;
+}
+
+export async function getSMTPConfig(): Promise<SMTPConfig> {
+  return request<SMTPConfig>("GET", "/api/v1/settings/smtp");
+}
+
+export async function updateSMTPConfig(req: UpsertSMTPConfigRequest): Promise<{ saved: boolean }> {
+  return request<{ saved: boolean }>("PUT", "/api/v1/settings/smtp", req);
+}
+
+export async function sendTestEmail(to: string): Promise<SMTPTestResult> {
+  return request<SMTPTestResult>("POST", "/api/v1/settings/smtp/test", { to });
+}
+
+// D3 (Epic D): Identity providers
+export interface IdentityProvider {
+  alias: string;
+  displayName?: string;
+  providerId: string;
+  enabled?: boolean;
+  config?: Record<string, string>;
+}
+
+export interface IdentityProviderRequest {
+  alias: string;
+  displayName: string;
+  providerType: "google" | "github" | "oidc" | "saml";
+  config: Record<string, string>;
+}
+
+export async function listIdentityProviders(): Promise<IdentityProvider[]> {
+  return request<IdentityProvider[]>("GET", "/api/v1/settings/identity-providers");
+}
+
+export async function createIdentityProvider(req: IdentityProviderRequest): Promise<{ alias: string }> {
+  return request<{ alias: string }>("POST", "/api/v1/settings/identity-providers", req);
+}
+
+export async function updateIdentityProvider(alias: string, req: Omit<IdentityProviderRequest, "alias" | "providerType">): Promise<{ alias: string }> {
+  return request<{ alias: string }>("PUT", `/api/v1/settings/identity-providers/${alias}`, req);
+}
+
+export async function deleteIdentityProvider(alias: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>("DELETE", `/api/v1/settings/identity-providers/${alias}`);
+}
