@@ -192,3 +192,99 @@ func TestExportAuditLogsNoDB(t *testing.T) {
 		t.Errorf("expected 500 with no DB, got %d", rec.Code)
 	}
 }
+
+// TestExportAuditLogsDateRangeInvalid: bad from/to → 400.
+func TestExportAuditLogsDateRangeInvalid(t *testing.T) {
+	db := &fakeDBWithQuery{
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			return &fakeAuditRows{}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs/export?from=not-a-date", nil)
+	rec := httptest.NewRecorder()
+	h.ExportAuditLogs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad from: expected 400, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs/export?to=not-a-date", nil)
+	rec = httptest.NewRecorder()
+	h.ExportAuditLogs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad to: expected 400, got %d", rec.Code)
+	}
+}
+
+// TestExportAuditLogsDateRangePassedToQuery: valid from/to are appended to SQL args.
+func TestExportAuditLogsDateRangePassedToQuery(t *testing.T) {
+	var capturedArgs []any
+	db := &fakeDBWithQuery{
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			capturedArgs = args
+			return &fakeAuditRows{}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/audit-logs/export?format=csv&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z", nil)
+	rec := httptest.NewRecorder()
+	h.ExportAuditLogs(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// The two time args must appear in capturedArgs (no actor/action → positions 0 and 1).
+	if len(capturedArgs) < 2 {
+		t.Fatalf("expected at least 2 SQL args (from/to), got %d", len(capturedArgs))
+	}
+}
+
+// TestListAuditLogsDateRangeInvalid: bad from/to → 400.
+func TestListAuditLogsDateRangeInvalid(t *testing.T) {
+	db := &fakeDBWithQuery{
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			return &fakeAuditRows{}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?from=baddate", nil)
+	rec := httptest.NewRecorder()
+	h.ListAuditLogs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad from: expected 400, got %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs?to=baddate", nil)
+	rec = httptest.NewRecorder()
+	h.ListAuditLogs(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("bad to: expected 400, got %d", rec.Code)
+	}
+}
+
+// TestListAuditLogsDateRangePassedToQuery: valid from/to appear in SQL args.
+func TestListAuditLogsDateRangePassedToQuery(t *testing.T) {
+	var capturedArgs []any
+	db := &fakeDBWithQuery{
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			capturedArgs = args
+			return &fakeAuditRows{}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodGet,
+		"/api/v1/audit-logs?from=2024-01-01T00:00:00Z&to=2024-06-30T00:00:00Z", nil)
+	rec := httptest.NewRecorder()
+	h.ListAuditLogs(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// No actor/action → args are: from, to, limit, offset (4 args).
+	if len(capturedArgs) < 4 {
+		t.Fatalf("expected 4 SQL args (from, to, limit, offset), got %d", len(capturedArgs))
+	}
+}

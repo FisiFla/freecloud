@@ -61,6 +61,10 @@ type Handler struct {
 	provisionEngine *provisioning.Engine
 	// ldapBindPassword is the bind password for LDAP/AD federation sources (C1).
 	ldapBindPassword string
+
+	// auditRetainFor is the configured audit retention window (from AUDIT_RETAIN_FOR).
+	// 0 means keep forever. Exposed via GET /api/v1/audit-logs/integrity.
+	auditRetainFor time.Duration
 }
 
 // SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment
@@ -119,6 +123,9 @@ func (h *Handler) SetProvisionEngine(e *provisioning.Engine) {
 }
 // SetLDAPBindPassword wires the LDAP bind password (resolved via config.LDAPBindPassword).
 func (h *Handler) SetLDAPBindPassword(pw string) { h.ldapBindPassword = pw }
+
+// SetAuditRetainFor wires the configured audit retention window.
+func (h *Handler) SetAuditRetainFor(d time.Duration) { h.auditRetainFor = d }
 
 // Health returns a simple health check response.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {

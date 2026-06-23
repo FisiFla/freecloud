@@ -37,6 +37,24 @@ func (h *Handler) ExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 	actorFilter := r.URL.Query().Get("actor")
 	actionFilter := r.URL.Query().Get("action")
 
+	var fromTime, toTime time.Time
+	if fromStr := r.URL.Query().Get("from"); fromStr != "" {
+		if t, err := time.Parse(time.RFC3339, fromStr); err == nil {
+			fromTime = t
+		} else {
+			respondError(w, http.StatusBadRequest, "invalid 'from' param: use RFC3339 format")
+			return
+		}
+	}
+	if toStr := r.URL.Query().Get("to"); toStr != "" {
+		if t, err := time.Parse(time.RFC3339, toStr); err == nil {
+			toTime = t
+		} else {
+			respondError(w, http.StatusBadRequest, "invalid 'to' param: use RFC3339 format")
+			return
+		}
+	}
+
 	query := `SELECT id, actor_id, action, COALESCE(target_type, ''), COALESCE(target_id, ''), details, created_at
 		 FROM audit_logs WHERE 1=1`
 	args := []interface{}{}
@@ -50,6 +68,16 @@ func (h *Handler) ExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 	if actionFilter != "" {
 		query += ` AND action = $` + strconv.Itoa(argIdx)
 		args = append(args, actionFilter)
+		argIdx++
+	}
+	if !fromTime.IsZero() {
+		query += ` AND created_at >= $` + strconv.Itoa(argIdx)
+		args = append(args, fromTime)
+		argIdx++
+	}
+	if !toTime.IsZero() {
+		query += ` AND created_at < $` + strconv.Itoa(argIdx)
+		args = append(args, toTime)
 		argIdx++
 	}
 	query += ` ORDER BY created_at DESC`

@@ -88,6 +88,9 @@ export interface PatchUserRequest {
 export interface AuditLogFilters {
   actor?: string;
   action?: string;
+  // from and to are RFC3339 strings for server-side date-range filtering.
+  from?: string;
+  to?: string;
   limit?: number;
   offset?: number;
 }
@@ -412,6 +415,8 @@ export async function listAuditLogs(filters?: AuditLogFilters): Promise<AuditLog
   const params = new URLSearchParams();
   if (filters?.actor) params.set("actor", filters.actor);
   if (filters?.action) params.set("action", filters.action);
+  if (filters?.from) params.set("from", filters.from);
+  if (filters?.to) params.set("to", filters.to);
   if (filters?.limit) params.set("limit", String(filters.limit));
   if (filters?.offset) params.set("offset", String(filters.offset));
   const qs = params.toString();
@@ -461,16 +466,46 @@ export async function forgotPassword(email: string): Promise<{ message: string }
 // C4: Audit log export — opens a browser download
 export function downloadAuditLogs(
   format: "csv" | "json",
-  filters?: { actor?: string; action?: string },
+  filters?: { actor?: string; action?: string; from?: string; to?: string },
 ): void {
   const params = new URLSearchParams({ format });
   if (filters?.actor) params.set("actor", filters.actor);
   if (filters?.action) params.set("action", filters.action);
+  if (filters?.from) params.set("from", filters.from);
+  if (filters?.to) params.set("to", filters.to);
   const base = getBaseUrl();
   const url = `${base}/api/v1/audit-logs/export?${params.toString()}`;
   // Open in current tab — browser will treat it as a download due to
   // Content-Disposition: attachment on the backend response.
   window.location.href = url;
+}
+
+// B2: On-demand compliance / access-review reports
+export function downloadReport(
+  type: "compliance" | "access-review",
+  format: "csv" | "json",
+  range?: { from?: string; to?: string },
+): void {
+  const params = new URLSearchParams({ type, format });
+  if (range?.from) params.set("from", range.from);
+  if (range?.to) params.set("to", range.to);
+  const base = getBaseUrl();
+  const url = `${base}/api/v1/reports?${params.toString()}`;
+  window.location.href = url;
+}
+
+// B3: Audit integrity — chain verification + retention config
+export interface AuditIntegrityStatus {
+  chainOk: boolean;
+  rowsChecked: number;
+  firstBreakSeq?: number;
+  chainError?: string;
+  retainForSeconds: number;
+  retainForHuman: string;
+}
+
+export async function getAuditIntegrity(): Promise<AuditIntegrityStatus> {
+  return request<AuditIntegrityStatus>("GET", "/api/v1/audit-logs/integrity");
 }
 
 export async function healthCheck(): Promise<HealthStatus> {
