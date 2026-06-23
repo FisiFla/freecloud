@@ -481,6 +481,50 @@ func (h *Handler) ReconcileAllHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusAccepted, map[string]bool{"queued": true})
 }
 
+// tokenSHA256 returns a hex-encoded SHA-256 digest of the given plaintext.
+// Used to store a "configured" indicator without persisting the plaintext.
+func tokenSHA256(plaintext string) string {
+	h := sha256.Sum256([]byte(plaintext))
+	return fmt.Sprintf("%x", h)
+}
+
+// decryptProvisioningToken reverses encryptProvisioningToken.
+// If PROVISIONING_MASTER_KEY is absent the input is treated as a plain
+// base64-encoded string (dev/test mode, matching the encrypt path).
+func decryptProvisioningToken(ciphertext string) (string, error) {
+	keyB64 := os.Getenv("PROVISIONING_MASTER_KEY")
+	raw, err := base64.StdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", fmt.Errorf("decode ciphertext: %w", err)
+	}
+	if keyB64 == "" {
+		// Dev/test mode: the "ciphertext" is just base64(plaintext).
+		return string(raw), nil
+	}
+	key, err := base64.StdEncoding.DecodeString(keyB64)
+	if err != nil || len(key) != 32 {
+		return "", fmt.Errorf("PROVISIONING_MASTER_KEY must be a base64-encoded 32-byte key")
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(raw) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	nonce, ciphertextBytes := raw[:nonceSize], raw[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertextBytes, nil)
+	if err != nil {
+		return "", fmt.Errorf("decrypt: %w", err)
+	}
+	return string(plaintext), nil
+}
+
 // encryptProvisioningToken encrypts a plaintext bearer token using AES-256-GCM
 // with the key from PROVISIONING_MASTER_KEY (base64-encoded 32 bytes).
 // If the env var is absent, returns a plain base64 encoding (dev/test mode).

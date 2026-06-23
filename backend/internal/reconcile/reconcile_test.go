@@ -105,6 +105,20 @@ func (f *fakeKC) GetUserByID(_ context.Context, userID string) (*gocloak.User, e
 // B1 setup wizard (not used by reconciler — satisfy interface)
 func (f *fakeKC) HasAdminUser(_ context.Context) (bool, error)                  { return false, nil }
 func (f *fakeKC) CreateAdminUser(_ context.Context, _, _ string) (string, error) { return "", nil }
+// D2: SMTP configuration (not used by reconciler — satisfy interface)
+func (f *fakeKC) UpdateRealmSMTP(_ context.Context, _ keycloakpkg.SMTPConfig) error { return nil }
+
+// D3: Identity provider management (not used by reconciler — satisfy interface)
+func (f *fakeKC) ListIdentityProviders(_ context.Context) ([]*gocloak.IdentityProviderRepresentation, error) {
+	return nil, nil
+}
+func (f *fakeKC) CreateIdentityProvider(_ context.Context, _, _, _ string, _ map[string]string) error {
+	return nil
+}
+func (f *fakeKC) UpdateIdentityProvider(_ context.Context, _, _ string, _ map[string]string) error {
+	return nil
+}
+func (f *fakeKC) DeleteIdentityProvider(_ context.Context, _ string) error { return nil }
 
 // fakeRows implements pgx.Rows backed by a string slice.
 type fakeRows struct {

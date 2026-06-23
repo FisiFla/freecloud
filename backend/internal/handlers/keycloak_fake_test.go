@@ -60,6 +60,13 @@ type fakeKeycloak struct {
 	// B1 (setup wizard): provisioning-state helpers.
 	hasAdminUserFn    func(ctx context.Context) (bool, error)
 	createAdminUserFn func(ctx context.Context, email, password string) (string, error)
+	// D2: SMTP
+	updateRealmSMTPFn func(ctx context.Context, cfg keycloak.SMTPConfig) error
+	// D3: Identity providers
+	listIdentityProvidersFn   func(ctx context.Context) ([]*gocloak.IdentityProviderRepresentation, error)
+	createIdentityProviderFn  func(ctx context.Context, alias, displayName, providerType string, config map[string]string) error
+	updateIdentityProviderFn  func(ctx context.Context, alias, displayName string, config map[string]string) error
+	deleteIdentityProviderFn  func(ctx context.Context, alias string) error
 }
 
 func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -369,4 +376,43 @@ func (f *fakeKeycloak) CreateAdminUser(ctx context.Context, email, password stri
 		return f.createAdminUserFn(ctx, email, password)
 	}
 	return "fake-admin-id", nil
+func (f *fakeKeycloak) UpdateRealmSMTP(ctx context.Context, cfg keycloak.SMTPConfig) error {
+	if f.updateRealmSMTPFn != nil {
+		return f.updateRealmSMTPFn(ctx, cfg)
+	}
+	return nil
+}
+
+func (f *fakeKeycloak) ListIdentityProviders(ctx context.Context) ([]*gocloak.IdentityProviderRepresentation, error) {
+	if f.listIdentityProvidersFn != nil {
+		return f.listIdentityProvidersFn(ctx)
+	}
+	alias := "google"
+	displayName := "Google"
+	providerID := "google"
+	enabled := true
+	return []*gocloak.IdentityProviderRepresentation{
+		{Alias: &alias, DisplayName: &displayName, ProviderID: &providerID, Enabled: &enabled},
+	}, nil
+}
+
+func (f *fakeKeycloak) CreateIdentityProvider(ctx context.Context, alias, displayName, providerType string, config map[string]string) error {
+	if f.createIdentityProviderFn != nil {
+		return f.createIdentityProviderFn(ctx, alias, displayName, providerType, config)
+	}
+	return nil
+}
+
+func (f *fakeKeycloak) UpdateIdentityProvider(ctx context.Context, alias, displayName string, config map[string]string) error {
+	if f.updateIdentityProviderFn != nil {
+		return f.updateIdentityProviderFn(ctx, alias, displayName, config)
+	}
+	return nil
+}
+
+func (f *fakeKeycloak) DeleteIdentityProvider(ctx context.Context, alias string) error {
+	if f.deleteIdentityProviderFn != nil {
+		return f.deleteIdentityProviderFn(ctx, alias)
+	}
+	return nil
 }
