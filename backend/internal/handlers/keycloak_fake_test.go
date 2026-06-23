@@ -17,7 +17,9 @@ type fakeKeycloak struct {
 	updateUserFn             func(ctx context.Context, userID, firstName, lastName, department string, enabled bool) error
 	logoutSessionsFn         func(ctx context.Context, userID string) error
 	getUserSessionsFn        func(ctx context.Context, userID string) ([]*gocloak.UserSessionRepresentation, error)
-	createClientFn           func(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error)
+	createClientFn           func(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string, opts *keycloak.SAMLOptions) (string, error)
+	getSAMLIdPInitiatedURLFn func(ctx context.Context, keycloakClientID string) (string, error)
+	getSAMLMetadataXMLFn     func(ctx context.Context) (string, error)
 	deleteClientFn           func(ctx context.Context, clientID string) error
 	assignUserToClientFn     func(ctx context.Context, userID, clientID string) error
 	unassignUserFromClientFn func(ctx context.Context, userID, clientID string) error
@@ -101,11 +103,25 @@ func (f *fakeKeycloak) GetUserSessions(ctx context.Context, userID string) ([]*g
 	return nil, nil
 }
 
-func (f *fakeKeycloak) CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string) (string, error) {
+func (f *fakeKeycloak) CreateClient(ctx context.Context, name, protocol string, redirectURIs []string, baseURL string, opts *keycloak.SAMLOptions) (string, error) {
 	if f.createClientFn != nil {
-		return f.createClientFn(ctx, name, protocol, redirectURIs, baseURL)
+		return f.createClientFn(ctx, name, protocol, redirectURIs, baseURL, opts)
 	}
 	return "kc-client-123", nil
+}
+
+func (f *fakeKeycloak) GetSAMLIdPInitiatedURL(ctx context.Context, keycloakClientID string) (string, error) {
+	if f.getSAMLIdPInitiatedURLFn != nil {
+		return f.getSAMLIdPInitiatedURLFn(ctx, keycloakClientID)
+	}
+	return "", nil
+}
+
+func (f *fakeKeycloak) GetSAMLMetadataXML(ctx context.Context) (string, error) {
+	if f.getSAMLMetadataXMLFn != nil {
+		return f.getSAMLMetadataXMLFn(ctx)
+	}
+	return `<?xml version="1.0" encoding="UTF-8"?><EntityDescriptor xmlns="urn:oasis:names:tc:SAML:2.0:metadata" entityID="stub"/>`, nil
 }
 
 func (f *fakeKeycloak) DeleteClient(ctx context.Context, clientID string) error {
