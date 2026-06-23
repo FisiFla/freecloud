@@ -28,7 +28,8 @@ const (
 	EventReconcileDrift     = "reconcile_drift"
 	EventComplianceFailure  = "compliance_failure"
 	EventAccessBlocked      = "access_blocked"      // fired by access_eval when posture denies (A4)
-	EventProvisioningFailed = "provisioning_failed" // fired when outbound provisioning fails (A4)
+	EventProvisioningFailed = "provisioning_failed"  // fired when outbound provisioning fails (A4)
+	EventAccessReviewDue    = "access_review_due"    // fired when a review campaign is approaching due date
 )
 
 // notifyErrors counts notification failures by channel and event type.
@@ -61,6 +62,7 @@ type EventToggles struct {
 	Compliance    bool
 	AccessBlocked bool
 	Provisioning  bool
+	ReviewDue     bool
 }
 
 // MultiNotifier fans out to multiple Notifiers. A per-notifier failure is
@@ -120,6 +122,8 @@ func (m *MultiNotifier) eventEnabled(eventType string) bool {
 		return m.toggles.AccessBlocked
 	case EventProvisioningFailed:
 		return m.toggles.Provisioning
+	case EventAccessReviewDue:
+		return m.toggles.ReviewDue
 	}
 	return true
 }

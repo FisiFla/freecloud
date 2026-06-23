@@ -396,3 +396,27 @@ func (e *Engine) recordError(ctx context.Context, appID, userID, remoteID string
 		zap.Int("retry_count", newRetryCount), zap.Error(cause))
 	return fmt.Errorf("provisioning: connector error (retry %d/%d): %w", newRetryCount, maxRetries, cause)
 }
+
+// ApplyAttributeMap applies the attribute map overrides to the default SCIM field mapping.
+// Default fields: userName=user.Email, givenName=user.FirstName, familyName=user.LastName, department=user.Department.
+// For each entry in attrMap, if the key matches a default field name, the key is renamed to the value.
+func ApplyAttributeMap(user ProvisionableUser, attrMap map[string]string) map[string]any {
+	defaults := map[string]any{
+		"userName":   user.Email,
+		"givenName":  user.FirstName,
+		"familyName": user.LastName,
+		"department": user.Department,
+	}
+	if len(attrMap) == 0 {
+		return defaults
+	}
+	result := make(map[string]any, len(defaults))
+	for field, value := range defaults {
+		if remoteKey, ok := attrMap[field]; ok && remoteKey != "" {
+			result[remoteKey] = value
+		} else {
+			result[field] = value
+		}
+	}
+	return result
+}

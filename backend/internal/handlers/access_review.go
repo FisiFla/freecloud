@@ -19,6 +19,7 @@ type ReviewCampaign struct {
 	CreatedBy string  `json:"createdBy"`
 	CreatedAt string  `json:"createdAt"`
 	ClosedAt  *string `json:"closedAt,omitempty"`
+	DueDate   *string `json:"dueDate,omitempty"`
 }
 
 // ReviewItem represents a single user-resource access record in a campaign.
@@ -37,7 +38,8 @@ type ReviewItem struct {
 
 // CreateCampaignRequest is the body for POST /api/v1/campaigns.
 type CreateCampaignRequest struct {
-	Name string `json:"name"`
+	Name    string `json:"name"`
+	DueDate string `json:"dueDate,omitempty"`
 }
 
 // DecideRequest is the body for POST /api/v1/campaigns/{id}/items/{itemId}/decide.
@@ -64,6 +66,13 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
+	var dueDatePtr *time.Time
+	if req.DueDate != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339, req.DueDate); parseErr == nil {
+			dueDatePtr = &parsed
+		}
+	}
+
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		h.logger.Error("failed to begin campaign transaction", zap.Error(err))
@@ -75,8 +84,8 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 	var campaignID string
 	var createdAt time.Time
 	err = tx.QueryRow(ctx,
-		`INSERT INTO review_campaigns (name, created_by) VALUES ($1, $2) RETURNING id, created_at`,
-		req.Name, actorID,
+		`INSERT INTO review_campaigns (name, created_by, due_date) VALUES ($1, $2, $3) RETURNING id, created_at`,
+		req.Name, actorID, dueDatePtr,
 	).Scan(&campaignID, &createdAt)
 	if err != nil {
 		h.logger.Error("failed to create campaign", zap.Error(err))
@@ -103,13 +112,18 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respondJSON(w, http.StatusCreated, ReviewCampaign{
+	resp := ReviewCampaign{
 		ID:        campaignID,
 		Name:      req.Name,
 		Status:    "open",
 		CreatedBy: actorID,
 		CreatedAt: createdAt.Format(time.RFC3339),
-	})
+	}
+	if dueDatePtr != nil {
+		s := dueDatePtr.Format(time.RFC3339)
+		resp.DueDate = &s
+	}
+	respondJSON(w, http.StatusCreated, resp)
 }
 
 // ListCampaigns lists all campaigns.
@@ -120,7 +134,7 @@ func (h *Handler) ListCampaigns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := h.db.Query(r.Context(),
-		`SELECT id, name, status, created_by, created_at, closed_at
+		`SELECT id, name, status, created_by, created_at, closed_at, due_date
 		 FROM review_campaigns ORDER BY created_at DESC LIMIT 100`,
 	)
 	if err != nil {
@@ -134,7 +148,8 @@ func (h *Handler) ListCampaigns(w http.ResponseWriter, r *http.Request) {
 		var c ReviewCampaign
 		var createdAt time.Time
 		var closedAt *time.Time
-		if err := rows.Scan(&c.ID, &c.Name, &c.Status, &c.CreatedBy, &createdAt, &closedAt); err != nil {
+		var dueDate *time.Time
+		if err := rows.Scan(&c.ID, &c.Name, &c.Status, &c.CreatedBy, &createdAt, &closedAt, &dueDate); err != nil {
 			h.logger.Error("failed to scan campaign row", zap.Error(err))
 			respondError(w, http.StatusInternalServerError, "internal error")
 			return
@@ -143,6 +158,10 @@ func (h *Handler) ListCampaigns(w http.ResponseWriter, r *http.Request) {
 		if closedAt != nil {
 			s := closedAt.Format(time.RFC3339)
 			c.ClosedAt = &s
+		}
+		if dueDate != nil {
+			s := dueDate.Format(time.RFC3339)
+			c.DueDate = &s
 		}
 		campaigns = append(campaigns, c)
 	}

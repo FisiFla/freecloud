@@ -139,6 +139,11 @@ var migrations = []migration{
 		name:      "access_policy_conditions",
 		statement: Migration039,
 	},
+	{
+		id:        40,
+		name:      "review_schedules_and_due_dates",
+		statement: Migration040,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -620,6 +625,25 @@ ALTER TABLE app_access_policies
     ADD COLUMN IF NOT EXISTS allowed_time_end   TIME,
     ADD COLUMN IF NOT EXISTS network_allowlist     TEXT[] NOT NULL DEFAULT '{}',
     ADD COLUMN IF NOT EXISTS geo_country_allowlist TEXT[] NOT NULL DEFAULT '{}';
+`
+
+// Migration040 adds the review_schedules table for recurring access review scheduling
+// and adds an optional due_date column to review_campaigns.
+const Migration040 = `
+CREATE TABLE IF NOT EXISTS review_schedules (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    cadence     TEXT NOT NULL CHECK (cadence IN ('weekly', 'monthly', 'quarterly')),
+    day_of_month INTEGER CHECK (day_of_month BETWEEN 1 AND 28),
+    next_run_at TIMESTAMPTZ NOT NULL,
+    last_run_at TIMESTAMPTZ,
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    created_by  TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_review_schedules_next_run ON review_schedules(next_run_at) WHERE enabled = true;
+ALTER TABLE review_campaigns ADD COLUMN IF NOT EXISTS due_date TIMESTAMPTZ;
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

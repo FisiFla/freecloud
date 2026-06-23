@@ -131,6 +131,14 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			// A4: Outbound provisioning config + resync — write endpoints.
 			r.With(middleware.RequirePermission(middleware.PermManageApps)).Put("/api/v1/apps/{appId}/provisioning", h.UpsertProvisioningConfig)
 			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/{appId}/provisioning/resync/{userId}", h.ResyncUser)
+			// E1: Provisioning dry-run preview
+			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/{appId}/provisioning/dry-run", h.DryRunProvisioning)
+			// E2: Reconcile all provisioning records
+			r.With(middleware.RequirePermission(middleware.PermManageApps)).Post("/api/v1/apps/{appId}/provisioning/reconcile-all", h.ReconcileAllHandler)
+			// E3: Review schedule writes
+			r.With(middleware.RequirePermission(middleware.PermManageCampaigns)).Post("/api/v1/review-schedules", h.CreateReviewSchedule)
+			r.With(middleware.RequirePermission(middleware.PermManageCampaigns)).Patch("/api/v1/review-schedules/{id}", h.UpdateReviewSchedule)
+			r.With(middleware.RequirePermission(middleware.PermManageCampaigns)).Delete("/api/v1/review-schedules/{id}", h.DeleteReviewSchedule)
 			// C1: LDAP/AD federation sources — write endpoints.
 			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Post("/api/v1/federation/sources", h.CreateFederationSource)
 			r.With(middleware.RequirePermission(middleware.PermManageUsers)).Patch("/api/v1/federation/sources/{id}", h.UpdateFederationSource)
@@ -199,6 +207,10 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.Post("/api/v1/campaigns", h.CreateCampaign)
 			r.Post("/api/v1/campaigns/{id}/complete", h.CompleteCampaign)
 		})
+
+		// E3: Review schedules read + campaign export
+		r.With(middleware.RequirePermission(middleware.PermReviewCampaigns)).Get("/api/v1/review-schedules", h.ListReviewSchedules)
+		r.With(middleware.RequirePermission(middleware.PermReviewCampaigns)).Get("/api/v1/campaigns/{id}/export", h.ExportCampaign)
 
 		// C4: Self-service portal — available to all authenticated roles.
 		r.Group(func(r chi.Router) {

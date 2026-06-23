@@ -49,14 +49,15 @@ type ProvisioningConfigResponse struct {
 
 // ProvisioningStateEntry represents one provisioning_state row.
 type ProvisioningStateEntry struct {
-	ID         string  `json:"id"`
-	UserID     string  `json:"userId"`
-	UserEmail  string  `json:"userEmail,omitempty"`
-	RemoteID   string  `json:"remoteId,omitempty"`
-	Status     string  `json:"status"`
-	LastSyncAt *string `json:"lastSyncAt,omitempty"`
-	LastError  string  `json:"lastError,omitempty"`
-	RetryCount int     `json:"retryCount"`
+	ID          string  `json:"id"`
+	UserID      string  `json:"userId"`
+	UserEmail   string  `json:"userEmail,omitempty"`
+	RemoteID    string  `json:"remoteId,omitempty"`
+	Status      string  `json:"status"`
+	LastSyncAt  *string `json:"lastSyncAt,omitempty"`
+	LastError   string  `json:"lastError,omitempty"`
+	RetryCount  int     `json:"retryCount"`
+	NextRetryAt *string `json:"nextRetryAt,omitempty"`
 }
 
 // GetProvisioningConfig returns the provisioning config for an app.
@@ -228,7 +229,7 @@ func (h *Handler) ListProvisioningState(w http.ResponseWriter, r *http.Request) 
 
 	rows, err := h.db.Query(r.Context(),
 		`SELECT ps.id::TEXT, ps.user_id::TEXT, COALESCE(u.email, ''), COALESCE(ps.remote_id, ''),
-		        ps.status, ps.last_sync_at, COALESCE(ps.last_error, ''), ps.retry_count
+		        ps.status, ps.last_sync_at, COALESCE(ps.last_error, ''), ps.retry_count, ps.next_retry_at
 		 FROM provisioning_state ps
 		 LEFT JOIN users u ON u.keycloak_user_id = ps.user_id
 		 WHERE ps.app_id = $1
@@ -246,13 +247,18 @@ func (h *Handler) ListProvisioningState(w http.ResponseWriter, r *http.Request) 
 	for rows.Next() {
 		var e ProvisioningStateEntry
 		var lastSyncAt *time.Time
-		if err := rows.Scan(&e.ID, &e.UserID, &e.UserEmail, &e.RemoteID, &e.Status, &lastSyncAt, &e.LastError, &e.RetryCount); err != nil {
+		var nextRetryAt *time.Time
+		if err := rows.Scan(&e.ID, &e.UserID, &e.UserEmail, &e.RemoteID, &e.Status, &lastSyncAt, &e.LastError, &e.RetryCount, &nextRetryAt); err != nil {
 			h.logger.Warn("list provisioning state: scan failed", zap.Error(err))
 			continue
 		}
 		if lastSyncAt != nil {
 			s := lastSyncAt.Format(time.RFC3339)
 			e.LastSyncAt = &s
+		}
+		if nextRetryAt != nil {
+			s := nextRetryAt.Format(time.RFC3339)
+			e.NextRetryAt = &s
 		}
 		entries = append(entries, e)
 	}
@@ -321,6 +327,154 @@ func (h *Handler) ResyncUser(w http.ResponseWriter, r *http.Request) {
 		if err := h.provisionEngine.ProvisionUser(resyncCtx, capturedAppID, capturedUser); err != nil {
 			h.logger.Warn("resync user: provisioning failed",
 				zap.String("app_id", capturedAppID), zap.String("user_id", userID), zap.Error(err))
+		}
+	}()
+
+	respondJSON(w, http.StatusAccepted, map[string]bool{"queued": true})
+}
+
+// DryRunProvisioningRequest is the body for POST /api/v1/apps/{appId}/provisioning/dry-run.
+type DryRunProvisioningRequest struct {
+	UserID string `json:"userId"`
+}
+
+// DryRunProvisioningResponse is returned by the dry-run endpoint.
+type DryRunProvisioningResponse struct {
+	UserID        string            `json:"userId"`
+	ConnectorType string            `json:"connectorType"`
+	EndpointURL   string            `json:"endpointUrl,omitempty"`
+	Payload       map[string]any    `json:"payload"`
+	AttributeMap  map[string]string `json:"attributeMap"`
+}
+
+// DryRunProvisioning previews what payload would be sent for a given user without calling the connector.
+// Route: POST /api/v1/apps/{appId}/provisioning/dry-run
+func (h *Handler) DryRunProvisioning(w http.ResponseWriter, r *http.Request) {
+	appID := chi.URLParam(r, "appId")
+	if !isValidUUID(appID) {
+		respondError(w, http.StatusBadRequest, "invalid appId")
+		return
+	}
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+
+	var req DryRunProvisioningRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if !isValidUUID(req.UserID) {
+		respondError(w, http.StatusBadRequest, "invalid userId")
+		return
+	}
+
+	ctx := r.Context()
+	actorID := middleware.GetActorID(ctx)
+
+	// Load config.
+	var (
+		connectorType     string
+		endpointURL       string
+		attributeMapBytes []byte
+	)
+	err := h.db.QueryRow(ctx,
+		`SELECT connector_type, COALESCE(endpoint_url, ''), attribute_map
+		 FROM app_provisioning_config WHERE app_id = $1`,
+		appID,
+	).Scan(&connectorType, &endpointURL, &attributeMapBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "provisioning config not found for this app")
+			return
+		}
+		h.logger.Error("dry-run provisioning: load config failed", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	attrMap := make(map[string]string)
+	if len(attributeMapBytes) > 0 {
+		_ = json.Unmarshal(attributeMapBytes, &attrMap)
+	}
+
+	// Load user.
+	var email, firstName, lastName, department string
+	err = h.db.QueryRow(ctx,
+		`SELECT email, first_name, last_name, COALESCE(department, '') FROM users WHERE keycloak_user_id = $1`,
+		req.UserID,
+	).Scan(&email, &firstName, &lastName, &department)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			respondError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		h.logger.Error("dry-run provisioning: load user failed", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	user := provisioning.ProvisionableUser{
+		ID:         req.UserID,
+		Email:      email,
+		FirstName:  firstName,
+		LastName:   lastName,
+		Department: department,
+	}
+	payload := provisioning.ApplyAttributeMap(user, attrMap)
+
+	_ = h.writeAuditEntryBestEffort(actorID, "provisioning.dry_run", "app", appID,
+		map[string]interface{}{"user_id": req.UserID})
+
+	respondJSON(w, http.StatusOK, DryRunProvisioningResponse{
+		UserID:        req.UserID,
+		ConnectorType: connectorType,
+		EndpointURL:   endpointURL,
+		Payload:       payload,
+		AttributeMap:  attrMap,
+	})
+}
+
+// ReconcileAllHandler triggers reconciliation for all error/pending provisioning records for an app.
+// Route: POST /api/v1/apps/{appId}/provisioning/reconcile-all
+func (h *Handler) ReconcileAllHandler(w http.ResponseWriter, r *http.Request) {
+	appID := chi.URLParam(r, "appId")
+	if !isValidUUID(appID) {
+		respondError(w, http.StatusBadRequest, "invalid appId")
+		return
+	}
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if h.provisionEngine == nil {
+		respondError(w, http.StatusServiceUnavailable, "provisioning engine not configured")
+		return
+	}
+
+	ctx := r.Context()
+	actorID := middleware.GetActorID(ctx)
+
+	// Reset next_retry_at so ReconcileAll picks up error/pending rows immediately.
+	_, err := h.db.Exec(ctx,
+		`UPDATE provisioning_state SET next_retry_at = NULL WHERE app_id = $1 AND status IN ('error', 'pending')`,
+		appID,
+	)
+	if err != nil {
+		h.logger.Error("reconcile-all: reset retry failed", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	_ = h.writeAuditEntryBestEffort(actorID, "provisioning.reconcile_all", "app", appID,
+		map[string]interface{}{})
+
+	go func() {
+		reconcileCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := h.provisionEngine.ReconcileAll(reconcileCtx); err != nil {
+			h.logger.Warn("reconcile-all: engine error", zap.Error(err))
 		}
 	}()
 
