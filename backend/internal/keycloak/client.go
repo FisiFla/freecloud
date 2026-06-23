@@ -1451,6 +1451,8 @@ func (k *KeycloakClient) CreateAdminUser(ctx context.Context, email, password st
 
 	zap.L().Info("created admin user", zap.String("user_id", userID), zap.String("email", email))
 	return userID, nil
+}
+
 // UpdateRealmSMTP writes SMTP relay settings into the Keycloak realm so that
 // Keycloak's outbound emails (password reset, MFA) use the org's mail relay.
 // It reads the current realm first to avoid clobbering unrelated fields.

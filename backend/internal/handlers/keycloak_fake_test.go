@@ -376,6 +376,8 @@ func (f *fakeKeycloak) CreateAdminUser(ctx context.Context, email, password stri
 		return f.createAdminUserFn(ctx, email, password)
 	}
 	return "fake-admin-id", nil
+}
+
 func (f *fakeKeycloak) UpdateRealmSMTP(ctx context.Context, cfg keycloak.SMTPConfig) error {
 	if f.updateRealmSMTPFn != nil {
 		return f.updateRealmSMTPFn(ctx, cfg)
