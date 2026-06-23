@@ -69,6 +69,13 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// GET /admin/realms/freecloud/roles/admin — admin realm role exists.
+	if strings.HasSuffix(p, "/roles/admin") && m == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": "role-admin", "name": "admin"})
+		return
+	}
+
 	// GET/POST /admin/realms/freecloud/groups
 	if p == "/admin/realms/freecloud/groups" || p == "/admin/realms/freecloud/groups/" {
 		if m == http.MethodGet {
@@ -186,15 +193,13 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// GET realm-management roles
-	if strings.HasSuffix(p, "/clients/rm-uuid/roles/manage-users") && m == http.MethodGet {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"role-mu-id","name":"manage-users"}`))
-		return
-	}
-	if strings.HasSuffix(p, "/clients/rm-uuid/roles/manage-clients") && m == http.MethodGet {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"role-mc-id","name":"manage-clients"}`))
-		return
+	if idx := strings.Index(p, "/clients/rm-uuid/roles/"); idx != -1 && m == http.MethodGet {
+		name := p[idx+len("/clients/rm-uuid/roles/"):]
+		if name != "" && !strings.Contains(name, "/") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"role-` + name + `-id","name":"` + name + `"}`))
+			return
+		}
 	}
 
 	// GET /admin/realms/freecloud/authentication/flows
