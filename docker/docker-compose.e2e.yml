@@ -103,7 +103,13 @@ services:
       KEYCLOAK_URL: http://keycloak-e2e:8080
       KEYCLOAK_REALM: freecloud-e2e
       KEYCLOAK_CLIENT_ID: freecloud-service
+      # KEYCLOAK_CLIENT_SECRET pins the secret so e2e tests can authenticate
+      # as the service account with a known value. The bootstrap engine sees
+      # this and sets the same secret when provisioning freecloud-service.
       KEYCLOAK_CLIENT_SECRET: freecloud-secret
+      # Bootstrap credentials — master-admin used on startup to self-provision Keycloak.
+      KC_BOOTSTRAP_ADMIN: admin
+      KC_BOOTSTRAP_PASSWORD: admin
       FLEET_URL: http://fleetdm-e2e:8080
       FLEET_API_TOKEN: e2e-fleet-token
       FLEET_WEBHOOK_SECRET: e2e-webhook-secret
@@ -114,6 +120,8 @@ services:
       LDAP_BIND_PASSWORD: adminpassword
     depends_on:
       postgres-e2e:
+        condition: service_healthy
+      keycloak-e2e:
         condition: service_healthy
       fleetdm-e2e:
         condition: service_healthy

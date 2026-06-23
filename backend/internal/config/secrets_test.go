@@ -70,14 +70,15 @@ func TestResolveSecretMissingFileReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestProductionValidateStillRejectsPlaceholder verifies that after wiring
-// resolveSecret, Validate() still rejects a placeholder/empty secret.
-func TestProductionValidateStillRejectsPlaceholder(t *testing.T) {
+// TestProductionValidateAcceptsEmptyKeycloakSecret verifies that Validate() does
+// NOT reject a missing KEYCLOAK_CLIENT_SECRET: the bootstrap engine sets it at
+// runtime from Keycloak, so the operator is not required to provide it.
+func TestProductionValidateAcceptsEmptyKeycloakSecret(t *testing.T) {
 	setSecureProdEnv(t)
 	t.Setenv("KEYCLOAK_CLIENT_SECRET", "")
 	t.Setenv("KEYCLOAK_CLIENT_SECRET_FILE", "")
 	cfg := Load()
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected Validate to fail when KEYCLOAK_CLIENT_SECRET is empty in production")
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("KEYCLOAK_CLIENT_SECRET is self-managed by bootstrap; Validate() must accept empty, got: %v", err)
 	}
 }
