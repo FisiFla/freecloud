@@ -120,6 +120,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 			// A3: per-app access policy write
 			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Put("/api/v1/apps/{appId}/policy", h.UpsertAppAccessPolicy)
+			// D2: per-app policy preview (dry-run eval)
+			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Post("/api/v1/apps/{appId}/policy/preview", h.PreviewAppPolicy)
 
 			// B2: Fleet team management (team-scoped MDM policies)
 			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Post("/api/v1/teams", h.CreateTeam)

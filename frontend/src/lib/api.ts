@@ -670,6 +670,11 @@ export interface AppAccessPolicy {
   requireEnrolled: boolean;
   requireDiskEncrypted: boolean;
   requireNoCriticalVulns: boolean;
+  // D1: extended conditions
+  allowedTimeStart?: string;    // "HH:MM" UTC
+  allowedTimeEnd?: string;      // "HH:MM" UTC
+  networkAllowlist?: string[];  // IP/CIDR strings
+  geoCountryAllowlist?: string[]; // ISO 3166-1 alpha-2 codes
   updatedAt?: string;
 }
 
@@ -685,6 +690,26 @@ export async function upsertAppPolicy(
     appId,
     ...policy,
   });
+}
+
+// D2: policy preview (dry-run evaluation)
+export interface PolicyPreviewRequest {
+  deviceId?: string;
+  clientIp?: string;
+  evalTime?: string; // RFC3339
+  userId?: string;
+}
+
+export interface AccessEvalResponse {
+  allow: boolean;
+  reasons?: string[];
+}
+
+export async function previewAppPolicy(
+  appId: string,
+  req: PolicyPreviewRequest,
+): Promise<AccessEvalResponse> {
+  return request<AccessEvalResponse>("POST", `/api/v1/apps/${appId}/policy/preview`, req);
 }
 
 // C2 (Epic C): API token management
