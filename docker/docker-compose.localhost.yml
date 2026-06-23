@@ -1,0 +1,173 @@
+# C2 — All-in-one localhost compose (no TLS, no required env).
+#
+# Bring up with:
+#   docker compose -f docker/docker-compose.localhost.yml up --build
+#   or: make localhost-up
+#
+# Then open http://localhost:3000.
+#
+# How secrets work (C1):
+#   `secrets-init` runs first and writes .secrets/secrets.env on first boot,
+#   then exits (idempotent — skips generation if the file already exists).
+#   All services that need those secrets load the file via env_file
+#   (required: false so `docker compose config` passes before first run).
+#   Delete .secrets/secrets.env to rotate all generated tokens.
+#
+# Internal credentials (postgres password, Keycloak admin password) are fixed
+# to localhost-only values that compose can safely interpolate in URL strings.
+# They are unreachable outside the Docker bridge network.
+#
+# URL layout:
+#   http://localhost:3000   — dashboard (frontend)
+#   http://localhost:8080   — backend API
+#   http://localhost:8081   — Keycloak admin / OIDC
+#   http://localhost:8082   — FleetDM mock
+#
+# OIDC issuer note:
+#   KC_HOSTNAME=localhost + port 8081 exposed means the browser (OIDC redirects)
+#   and Next.js server-side token validation both use the same issuer URL:
+#   http://localhost:8081/realms/freecloud
+
+services:
+
+  # ── Secret generation (C1) ────────────────────────────────────────────────
+  secrets-init:
+    image: busybox:1.36
+    volumes:
+      - ../.secrets:/run/freecloud
+      - ./init-secrets/generate.sh:/generate.sh:ro
+    entrypoint: ["/bin/sh", "/generate.sh"]
+    restart: "no"
+
+  # ── Postgres ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: freecloud
+      POSTGRES_PASSWORD: freecloud-local
+      POSTGRES_DB: freecloud
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init-keycloak-db.sql:/docker-entrypoint-initdb.d/init-keycloak-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U freecloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
+  # ── Keycloak ──────────────────────────────────────────────────────────────
+  keycloak:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.keycloak
+    restart: unless-stopped
+    command: start-dev
+    env_file:
+      - path: ../.secrets/secrets.env
+        required: false
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin-local
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_DATABASE: keycloak
+      KC_DB_USERNAME: freecloud
+      KC_DB_PASSWORD: freecloud-local
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: 8081
+      ACCESS_EVAL_URL: http://backend:8080/api/v1/access/evaluate
+      # ACCESS_EVAL_TOKEN: injected from .secrets/secrets.env
+      POSTURE_CHECK_ENABLED: "false"
+    ports:
+      - "8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── FleetDM mock ──────────────────────────────────────────────────────────
+  fleetdm-mock:
+    build:
+      context: ./fleetdm-mock
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: ../.secrets/secrets.env
+        required: false
+    environment:
+      BACKEND_URL: http://backend:8080
+      # FLEET_WEBHOOK_SECRET: injected from .secrets/secrets.env
+    ports:
+      - "8082:8080"
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+
+  # ── Backend ───────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - path: ../.secrets/secrets.env
+        required: false
+    environment:
+      APP_ENV: development
+      PORT: "8080"
+      DATABASE_URL: postgres://freecloud:freecloud-local@postgres:5432/freecloud?sslmode=disable
+      KC_BOOTSTRAP_ADMIN: admin
+      KC_BOOTSTRAP_PASSWORD: admin-local
+      # Internal URL for bootstrap admin login; JWT issuer validation uses the
+      # issuer embedded in the token (http://localhost:8081/realms/freecloud).
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: freecloud
+      KEYCLOAK_CLIENT_ID: freecloud-service
+      KEYCLOAK_AUDIENCE: freecloud-dashboard
+      # KEYCLOAK_CLIENT_SECRET: self-managed by Epic A bootstrap.
+      FLEET_URL: http://fleetdm-mock:8080
+      # FLEET_API_TOKEN not validated in APP_ENV=development.
+      FLEET_API_TOKEN: localhost-dev-fleet-token
+      # FLEET_WEBHOOK_SECRET, SCIM_BEARER_TOKEN, ACCESS_EVAL_TOKEN: from secrets.env
+      CORS_ORIGIN: http://localhost:3000
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      fleetdm-mock:
+        condition: service_started
+
+  # ── Frontend ──────────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8080
+    restart: unless-stopped
+    env_file:
+      - path: ../.secrets/secrets.env
+        required: false
+    environment:
+      # NODE_ENV=development so requiredProdEnv() uses safe fallbacks instead of
+      # throwing for optional secrets (AUTH_KEYCLOAK_SECRET for the public client).
+      NODE_ENV: development
+      AUTH_URL: http://localhost:3000
+      # AUTH_SECRET: injected from .secrets/secrets.env (requiredEnv, always enforced).
+      AUTH_KEYCLOAK_ID: freecloud-dashboard
+      # Dashboard client is public (PKCE flow, no client secret).
+      AUTH_KEYCLOAK_SECRET: ""
+      AUTH_KEYCLOAK_ISSUER: http://localhost:8081/realms/freecloud
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
