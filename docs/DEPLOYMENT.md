@@ -170,6 +170,104 @@ encryption. The backend will log a warning at startup if the key is missing and
 > live sync. Use the Generic SCIM 2.0 connector for production outbound
 > provisioning until those connectors are fully implemented.
 
+## Reports
+
+The `/reports` endpoint generates a point-in-time compliance and user-lifecycle
+report in CSV or JSON format.
+
+```
+GET /api/v1/reports          # download the current report (requires PermExportAuditLogs)
+```
+
+The report includes per-user onboard date, device compliance status, last MFA
+event, and current app assignments. Use it for audit evidence or periodic
+executive summaries.
+
+## Conditional Access — Conditions
+
+Per-app access policies support three condition types in addition to device
+posture:
+
+| Condition | Field | Example |
+|---|---|---|
+| Time of day | `allowed_hours` | `{"start": "08:00", "end": "18:00", "tz": "Europe/Berlin"}` |
+| Network / IP | `allowed_networks` | `["10.0.0.0/8", "203.0.113.0/24"]` |
+| Geography | `allowed_countries` | `["DE", "AT"]` |
+
+Conditions are evaluated at login by the Keycloak authenticator SPI. All
+specified conditions must pass for access to be allowed. Omit a field to skip
+that condition.
+
+**Preview / dry-run** a policy change before applying it:
+
+```
+POST /api/v1/apps/{appId}/policy/preview
+```
+
+The request body is the same JSON as `PUT .../policy`. The response returns
+`{"allow": true/false, "reasons": [...]}` for a synthetic evaluation, without
+modifying the stored policy.
+
+## Provisioning Dry-Run and Reconcile
+
+**Dry-run** previews what a full provisioning push would do without sending any
+requests to the downstream connector:
+
+```
+POST /api/v1/apps/{appId}/provisioning/dry-run
+```
+
+The response lists which users would be created, updated, or deactivated.
+Run this after changing connector configuration to verify the expected delta
+before committing.
+
+**Reconcile-all** forces a re-sync of every user currently assigned to the app
+against the downstream connector:
+
+```
+POST /api/v1/apps/{appId}/provisioning/reconcile-all
+```
+
+Use reconcile-all after a connector outage, after bulk-importing users, or when
+the downstream system has drifted from FreeCloud's records. The operation is
+idempotent — running it twice produces the same result.
+
+## Recurring Access Reviews
+
+Review schedules let you automate the creation of access-review campaigns on a
+fixed cadence (e.g. quarterly).
+
+**Create a schedule:**
+
+```
+POST /api/v1/review-schedules
+{
+  "name": "Quarterly app review",
+  "cadence": "quarterly",
+  "scope": "all-apps",
+  "reviewer_role": "helpdesk"
+}
+```
+
+**List / update / delete:**
+
+```
+GET    /api/v1/review-schedules
+PATCH  /api/v1/review-schedules/{id}
+DELETE /api/v1/review-schedules/{id}
+```
+
+All schedule endpoints require `PermManageCampaigns` (super-admin role).
+
+**Export a completed campaign** (CSV / JSON):
+
+```
+GET /api/v1/campaigns/{id}/export
+```
+
+Requires `PermReviewCampaigns`. The export includes every item decision,
+reviewer ID, and timestamp — suitable for audit evidence.
+
 ## Directory Federation (LDAP / Active Directory)
 
 FreeCloud can federate with an existing LDAP directory or Active Directory,
