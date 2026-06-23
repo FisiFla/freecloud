@@ -81,6 +81,15 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Post("/api/v1/auth/forgot-password", h.ForgotPassword)
 	})
 
+	// B1 — First-run setup. Unauthenticated but fail-closed once provisioned.
+	// Rate-limited to prevent brute-force attempts on the setup window.
+	setupLimiter := middleware.NewRateLimiter(10, time.Minute)
+	r.Group(func(r chi.Router) {
+		r.Use(setupLimiter.Middleware)
+		r.Get("/api/v1/setup/status", h.SetupStatus)
+		r.Post("/api/v1/setup", h.Setup)
+	})
+
 	// Rate limiter for mutating endpoints: 20 requests / minute / client.
 	mutateLimiter := middleware.NewRateLimiter(20, time.Minute)
 

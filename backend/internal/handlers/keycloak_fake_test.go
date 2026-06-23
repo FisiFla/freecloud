@@ -57,6 +57,9 @@ type fakeKeycloak struct {
 	testLDAPConnectionFn        func(ctx context.Context, componentID, connectionURL, bindDN, bindPassword string) error
 	triggerFederationSyncFn     func(ctx context.Context, componentID, action string) error
 	getUserByIDFn               func(ctx context.Context, userID string) (*gocloak.User, error)
+	// B1 (setup wizard): provisioning-state helpers.
+	hasAdminUserFn    func(ctx context.Context) (bool, error)
+	createAdminUserFn func(ctx context.Context, email, password string) (string, error)
 }
 
 func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -352,4 +355,18 @@ func (f *fakeKeycloak) GetUserByID(ctx context.Context, userID string) (*gocloak
 		return f.getUserByIDFn(ctx, userID)
 	}
 	return &gocloak.User{ID: &userID}, nil
+}
+
+func (f *fakeKeycloak) HasAdminUser(ctx context.Context) (bool, error) {
+	if f.hasAdminUserFn != nil {
+		return f.hasAdminUserFn(ctx)
+	}
+	return false, nil
+}
+
+func (f *fakeKeycloak) CreateAdminUser(ctx context.Context, email, password string) (string, error) {
+	if f.createAdminUserFn != nil {
+		return f.createAdminUserFn(ctx, email, password)
+	}
+	return "fake-admin-id", nil
 }
