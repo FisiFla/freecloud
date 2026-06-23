@@ -426,6 +426,20 @@ func TestAccessEvalLoadsPolicyByKeycloakClientID(t *testing.T) {
 					*(dest[1].(*bool)) = true
 					*(dest[2].(*bool)) = false
 					*(dest[3].(**int)) = nil
+					// D1 new columns: dest[4]=allowedTimeStart, dest[5]=allowedTimeEnd,
+					// dest[6]=networkAllowlist, dest[7]=geoCountryAllowlist — zero values.
+					if len(dest) > 4 {
+						*(dest[4].(**string)) = nil
+					}
+					if len(dest) > 5 {
+						*(dest[5].(**string)) = nil
+					}
+					if len(dest) > 6 {
+						*(dest[6].(*[]string)) = nil
+					}
+					if len(dest) > 7 {
+						*(dest[7].(*[]string)) = nil
+					}
 					return nil
 				}}
 			default:
@@ -481,6 +495,20 @@ func TestAccessEvalLegacyMaxOSAgePolicyFailsClosed(t *testing.T) {
 					*(dest[1].(*bool)) = false
 					*(dest[2].(*bool)) = false
 					*(dest[3].(**int)) = &maxAge
+					// D1 new columns: dest[4]=allowedTimeStart, dest[5]=allowedTimeEnd,
+					// dest[6]=networkAllowlist, dest[7]=geoCountryAllowlist — zero values.
+					if len(dest) > 4 {
+						*(dest[4].(**string)) = nil
+					}
+					if len(dest) > 5 {
+						*(dest[5].(**string)) = nil
+					}
+					if len(dest) > 6 {
+						*(dest[6].(*[]string)) = nil
+					}
+					if len(dest) > 7 {
+						*(dest[7].(*[]string)) = nil
+					}
 					return nil
 				}}
 			default:

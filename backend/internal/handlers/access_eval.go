@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -35,6 +36,9 @@ type AccessEvalRequest struct {
 	// DeviceID is an explicit FleetDM host ID to evaluate. If empty, all
 	// devices enrolled for the user are checked.
 	DeviceID string `json:"deviceId,omitempty"`
+	// ClientIP is the originating client IP address for network/geo conditions.
+	// If empty, the handler falls back to r.RemoteAddr.
+	ClientIP string `json:"clientIp,omitempty"`
 }
 
 // AccessEvalResponse is the JSON response from the posture evaluation endpoint.
@@ -52,6 +56,11 @@ type appPolicy struct {
 	RequireDiskEncrypted   bool
 	RequireNoCriticalVulns bool
 	MaxOsAgeDays           *int
+	// D1: conditional access conditions (Migration039).
+	AllowedTimeStart    *string  // "HH:MM" UTC
+	AllowedTimeEnd      *string  // "HH:MM" UTC
+	NetworkAllowlist    []string // IP/CIDR strings; empty = unrestricted
+	GeoCountryAllowlist []string // ISO 3166-1 alpha-2; empty = unrestricted
 }
 
 // accessEvalBearerMiddleware mirrors SCIMBearerMiddleware: an empty token
@@ -93,6 +102,18 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	req.UserID = strings.TrimSpace(req.UserID)
 	req.AppID = strings.TrimSpace(req.AppID)
 	req.DeviceID = strings.TrimSpace(req.DeviceID)
+
+	// Determine effective client IP for network/geo conditions.
+	clientIP := strings.TrimSpace(req.ClientIP)
+	if clientIP == "" {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err == nil {
+			clientIP = host
+		} else {
+			clientIP = r.RemoteAddr
+		}
+	}
+
 	if req.UserID == "" {
 		h.auditAccessDecision("", req.AppID, false, []string{"missing or invalid user identifier"})
 		respondJSON(w, http.StatusOK, AccessEvalResponse{
@@ -202,21 +223,31 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	if req.AppID != "" {
 		var reqEnrolled, reqDisk, reqVulns bool
 		var maxOsAgeDays *int
+		var allowedTimeStart, allowedTimeEnd *string
+		var networkAllowlist, geoCountryAllowlist []string
 		err := h.db.QueryRow(ctx,
 			`SELECT p.require_enrolled, p.require_disk_encrypted, p.require_no_critical_vulns,
-				        p.max_os_age_days
+				        p.max_os_age_days,
+				        p.allowed_time_start, p.allowed_time_end,
+				        p.network_allowlist, p.geo_country_allowlist
 				 FROM app_access_policies p
 				 INNER JOIN connected_apps a ON a.id = p.app_id
 				 WHERE p.app_id::TEXT = $1 OR a.keycloak_client_id = $1
 				 LIMIT 1`,
 			req.AppID,
-		).Scan(&reqEnrolled, &reqDisk, &reqVulns, &maxOsAgeDays)
+		).Scan(&reqEnrolled, &reqDisk, &reqVulns, &maxOsAgeDays,
+			&allowedTimeStart, &allowedTimeEnd,
+			&networkAllowlist, &geoCountryAllowlist)
 		if err == nil {
 			policy = appPolicy{
 				RequireEnrolled:        reqEnrolled,
 				RequireDiskEncrypted:   reqDisk,
 				RequireNoCriticalVulns: reqVulns,
 				MaxOsAgeDays:           maxOsAgeDays,
+				AllowedTimeStart:       allowedTimeStart,
+				AllowedTimeEnd:         allowedTimeEnd,
+				NetworkAllowlist:       networkAllowlist,
+				GeoCountryAllowlist:    geoCountryAllowlist,
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
 			h.logger.Error("access eval: failed to load app policy",
@@ -277,6 +308,10 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 5. Evaluate D1 policy conditions (time window, network, geo).
+	condReasons := evalConditions(policy, clientIP, time.Now().UTC(), h.geoIP)
+	reasons = append(reasons, condReasons...)
+
 	allow := len(reasons) == 0
 	h.auditAccessDecision(req.UserID, req.AppID, allow, reasons)
 	respondJSON(w, http.StatusOK, AccessEvalResponse{
@@ -285,9 +320,91 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// evalConditions evaluates the D1 policy conditions (time window, network allowlist,
+// geo country allowlist) and returns a list of deny reasons. All conditions must
+// pass — any failure appends a reason (fail-closed on misconfiguration).
+func evalConditions(p appPolicy, clientIP string, now time.Time, geoIP GeoIPLookup) []string {
+	var reasons []string
+
+	// Time-window condition: both must be set to activate.
+	if p.AllowedTimeStart != nil && p.AllowedTimeEnd != nil {
+		start, errS := time.Parse("15:04", *p.AllowedTimeStart)
+		end, errE := time.Parse("15:04", *p.AllowedTimeEnd)
+		if errS != nil || errE != nil {
+			reasons = append(reasons, "policy: time window condition is misconfigured")
+		} else {
+			// Compare using minutes-since-midnight to stay timezone-agnostic.
+			nowMins := now.Hour()*60 + now.Minute()
+			startMins := start.Hour()*60 + start.Minute()
+			endMins := end.Hour()*60 + end.Minute()
+			var inWindow bool
+			if startMins <= endMins {
+				inWindow = nowMins >= startMins && nowMins < endMins
+			} else {
+				// Wraps midnight.
+				inWindow = nowMins >= startMins || nowMins < endMins
+			}
+			if !inWindow {
+				reasons = append(reasons, "policy: access not allowed at this time (window: "+
+					*p.AllowedTimeStart+"–"+*p.AllowedTimeEnd+" UTC)")
+			}
+		}
+	}
+
+	// Network allowlist condition.
+	if len(p.NetworkAllowlist) > 0 {
+		ip := net.ParseIP(clientIP)
+		if ip == nil {
+			reasons = append(reasons, "policy: network condition cannot be evaluated (unparseable client IP)")
+		} else {
+			matched := false
+			for _, entry := range p.NetworkAllowlist {
+				if strings.Contains(entry, "/") {
+					_, ipNet, err := net.ParseCIDR(entry)
+					if err == nil && ipNet.Contains(ip) {
+						matched = true
+						break
+					}
+				} else {
+					if net.ParseIP(entry) != nil && net.ParseIP(entry).Equal(ip) {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				reasons = append(reasons, "policy: client IP "+clientIP+" is not in the network allowlist")
+			}
+		}
+	}
+
+	// Geo country allowlist condition.
+	if len(p.GeoCountryAllowlist) > 0 {
+		country := geoIP.Country(clientIP)
+		if country == "" {
+			// Fail closed: unknown country is denied.
+			reasons = append(reasons, "policy: geo condition cannot be evaluated (country unknown for IP "+clientIP+")")
+		} else {
+			matched := false
+			for _, cc := range p.GeoCountryAllowlist {
+				if strings.EqualFold(cc, country) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				reasons = append(reasons, "policy: country "+country+" is not in the geo allowlist")
+			}
+		}
+	}
+
+	return reasons
+}
+
 // auditAccessDecision writes an access_eval audit log entry using a detached
 // context so the write survives request cancellation. When access is denied,
-// it also fires the EventAccessBlocked notification (A4).
+// it also fires the EventAccessBlocked notification (A4) with denied_conditions
+// derived from the reason strings (D3).
 func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons []string) {
 	if h.db == nil {
 		return
@@ -299,6 +416,9 @@ func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons 
 		"allow":   allow,
 		"reasons": reasons,
 	}
+	if !allow {
+		details["denied_conditions"] = conditionTypesFromReasons(reasons)
+	}
 	if err := h.writeAuditEntryBestEffort(actorID, "access_eval", "user", userID, details); err != nil {
 		h.logger.Warn("access eval: failed to write audit log", zap.Error(err))
 	}
@@ -306,6 +426,7 @@ func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons 
 	// A4: fire EventAccessBlocked notification when posture denies access.
 	if !allow && h.notifier != nil {
 		n := h.notifier
+		condTypes := conditionTypesFromReasons(reasons)
 		go func() {
 			notifyCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -313,8 +434,42 @@ func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons 
 				Type:     notify.EventAccessBlocked,
 				ActorID:  actorID,
 				TargetID: userID,
-				Details:  map[string]any{"app_id": appID, "reasons": reasons},
+				Details: map[string]any{
+					"app_id":            appID,
+					"reasons":           reasons,
+					"denied_conditions": condTypes,
+				},
 			})
 		}()
 	}
+}
+
+// conditionTypesFromReasons maps deny reason strings to a deduplicated list of
+// condition type labels. Used for structured audit/notification details (D3).
+func conditionTypesFromReasons(reasons []string) []string {
+	seen := make(map[string]bool)
+	var types []string
+	for _, r := range reasons {
+		var ct string
+		switch {
+		case strings.Contains(r, "firewall") || strings.Contains(r, "disk") ||
+			strings.Contains(r, "vulnerability") || strings.Contains(r, "posture"):
+			ct = "posture"
+		case strings.Contains(r, "time"):
+			ct = "time_window"
+		case strings.Contains(r, "network") || strings.Contains(r, "IP"):
+			ct = "network"
+		case strings.Contains(r, "geo") || strings.Contains(r, "country"):
+			ct = "geo"
+		case strings.Contains(r, "device"):
+			ct = "device"
+		default:
+			ct = "other"
+		}
+		if !seen[ct] {
+			seen[ct] = true
+			types = append(types, ct)
+		}
+	}
+	return types
 }

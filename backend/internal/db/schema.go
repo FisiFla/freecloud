@@ -134,6 +134,11 @@ var migrations = []migration{
 		name:      "device_posture_cache",
 		statement: Migration038,
 	},
+	{
+		id:        39,
+		name:      "access_policy_conditions",
+		statement: Migration039,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -604,6 +609,17 @@ CREATE TABLE IF NOT EXISTS device_posture_cache (
     checked_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_device_posture_cache_checked_at ON device_posture_cache(checked_at DESC);
+`
+
+// Migration039 adds conditional-access policy columns to app_access_policies
+// (D1). The new columns extend per-app policies with time-window, network
+// allowlist, and geo-country allowlist conditions evaluated at access time.
+const Migration039 = `
+ALTER TABLE app_access_policies
+    ADD COLUMN IF NOT EXISTS allowed_time_start TIME,
+    ADD COLUMN IF NOT EXISTS allowed_time_end   TIME,
+    ADD COLUMN IF NOT EXISTS network_allowlist     TEXT[] NOT NULL DEFAULT '{}',
+    ADD COLUMN IF NOT EXISTS geo_country_allowlist TEXT[] NOT NULL DEFAULT '{}';
 `
 
 // RunMigrations applies any pending migrations in order, recording each in

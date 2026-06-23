@@ -65,6 +65,9 @@ type Handler struct {
 	// auditRetainFor is the configured audit retention window (from AUDIT_RETAIN_FOR).
 	// 0 means keep forever. Exposed via GET /api/v1/audit-logs/integrity.
 	auditRetainFor time.Duration
+	// geoIP resolves client IPs to ISO country codes for geo-allowlist conditions (D1).
+	// Defaults to noopGeoIP{} which always returns "" (unknown) — fail-closed for geo conditions.
+	geoIP GeoIPLookup
 }
 
 // SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment
@@ -80,6 +83,7 @@ func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetCl
 		keycloak: kc,
 		fleet:    fc,
 		logger:   logger,
+		geoIP:    noopGeoIP{},
 	}
 	// Default SCIM middleware: fail closed — rejects all requests until a token
 	// is configured via SetSCIMBearerToken.
@@ -126,6 +130,9 @@ func (h *Handler) SetLDAPBindPassword(pw string) { h.ldapBindPassword = pw }
 
 // SetAuditRetainFor wires the configured audit retention window.
 func (h *Handler) SetAuditRetainFor(d time.Duration) { h.auditRetainFor = d }
+// SetGeoIPLookup wires a live GeoIP resolver for geo-allowlist conditions (D1).
+// Without this, geo conditions always fail closed (country unknown → deny).
+func (h *Handler) SetGeoIPLookup(g GeoIPLookup) { h.geoIP = g }
 
 // Health returns a simple health check response.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
