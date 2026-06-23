@@ -875,7 +875,10 @@ func isNotFoundErr(err error) bool {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "404") || strings.Contains(strings.ToLower(msg), "not found")
+	lower := strings.ToLower(msg)
+	// Keycloak phrases a missing role/resource as "Could not find role" (no
+	// "404"/"not found" substring), so match that too.
+	return strings.Contains(msg, "404") || strings.Contains(lower, "not found") || strings.Contains(lower, "could not find")
 }
 
 // isConflictErr reports whether the given gocloak error represents a 409 Conflict,

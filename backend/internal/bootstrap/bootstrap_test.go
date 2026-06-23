@@ -69,6 +69,13 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// GET /admin/realms/freecloud/roles/admin — admin realm role exists.
+	if strings.HasSuffix(p, "/roles/admin") && m == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": "role-admin", "name": "admin"})
+		return
+	}
+
 	// GET/POST /admin/realms/freecloud/groups
 	if p == "/admin/realms/freecloud/groups" || p == "/admin/realms/freecloud/groups/" {
 		if m == http.MethodGet {
