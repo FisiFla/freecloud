@@ -129,6 +129,11 @@ var migrations = []migration{
 		name:      "federation_sources",
 		statement: Migration037,
 	},
+	{
+		id:        38,
+		name:      "device_posture_cache",
+		statement: Migration038,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -582,6 +587,23 @@ CREATE TABLE IF NOT EXISTS federation_sources (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_federation_sources_provider_type ON federation_sources(provider_type);
+`
+
+// Migration038 creates the device_posture_cache table for A1 (real
+// compliance_rate). Each row records the last-known compliance posture for one
+// Fleet host so the analytics snapshot job can compute compliance_rate from DB
+// without a live Fleet round-trip on every snapshot tick.
+const Migration038 = `
+CREATE TABLE IF NOT EXISTS device_posture_cache (
+    host_id          TEXT        PRIMARY KEY,
+    compliant        BOOLEAN     NOT NULL DEFAULT FALSE,
+    disk_encrypted   BOOLEAN     NOT NULL DEFAULT FALSE,
+    os_up_to_date    BOOLEAN     NOT NULL DEFAULT TRUE,
+    needs_update     BOOLEAN     NOT NULL DEFAULT FALSE,
+    firewall_enabled BOOLEAN     NOT NULL DEFAULT FALSE,
+    checked_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_device_posture_cache_checked_at ON device_posture_cache(checked_at DESC);
 `
 
 // RunMigrations applies any pending migrations in order, recording each in
