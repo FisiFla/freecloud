@@ -569,9 +569,17 @@ export interface SnapshotRow {
   offboardCount: number;
 }
 
-export async function getAnalyticsSnapshots(limit?: number): Promise<SnapshotRow[]> {
-  const qs = limit ? `?limit=${limit}` : "";
-  return request<SnapshotRow[]>("GET", `/api/v1/analytics/snapshots${qs}`);
+export async function getAnalyticsSnapshots(
+  limit?: number,
+  from?: string,
+  to?: string,
+): Promise<SnapshotRow[]> {
+  const params = new URLSearchParams();
+  if (limit) params.set("limit", String(limit));
+  if (from) params.set("from", from);
+  if (to) params.set("to", to);
+  const qs = params.toString();
+  return request<SnapshotRow[]>("GET", `/api/v1/analytics/snapshots${qs ? `?${qs}` : ""}`);
 }
 
 // B4 / B2: Policies

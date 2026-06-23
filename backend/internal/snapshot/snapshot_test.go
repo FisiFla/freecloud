@@ -122,6 +122,10 @@ func TestTakeSnapshot_HappyPath(t *testing.T) {
 		queryRowFn: queryRowCallSeq([]func(dest ...any) error{
 			// COUNT(*) FROM devices
 			func(dest ...any) error { *(dest[0].(*int)) = 5; return nil },
+			// COUNT(*) FROM device_posture_cache (cacheTotal)
+			func(dest ...any) error { *(dest[0].(*int)) = 4; return nil },
+			// COUNT(*) FROM device_posture_cache WHERE compliant = TRUE (cacheCompliant)
+			func(dest ...any) error { *(dest[0].(*int)) = 3; return nil },
 			// COUNT(*) FROM users (mfaTotal for coverage)
 			func(dest ...any) error { *(dest[0].(*int)) = 5; return nil },
 			// COUNT(*) FROM mfa_coverage_cache WHERE has_mfa = TRUE (mfaEnrolled)
@@ -200,6 +204,35 @@ func TestGetSeries_QueryError(t *testing.T) {
 	_, err := s.GetSeries(context.Background(), 10)
 	if err == nil {
 		t.Error("expected error when query fails")
+	}
+}
+
+func TestSyncPostureCache_HappyPath(t *testing.T) {
+	var execCount int
+	pool := &fakePool{
+		execFn: func(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+			execCount++
+			return pgconn.CommandTag{}, nil
+		},
+	}
+	s := New(pool, zaptest.NewLogger(t))
+	entries := []PostureEntry{
+		{HostID: "host-1", Compliant: true, DiskEncrypted: true, FirewallEnabled: true},
+		{HostID: "host-2", Compliant: false, DiskEncrypted: false},
+	}
+	if err := s.SyncPostureCache(context.Background(), entries); err != nil {
+		t.Fatalf("SyncPostureCache returned error: %v", err)
+	}
+	if execCount != 2 {
+		t.Errorf("expected 2 upserts, got %d", execCount)
+	}
+}
+
+func TestSyncPostureCache_Empty(t *testing.T) {
+	pool := &fakePool{}
+	s := New(pool, zaptest.NewLogger(t))
+	if err := s.SyncPostureCache(context.Background(), nil); err != nil {
+		t.Fatalf("SyncPostureCache with nil entries: %v", err)
 	}
 }
 

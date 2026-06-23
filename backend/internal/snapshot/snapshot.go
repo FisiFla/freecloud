@@ -13,6 +13,18 @@ import (
 	"go.uber.org/zap"
 )
 
+// PostureEntry is one device's compliance posture as reported by Fleet.
+// Callers (handlers/device_actions.go) populate it and pass a slice to
+// SyncPostureCache so TakeSnapshot can compute real compliance_rate.
+type PostureEntry struct {
+	HostID          string
+	Compliant       bool
+	DiskEncrypted   bool
+	OsUpToDate      bool // true when NOT needs_update
+	NeedsUpdate     bool
+	FirewallEnabled bool
+}
+
 // DBPool is the subset of *pgxpool.Pool the snapshotter uses.
 type DBPool interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
@@ -43,21 +55,55 @@ func New(pool DBPool, logger *zap.Logger) *Snapshotter {
 	return &Snapshotter{pool: pool, logger: logger}
 }
 
+// SyncPostureCache upserts a batch of posture entries into device_posture_cache.
+// Called by the compliance handler (or any path that has live Fleet data) so
+// TakeSnapshot can compute compliance_rate from DB without a Fleet round-trip.
+func (s *Snapshotter) SyncPostureCache(ctx context.Context, entries []PostureEntry) error {
+	for _, e := range entries {
+		_, err := s.pool.Exec(ctx, `
+			INSERT INTO device_posture_cache
+			    (host_id, compliant, disk_encrypted, os_up_to_date, needs_update, firewall_enabled, checked_at)
+			VALUES ($1, $2, $3, $4, $5, $6, NOW())
+			ON CONFLICT (host_id) DO UPDATE SET
+			    compliant        = EXCLUDED.compliant,
+			    disk_encrypted   = EXCLUDED.disk_encrypted,
+			    os_up_to_date    = EXCLUDED.os_up_to_date,
+			    needs_update     = EXCLUDED.needs_update,
+			    firewall_enabled = EXCLUDED.firewall_enabled,
+			    checked_at       = NOW()`,
+			e.HostID, e.Compliant, e.DiskEncrypted, e.OsUpToDate, e.NeedsUpdate, e.FirewallEnabled,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // TakeSnapshot computes current metrics and inserts one row.
 func (s *Snapshotter) TakeSnapshot(ctx context.Context) error {
-	// Compliance rate: compliant devices / total enrolled devices.
-	// A device is compliant when disk_encrypted AND firewall_enabled (mirroring
-	// the compliance handler). We approximate here from the devices table count
-	// since full posture requires a Fleet round-trip; store enrolled count + use
-	// 0 as the denominator guard.
+	// Enrolled devices count.
 	var enrolledDevices int
 	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM devices`).Scan(&enrolledDevices); err != nil {
 		return err
 	}
 
-	// compliance_rate: placeholder 0 until posture data is stored in DB.
-	// TODO: compute from a posture cache table when it exists.
+	// Compliance rate: computed from the device_posture_cache table populated
+	// by SyncPostureCache (called whenever the compliance handler fetches live
+	// Fleet posture). Falls back to 0 when the cache is empty.
 	var complianceRate float64
+	var cacheTotal, cacheCompliant int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM device_posture_cache`).Scan(&cacheTotal); err != nil {
+		return err
+	}
+	if cacheTotal > 0 {
+		if err := s.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM device_posture_cache WHERE compliant = TRUE`,
+		).Scan(&cacheCompliant); err != nil {
+			return err
+		}
+		complianceRate = float64(cacheCompliant) / float64(cacheTotal)
+	}
 
 	// MFA coverage: computed from the mfa_coverage_cache table which is kept
 	// up-to-date by the self-service MFA enrollment endpoints (B1). Each row
@@ -156,6 +202,75 @@ func (s *Snapshotter) GetSeries(ctx context.Context, limit int) ([]SnapshotRow, 
 	// Return oldest-first for time-series charts.
 	for i, j := 0, len(series)-1; i < j; i, j = i+1, j-1 {
 		series[i], series[j] = series[j], series[i]
+	}
+	return series, nil
+}
+
+// GetSeriesRange returns snapshot rows between from and to (inclusive), oldest
+// first, up to limit rows. Zero values of from/to mean no lower/upper bound.
+func (s *Snapshotter) GetSeriesRange(ctx context.Context, from, to time.Time, limit int) ([]SnapshotRow, error) {
+	if limit <= 0 {
+		limit = 90
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	var (
+		sqlStr string
+		args   []any
+	)
+	switch {
+	case !from.IsZero() && !to.IsZero():
+		sqlStr = `SELECT id, captured_at, compliance_rate, enrolled_devices, mfa_coverage_pct,
+		       app_count, onboard_count, offboard_count
+		FROM analytics_snapshots
+		WHERE captured_at >= $1 AND captured_at <= $2
+		ORDER BY captured_at ASC
+		LIMIT $3`
+		args = []any{from, to, limit}
+	case !from.IsZero():
+		sqlStr = `SELECT id, captured_at, compliance_rate, enrolled_devices, mfa_coverage_pct,
+		       app_count, onboard_count, offboard_count
+		FROM analytics_snapshots
+		WHERE captured_at >= $1
+		ORDER BY captured_at ASC
+		LIMIT $2`
+		args = []any{from, limit}
+	case !to.IsZero():
+		sqlStr = `SELECT id, captured_at, compliance_rate, enrolled_devices, mfa_coverage_pct,
+		       app_count, onboard_count, offboard_count
+		FROM analytics_snapshots
+		WHERE captured_at <= $1
+		ORDER BY captured_at ASC
+		LIMIT $2`
+		args = []any{to, limit}
+	default:
+		// No bounds — return most recent, then reverse.
+		return s.GetSeries(ctx, limit)
+	}
+
+	rows, err := s.pool.Query(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var series []SnapshotRow
+	for rows.Next() {
+		var r SnapshotRow
+		if err := rows.Scan(
+			&r.ID, &r.CapturedAt,
+			&r.ComplianceRate, &r.EnrolledDevices,
+			&r.MFACoveragePct, &r.AppCount,
+			&r.OnboardCount, &r.OffboardCount,
+		); err != nil {
+			return nil, err
+		}
+		series = append(series, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return series, nil
 }
