@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Search, Filter, Download } from "lucide-react";
-import { listAuditLogs, downloadAuditLogs } from "@/lib/api";
-import type { AuditLogEntry } from "@/lib/api";
+import { Search, Filter, Download, ShieldCheck, ShieldAlert } from "lucide-react";
+import { listAuditLogs, downloadAuditLogs, getAuditIntegrity } from "@/lib/api";
+import type { AuditLogEntry, AuditIntegrityStatus } from "@/lib/api";
 import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
 import LoadingRows from "@/components/LoadingRows";
@@ -34,6 +34,9 @@ export default function AuditLogPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
+  // B3: audit integrity status
+  const [integrity, setIntegrity] = useState<AuditIntegrityStatus | null>(null);
+
   // Debounce the actor filter so we don't fire a request per keystroke.
   const [debouncedActor, setDebouncedActor] = useState("");
   useEffect(() => {
@@ -41,15 +44,22 @@ export default function AuditLogPage() {
     return () => clearTimeout(t);
   }, [actorFilter]);
 
+  // Convert date-only "yyyy-MM-dd" to RFC3339 for the backend.
+  // dateFrom → start of day UTC; dateTo → start of next day UTC (exclusive upper bound).
+  const fromRFC3339 = dateFrom ? `${dateFrom}T00:00:00Z` : undefined;
+  const toRFC3339 = dateTo ? `${dateTo}T23:59:59Z` : undefined;
+
   const fetchPage = useCallback(
     (offset: number) =>
       listAuditLogs({
         actor: debouncedActor || undefined,
         action: actionFilter !== "All Actions" ? actionFilter : undefined,
+        from: fromRFC3339,
+        to: toRFC3339,
         limit: PAGE_SIZE,
         offset,
       }),
-    [debouncedActor, actionFilter],
+    [debouncedActor, actionFilter, fromRFC3339, toRFC3339],
   );
 
   // Reload the first page whenever the filters change.
@@ -75,6 +85,14 @@ export default function AuditLogPage() {
     };
   }, [fetchPage, apiReady]);
 
+  // B3: fetch integrity status once on mount.
+  useEffect(() => {
+    if (!apiReady) return;
+    getAuditIntegrity()
+      .then(setIntegrity)
+      .catch(() => { /* non-fatal — panel simply stays hidden */ });
+  }, [apiReady]);
+
   const loadMore = async () => {
     try {
       setLoadingMore(true);
@@ -89,14 +107,9 @@ export default function AuditLogPage() {
     }
   };
 
-  // Actor and action filters are applied server-side via listAuditLogs().
-  // Only the date-range filter is applied client-side here (not yet supported
-  // by the backend API). This avoids filtering the same dimension twice.
-  const filtered = logs.filter((log) => {
-    if (dateFrom && new Date(log.createdAt) < new Date(dateFrom)) return false;
-    if (dateTo && new Date(log.createdAt) > new Date(dateTo + "T23:59:59Z")) return false;
-    return true;
-  });
+  // All filters (actor, action, from, to) are now applied server-side.
+  // The date inputs drive fromRFC3339/toRFC3339 which are forwarded to the backend.
+  const filtered = logs;
 
   const formatTimestamp = (ts: string) => {
     const d = new Date(ts);
@@ -115,13 +128,15 @@ export default function AuditLogPage() {
           <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Audit Log</h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Track all actions across your FreeCloud instance.</p>
         </div>
-        {/* C4: Export buttons — honour current actor/action filters */}
+        {/* C4/B1: Export buttons — honour all current filters including date range */}
         <div className="flex items-center gap-2">
           <button
             onClick={() =>
               downloadAuditLogs("csv", {
                 actor: debouncedActor || undefined,
                 action: actionFilter !== "All Actions" ? actionFilter : undefined,
+                from: fromRFC3339,
+                to: toRFC3339,
               })
             }
             className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
@@ -134,6 +149,8 @@ export default function AuditLogPage() {
               downloadAuditLogs("json", {
                 actor: debouncedActor || undefined,
                 action: actionFilter !== "All Actions" ? actionFilter : undefined,
+                from: fromRFC3339,
+                to: toRFC3339,
               })
             }
             className="flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
@@ -143,6 +160,26 @@ export default function AuditLogPage() {
           </button>
         </div>
       </div>
+
+      {/* B3: Audit integrity status panel */}
+      {integrity && (
+        <div className={`mt-4 flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
+          integrity.chainOk
+            ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"
+            : "border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300"
+        }`}>
+          {integrity.chainOk
+            ? <ShieldCheck className="h-4 w-4 shrink-0" />
+            : <ShieldAlert className="h-4 w-4 shrink-0" />}
+          <span>
+            {integrity.chainOk
+              ? <>Chain intact &mdash; {integrity.rowsChecked} row{integrity.rowsChecked === 1 ? "" : "s"} verified.</>
+              : <>Chain broken at seq {integrity.firstBreakSeq}: {integrity.chainError}</>}
+            {" "}
+            <span className="opacity-70">Retention: {integrity.retainForHuman}.</span>
+          </span>
+        </div>
+      )}
 
       {/* Error banner */}
       {error && (
