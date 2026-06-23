@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-setup kc-build build-backend build-frontend clean verify verify-db verify-all test-db prod-build prod-up prod-down
+.PHONY: dev-up dev-down db-migrate kc-setup kc-build build-backend build-frontend clean verify verify-db verify-all test-db prod-build prod-up prod-down localhost-up localhost-down prod-secrets-init
 
 dev-up:
 	docker compose -f docker/docker-compose.yml up -d
@@ -38,11 +38,34 @@ build-frontend:
 prod-build:
 	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod build
 
-prod-up:
-	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod up -d --build
+# C3: prod-up generates secrets (if not yet present) then sources them into the
+# shell so compose can interpolate POSTGRES_PASSWORD / KC_ADMIN_PASSWORD into
+# URL strings in docker-compose.prod.yml.
+prod-up: prod-secrets-init
+	@set -a && . .secrets/secrets.env && set +a && \
+		docker compose -f docker/docker-compose.prod.yml --env-file .env.prod up -d --build
 
 prod-down:
 	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod down
+
+# C1/C2 — All-in-one localhost stack (no TLS, no required env).
+# Generates secrets on first boot, then starts all services.
+# Open http://localhost:3000 when up.
+localhost-up:
+	@mkdir -p .secrets
+	docker compose -f docker/docker-compose.localhost.yml up --build -d
+
+localhost-down:
+	docker compose -f docker/docker-compose.localhost.yml down
+
+# C1/C3 — Generate production secrets (first-boot only, idempotent).
+# Run before `make prod-up` if you want to generate secrets ahead of time.
+prod-secrets-init:
+	@mkdir -p .secrets
+	docker run --rm \
+		-v "$$(pwd)/.secrets:/run/freecloud" \
+		-v "$$(pwd)/docker/init-secrets/generate.sh:/generate.sh:ro" \
+		busybox:1.36 /bin/sh /generate.sh
 
 clean:
 	rm -rf bin/
