@@ -11,6 +11,7 @@ import (
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/FisiFla/freecloud/backend/internal/snapshot"
 )
 
 // RemoteLockResponse is returned by POST /api/v1/devices/{id}/lock.
@@ -271,6 +272,25 @@ func (h *Handler) GetOrgCompliance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	postures, summary := h.buildCompliancePostures(ctx, deviceList)
+
+	// A1: persist posture to the cache so TakeSnapshot can compute real
+	// compliance_rate without a live Fleet round-trip.
+	if h.snapshotter != nil {
+		cacheEntries := make([]snapshot.PostureEntry, 0, len(postures))
+		for _, p := range postures {
+			cacheEntries = append(cacheEntries, snapshot.PostureEntry{
+				HostID:          p.DeviceID,
+				Compliant:       p.Compliant,
+				DiskEncrypted:   p.DiskEncrypted,
+				OsUpToDate:      !p.NeedsUpdate,
+				NeedsUpdate:     p.NeedsUpdate,
+				FirewallEnabled: p.FirewallEnabled,
+			})
+		}
+		if err := h.snapshotter.SyncPostureCache(ctx, cacheEntries); err != nil {
+			h.logger.Warn("failed to sync posture cache", zap.Error(err))
+		}
+	}
 
 	// E3: optional filter — only return devices that need an OS update.
 	if r.URL.Query().Get("needs_update") == "true" {
