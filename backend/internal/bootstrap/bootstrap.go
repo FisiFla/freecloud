@@ -234,6 +234,9 @@ func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string,
 			AuthorizationServicesEnabled: &falseVal,
 			StandardFlowEnabled:       &falseVal,
 			DirectAccessGrantsEnabled: &falseVal,
+			// Without full scope, KC 25 omits the SA's assigned realm-management
+			// roles (manage-users/view-users/…) from its token, so admin calls 403.
+			FullScopeAllowed:          gocloak.BoolP(true),
 			Secret:                    &secretValue,
 		})
 		if err != nil {
@@ -246,6 +249,17 @@ func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string,
 	// Client exists. If an override secret is set, update it; otherwise
 	// regenerate to get a fresh known value.
 	clientUUID := *clients[0].ID
+
+	// Ensure full scope on an already-existing client too, so the SA token
+	// carries its realm-management roles (otherwise admin calls 403).
+	if clients[0].FullScopeAllowed == nil || !*clients[0].FullScopeAllowed {
+		clients[0].FullScopeAllowed = gocloak.BoolP(true)
+		if err := gc.UpdateClient(ctx, token, cfg.TargetRealm, *clients[0]); err != nil {
+			return "", fmt.Errorf("bootstrap: enable full scope on service client: %w", err)
+		}
+		logger.Info("bootstrap: enabled full scope on freecloud-service client")
+	}
+
 	if cfg.ServiceAccountSecretOverride != "" {
 		// Set the exact override secret via UpdateClient (PUT body includes secret).
 		clients[0].Secret = &secretValue
@@ -342,7 +356,12 @@ func ensureServiceAccountRoles(ctx context.Context, gc *gocloak.GoCloak, token s
 	}
 
 	var toGrant []gocloak.Role
-	for _, roleName := range []string{"manage-users", "manage-clients"} {
+	// The backend acts as the realm's administrator — it manages users, clients,
+	// realm roles, realm SMTP, and identity providers on the operator's behalf.
+	// Grant the realm-management "realm-admin" composite: narrower sets
+	// (manage-users + manage-clients) miss realm-role reads (GetRealmRole),
+	// users-by-role, realm updates (SMTP), and IdP management, all of which 403.
+	for _, roleName := range []string{"realm-admin"} {
 		if existingSet[roleName] {
 			logger.Info("bootstrap: SA role already granted", zap.String("role", roleName))
 			continue

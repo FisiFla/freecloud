@@ -1387,23 +1387,33 @@ func (k *KeycloakClient) GetUserByID(ctx context.Context, userID string) (*goclo
 	return user, nil
 }
 
-// HasAdminUser returns true when the realm has at least one user holding the
-// "admin" realm role. Returns false (not an error) when the role does not yet
-// exist — that is the expected state on a brand-new Keycloak realm.
+// HasAdminUser reports whether the instance has been set up — true when the
+// realm contains at least one real (human) user, i.e. any user that is not a
+// client service-account. On a freshly self-bootstrapped realm the only users
+// are the bootstrap clients' service accounts, so this is false; once the setup
+// wizard creates the first admin it becomes true.
+//
+// It lists users (a permission the service account reliably holds) rather than
+// querying the "admin" realm role's members: Keycloak's /roles/{role}/users
+// endpoint needs broader privileges than view-users and returns 403 for the
+// service account.
 func (k *KeycloakClient) HasAdminUser(ctx context.Context) (bool, error) {
 	token, err := k.login(ctx)
 	if err != nil {
 		return false, err
 	}
-	users, err := k.client.GetUsersByRoleName(ctx, token, k.realm, "admin", gocloak.GetUsersByRoleParams{})
+	maxUsers := 100
+	users, err := k.client.GetUsers(ctx, token, k.realm, gocloak.GetUsersParams{Max: &maxUsers})
 	if err != nil {
-		if isNotFoundErr(err) {
-			// Role doesn't exist yet — realm is unprovisioned.
-			return false, nil
-		}
-		return false, fmt.Errorf("get users by role admin: %w", err)
+		return false, fmt.Errorf("list users: %w", err)
 	}
-	return len(users) > 0, nil
+	for _, u := range users {
+		if u.Username != nil && strings.HasPrefix(*u.Username, "service-account-") {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // CreateAdminUser creates a Keycloak user with the given email and password,

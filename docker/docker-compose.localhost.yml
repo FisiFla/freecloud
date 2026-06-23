@@ -164,6 +164,10 @@ services:
       # Dashboard client is public (PKCE flow, no client secret).
       AUTH_KEYCLOAK_SECRET: ""
       AUTH_KEYCLOAK_ISSUER: http://localhost:8081/realms/freecloud
+      # Middleware's server-side setup-status fetch must reach the backend at its
+      # in-container address; NEXT_PUBLIC_API_URL (localhost:8080) only works from
+      # the browser. Without this the check fails-open and /setup redirects away.
+      INTERNAL_API_URL: http://backend:8080
     ports:
       - "3000:3000"
     depends_on:
