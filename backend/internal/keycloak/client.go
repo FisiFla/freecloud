@@ -106,6 +106,36 @@ type KeycloakClientInterface interface {
 	// assigns the "admin" realm role, and returns the Keycloak user ID.
 	// Used by the setup wizard.
 	CreateAdminUser(ctx context.Context, email, password string) (string, error)
+	// D2: SMTP configuration.
+	// UpdateRealmSMTP writes the SMTP relay settings into the Keycloak realm so
+	// that outbound emails (password reset, MFA) use the organisation's mail relay.
+	UpdateRealmSMTP(ctx context.Context, cfg SMTPConfig) error
+
+	// D3: Identity provider management.
+	ListIdentityProviders(ctx context.Context) ([]*gocloak.IdentityProviderRepresentation, error)
+	CreateIdentityProvider(ctx context.Context, alias, displayName, providerType string, config map[string]string) error
+	UpdateIdentityProvider(ctx context.Context, alias, displayName string, config map[string]string) error
+	DeleteIdentityProvider(ctx context.Context, alias string) error
+}
+
+// SMTPConfig holds the SMTP relay settings to write into a Keycloak realm.
+type SMTPConfig struct {
+	Host     string
+	Port     string
+	From     string
+	Auth     bool
+	User     string
+	Password string
+	SSL      bool
+	StartTLS bool
+}
+
+// boolStr converts a bool to the "true"/"false" string Keycloak expects.
+func boolStr(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }
 
 // CreateUserResult holds the outcome of a CreateUser operation.
@@ -1421,4 +1451,100 @@ func (k *KeycloakClient) CreateAdminUser(ctx context.Context, email, password st
 
 	zap.L().Info("created admin user", zap.String("user_id", userID), zap.String("email", email))
 	return userID, nil
+}
+
+// UpdateRealmSMTP writes SMTP relay settings into the Keycloak realm so that
+// Keycloak's outbound emails (password reset, MFA) use the org's mail relay.
+// It reads the current realm first to avoid clobbering unrelated fields.
+func (k *KeycloakClient) UpdateRealmSMTP(ctx context.Context, cfg SMTPConfig) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	realm, err := k.client.GetRealm(ctx, token, k.realm)
+	if err != nil {
+		return fmt.Errorf("get realm %s before smtp update: %w", k.realm, err)
+	}
+
+	smtpMap := map[string]string{
+		"host":     cfg.Host,
+		"port":     cfg.Port,
+		"from":     cfg.From,
+		"auth":     boolStr(cfg.Auth),
+		"user":     cfg.User,
+		"password": cfg.Password,
+		"ssl":      boolStr(cfg.SSL),
+		"starttls": boolStr(cfg.StartTLS),
+	}
+	realm.SMTPServer = &smtpMap
+
+	if err := k.client.UpdateRealm(ctx, token, *realm); err != nil {
+		return fmt.Errorf("update realm %s smtp: %w", k.realm, err)
+	}
+	zap.L().Info("updated realm smtp settings", zap.String("realm", k.realm))
+	return nil
+}
+
+// ListIdentityProviders returns all identity providers configured in the realm.
+func (k *KeycloakClient) ListIdentityProviders(ctx context.Context) ([]*gocloak.IdentityProviderRepresentation, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	providers, err := k.client.GetIdentityProviders(ctx, token, k.realm)
+	if err != nil {
+		return nil, fmt.Errorf("list identity providers: %w", err)
+	}
+	return providers, nil
+}
+
+// CreateIdentityProvider adds a new identity provider to the realm.
+func (k *KeycloakClient) CreateIdentityProvider(ctx context.Context, alias, displayName, providerType string, config map[string]string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	rep := gocloak.IdentityProviderRepresentation{
+		Alias:       &alias,
+		DisplayName: &displayName,
+		ProviderID:  &providerType,
+		Enabled:     gocloak.BoolP(true),
+		Config:      &config,
+	}
+	if _, err := k.client.CreateIdentityProvider(ctx, token, k.realm, rep); err != nil {
+		return fmt.Errorf("create identity provider %q: %w", alias, err)
+	}
+	zap.L().Info("created identity provider", zap.String("alias", alias), zap.String("type", providerType))
+	return nil
+}
+
+// UpdateIdentityProvider modifies an existing identity provider in the realm.
+func (k *KeycloakClient) UpdateIdentityProvider(ctx context.Context, alias, displayName string, config map[string]string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	rep := gocloak.IdentityProviderRepresentation{
+		Alias:       &alias,
+		DisplayName: &displayName,
+		Config:      &config,
+	}
+	if err := k.client.UpdateIdentityProvider(ctx, token, k.realm, alias, rep); err != nil {
+		return fmt.Errorf("update identity provider %q: %w", alias, err)
+	}
+	zap.L().Info("updated identity provider", zap.String("alias", alias))
+	return nil
+}
+
+// DeleteIdentityProvider removes an identity provider from the realm.
+func (k *KeycloakClient) DeleteIdentityProvider(ctx context.Context, alias string) error {
+	token, err := k.login(ctx)
+	if err != nil {
+		return err
+	}
+	if err := k.client.DeleteIdentityProvider(ctx, token, k.realm, alias); err != nil {
+		return fmt.Errorf("delete identity provider %q: %w", alias, err)
+	}
+	zap.L().Info("deleted identity provider", zap.String("alias", alias))
+	return nil
 }

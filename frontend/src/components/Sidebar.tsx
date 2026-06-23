@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
-import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers, Lock, Plug2, FileBarChart2 } from "lucide-react";
+import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers, Lock, Plug2, FileBarChart2, Server, Mail, Link2 } from "lucide-react";
 import DarkModeToggle from "./DarkModeToggle";
 
 const navLinks = [
@@ -19,6 +19,9 @@ const navLinks = [
   { href: "/portal", label: "My Portal", icon: LayoutDashboard },
   { href: "/portal/security", label: "Security", icon: Lock },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings/fleet", label: "Fleet Config", icon: Server },
+  { href: "/settings/smtp", label: "SMTP", icon: Mail },
+  { href: "/settings/identity-providers", label: "Identity Providers", icon: Link2 },
 ];
 
 export default function Sidebar() {
