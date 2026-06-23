@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
+
+	"go.uber.org/zap"
 )
 
 // SetupStatus handles GET /api/v1/setup/status.
@@ -15,7 +17,7 @@ func (h *Handler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	provisioned, err := h.keycloak.HasAdminUser(ctx)
 	if err != nil {
-		h.logger.Error("setup status check failed")
+		h.logger.Error("setup status check failed", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -66,7 +68,7 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 
 	_, err = h.keycloak.CreateAdminUser(ctx, body.AdminEmail, body.AdminPassword)
 	if err != nil {
-		h.logger.Error("setup: create admin user failed")
+		h.logger.Error("setup: create admin user failed", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to create admin user")
 		return
 	}

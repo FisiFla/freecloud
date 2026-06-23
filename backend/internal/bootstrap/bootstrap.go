@@ -103,6 +103,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, err
 	}
 
+	if err := ensureAdminRole(ctx, gc, token, cfg.TargetRealm, logger); err != nil {
+		return nil, err
+	}
+
 	secret, err := ensureServiceClient(ctx, gc, token, cfg, logger)
 	if err != nil {
 		return nil, err
@@ -128,6 +132,23 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 
 	logger.Info("bootstrap: complete")
 	return &Result{ServiceAccountSecret: secret}, nil
+}
+
+// ensureAdminRole creates the "admin" realm role if absent, so the realm is
+// fully provisioned before any admin user exists. The setup-status check lists
+// users by this role; if the role were missing, Keycloak returns "Could not
+// find role" and the status endpoint would 500 instead of reporting
+// unprovisioned.
+func ensureAdminRole(ctx context.Context, gc *gocloak.GoCloak, token, realm string, logger *zap.Logger) error {
+	if _, err := gc.GetRealmRole(ctx, token, realm, "admin"); err == nil {
+		return nil
+	}
+	_, err := gc.CreateRealmRole(ctx, token, realm, gocloak.Role{Name: gocloak.StringP("admin")})
+	if err != nil && !strings.Contains(err.Error(), "409") && !strings.Contains(strings.ToLower(err.Error()), "exist") {
+		return fmt.Errorf("create admin realm role: %w", err)
+	}
+	logger.Info("bootstrap: ensured admin realm role")
+	return nil
 }
 
 // ensureRealm creates the target realm if it does not already exist.
@@ -213,6 +234,9 @@ func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string,
 			AuthorizationServicesEnabled: &falseVal,
 			StandardFlowEnabled:       &falseVal,
 			DirectAccessGrantsEnabled: &falseVal,
+			// Without full scope, KC 25 omits the SA's assigned realm-management
+			// roles (manage-users/view-users/…) from its token, so admin calls 403.
+			FullScopeAllowed:          gocloak.BoolP(true),
 			Secret:                    &secretValue,
 		})
 		if err != nil {
@@ -225,6 +249,17 @@ func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string,
 	// Client exists. If an override secret is set, update it; otherwise
 	// regenerate to get a fresh known value.
 	clientUUID := *clients[0].ID
+
+	// Ensure full scope on an already-existing client too, so the SA token
+	// carries its realm-management roles (otherwise admin calls 403).
+	if clients[0].FullScopeAllowed == nil || !*clients[0].FullScopeAllowed {
+		clients[0].FullScopeAllowed = gocloak.BoolP(true)
+		if err := gc.UpdateClient(ctx, token, cfg.TargetRealm, *clients[0]); err != nil {
+			return "", fmt.Errorf("bootstrap: enable full scope on service client: %w", err)
+		}
+		logger.Info("bootstrap: enabled full scope on freecloud-service client")
+	}
+
 	if cfg.ServiceAccountSecretOverride != "" {
 		// Set the exact override secret via UpdateClient (PUT body includes secret).
 		clients[0].Secret = &secretValue
@@ -321,7 +356,12 @@ func ensureServiceAccountRoles(ctx context.Context, gc *gocloak.GoCloak, token s
 	}
 
 	var toGrant []gocloak.Role
-	for _, roleName := range []string{"manage-users", "manage-clients"} {
+	// The backend acts as the realm's administrator — it manages users, clients,
+	// realm roles, realm SMTP, and identity providers on the operator's behalf.
+	// Grant the realm-management "realm-admin" composite: narrower sets
+	// (manage-users + manage-clients) miss realm-role reads (GetRealmRole),
+	// users-by-role, realm updates (SMTP), and IdP management, all of which 403.
+	for _, roleName := range []string{"realm-admin"} {
 		if existingSet[roleName] {
 			logger.Info("bootstrap: SA role already granted", zap.String("role", roleName))
 			continue

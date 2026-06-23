@@ -24,7 +24,10 @@ const authSecret = requiredEnv("AUTH_SECRET");
 rejectInsecureInProd("AUTH_SECRET", authSecret);
 
 const keycloakClientId = requiredProdEnv("AUTH_KEYCLOAK_ID", "freecloud-dashboard");
-const keycloakClientSecret = requiredProdEnv("AUTH_KEYCLOAK_SECRET", "");
+// Optional: freecloud-dashboard is a PUBLIC (PKCE) client with no secret, so an
+// empty value is valid (and is the turnkey default). Operators who configure a
+// confidential dashboard client can set AUTH_KEYCLOAK_SECRET.
+const keycloakClientSecret = process.env.AUTH_KEYCLOAK_SECRET ?? "";
 const keycloakIssuer = requiredProdEnv(
   "AUTH_KEYCLOAK_ISSUER",
   "http://localhost:8081/realms/freecloud",

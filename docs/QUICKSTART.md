@@ -5,115 +5,75 @@ Get FreeCloud running locally in under 5 minutes.
 ## Prerequisites
 
 - Docker 24+ with the Compose plugin (`docker compose version`)
-- Go 1.25+
-- Node.js 26+
-- `make`
+- Go 1.25+ and Node.js 26+ (only needed if you run the backend/frontend **outside** Docker)
 
-## 1. Clone and configure
+## 1. Clone
 
 ```bash
 git clone https://github.com/FisiFla/freecloud.git
 cd freecloud
 ```
 
-No extra config step is needed for local development — the backend picks up
-safe dev defaults automatically when `APP_ENV=development`.
-
-## 2. Start infrastructure
+## 2. Start the all-in-one stack
 
 ```bash
-make dev-up
+docker compose -f docker/docker-compose.localhost.yml up --build
 ```
 
-This starts three containers and waits for them to be healthy:
+This single command:
 
-| Service | Container | Port |
-|---|---|---|
-| PostgreSQL 16 | `postgres` | 5432 |
-| Keycloak 25 | `keycloak` | 8081 |
-| FleetDM mock | `fleetdm-mock` | 8082 |
+- Generates all secrets automatically on first boot (no manual env setup).
+- Starts Postgres, Keycloak, the FleetDM mock, the backend, and the frontend.
+- The backend self-bootstraps the Keycloak realm on startup — no `make kc-setup` or
+  manual client-secret steps required.
 
-Postgres is initialized with both a `freecloud` database (for the backend) and a
-`keycloak` database (for Keycloak) via `docker/postgres/init-keycloak-db.sql`.
+Wait for the stack to be ready — you will see the backend log `migrations completed`
+and then `server started`. The whole sequence usually takes under 90 s on first boot.
 
-`make dev-up` also runs `make db-migrate` automatically. If you need to run
-migrations separately:
-
-```bash
-make db-migrate
-```
-
-## 3. Configure Keycloak
-
-```bash
-make kc-setup
-```
-
-This runs `backend/cmd/scripts/setup_realm.sh`, which creates:
-- The `freecloud` realm.
-- Standard groups (`admins`, `users`, etc.).
-- The `freecloud-service` confidential client (least-privilege: `manage-users` +
-  `manage-clients`).
-- The `freecloud-dashboard` client for the frontend.
-- A demo admin user (`admin` / `admin`).
-
-> Only needed once per fresh infrastructure start. Re-running is idempotent.
-
-## 4. Start the backend
-
-```bash
-cd backend && APP_ENV=development go run cmd/server/main.go
-```
-
-`APP_ENV=development` opts into the dev defaults (insecure local credentials,
-no TLS requirement). Without it the backend fails closed and refuses to start
-on dev defaults.
-
-The server listens on `:8080` and prints a startup log line when ready.
-
-## 5. Start the frontend
-
-```bash
-cd frontend && npm install && npm run dev
-```
-
-The dev server listens on `:3000` and proxies API requests to `http://localhost:8080`.
-
-## 6. Sign in
+## 3. Open the setup wizard
 
 Open [http://localhost:3000](http://localhost:3000).
 
-Sign in with the demo admin account created by `make kc-setup`:
+If this is a fresh database you will be redirected to `/setup` automatically.
+Fill in your admin email, a strong password, and an organisation name, then click
+**Create admin account**. That is the only manual step.
 
-| Field | Value |
-|---|---|
-| Username | `admin` |
-| Password | `admin` |
+If you are returning to an existing database (already provisioned), the wizard
+is skipped and you land on the login page.
+
+## 4. Sign in
+
+Use the admin credentials you just created. After sign-in you land on the
+FreeCloud dashboard.
 
 ## Ports at a glance
 
-| Service | Port |
+| Service | URL |
 |---|---|
-| Frontend (Next.js dev) | 3000 |
-| Backend API | 8080 |
-| Keycloak | 8081 |
-| FleetDM mock | 8082 |
-| PostgreSQL | 5432 |
+| Frontend (dashboard) | http://localhost:3000 |
+| Backend API | http://localhost:8080 |
+| Keycloak admin console | http://localhost:8081 |
+| FleetDM mock | http://localhost:8082 |
 
-## Environment variables (development)
+## How secrets work
 
-The backend reads these from the environment; the dev defaults are listed in
-`backend/internal/config/config.go`. The only variable you need to set locally is:
+On first boot a `secrets-init` container generates random values for all tokens
+and writes them to `.secrets/secrets.env`. Every other container loads that file
+automatically. You never need to set `SCIM_BEARER_TOKEN`, `AUTH_SECRET`,
+`FLEET_WEBHOOK_SECRET`, or `ACCESS_EVAL_TOKEN` by hand.
 
-```bash
-APP_ENV=development   # required — disables the production fail-closed checks
-```
+To rotate all secrets, delete `.secrets/secrets.env` and restart the stack.
 
-All other dev defaults (`DATABASE_URL`, `KEYCLOAK_URL`, `FLEET_URL`, etc.) are
-baked in and match the `docker-compose.yml` service addresses.
+## Configuring Fleet, SMTP, and Identity Providers
 
-For the frontend, `NEXT_PUBLIC_API_URL` defaults to `http://localhost:8080` when
-unset in development.
+All integration settings are in-app under **Settings**:
+
+- **Settings → Fleet** — Fleet API URL and token.
+- **Settings → SMTP** — outbound email (notifications, invites).
+- **Settings → Identity Providers** — add OIDC/SAML federation sources (Google
+  Workspace, Azure AD, Okta, …).
+
+There are no corresponding env-var knobs to set by hand.
 
 ## Running the test suite
 
@@ -123,50 +83,31 @@ make verify-db     # + DB integration tests (starts an ephemeral Postgres)
 make verify-all    # + go test -race across all packages
 ```
 
-## FleetDM enrollment callback (local end-to-end)
-
-The `fleetdm-mock` container will auto-fire the enrollment callback when both
-`BACKEND_URL` and `FLEET_WEBHOOK_SECRET` are set in its environment. To test the
-full enrollment flow locally, set these in `docker/docker-compose.yml` under the
-`fleetdm-mock` service:
-
-```yaml
-environment:
-  BACKEND_URL: http://host.docker.internal:8080
-  FLEET_WEBHOOK_SECRET: dev-secret
-```
-
-And start the backend with the matching secret:
-
-```bash
-cd backend && APP_ENV=development FLEET_WEBHOOK_SECRET=dev-secret go run cmd/server/main.go
-```
-
 ## Troubleshooting
 
-**`make dev-up` exits immediately or Keycloak never becomes healthy**
+**Keycloak never becomes healthy / backend keeps retrying**
 
-Keycloak takes 30–60 s on first boot. If `make dev-up` returns before Keycloak is
-ready, wait a moment then run `make db-migrate` manually and retry `make kc-setup`.
+Keycloak takes 30–60 s on first boot. The backend retries the admin login
+automatically — just wait. If it still does not come up after 3 min, check
+`docker compose -f docker/docker-compose.localhost.yml logs keycloak`.
 
-**Backend starts but returns `insecure configuration` errors**
+**`localhost:3000` is stuck on a loading spinner**
 
-You forgot `APP_ENV=development`. The backend fails closed on any missing or
-insecure default unless the env is explicitly set to `development`.
+The frontend requires `AUTH_SECRET` from `.secrets/secrets.env`. If the file was
+not generated (e.g. the `secrets-init` container failed), delete `.secrets/` and
+restart with `docker compose ... down -v && docker compose ... up --build`.
 
-**Frontend shows `NEXT_PUBLIC_API_URL must use https://`**
+**Port conflict (3000, 8080, 8081, 8082)**
 
-Only happens if `NODE_ENV=production` is set locally. Use `npm run dev`, not
-`npm start`, for local development.
+Edit `docker/docker-compose.localhost.yml` to remap the host ports, or stop the
+conflicting service.
 
-**`make kc-setup` fails with a 401 or connection refused**
+**`setup/status` returns `provisioned: false` unexpectedly**
 
-Keycloak may not be fully up yet. Wait a few seconds and retry.
-
-**Port conflict**
-
-If 5432, 8081, or 8082 are already in use, stop the conflicting service or edit
-`docker/docker-compose.yml` to remap the host ports.
+The backend self-bootstraps when it can reach Keycloak. If it started before
+Keycloak was up it will keep retrying in the background; `GET
+/api/v1/setup/status` will flip to `true` once bootstrap completes. Refresh the
+browser after a few seconds.
 
 ## Next steps
 

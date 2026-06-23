@@ -14,26 +14,39 @@ This is the operator runbook for a self-hosted production deployment using
 
 ```bash
 cp .env.prod.example .env.prod
-# Fill in domains and secrets. Generate secrets with: openssl rand -base64 33
+# Edit .env.prod — only the fields below are required.
 ```
 
-### Environment reference
+### Required fields in .env.prod
 
 | Variable | Purpose |
 |---|---|
 | `DASHBOARD_DOMAIN` / `API_DOMAIN` / `KC_DOMAIN` | Public hostnames Caddy serves + gets TLS for |
 | `DASHBOARD_PUBLIC_URL` / `API_PUBLIC_URL` / `KC_PUBLIC_URL` | The `https://` URLs for the above |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Database credentials |
-| `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` | Keycloak bootstrap admin |
-| `KEYCLOAK_REALM` | Realm name (default `freecloud`) |
-| `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` | Backend service-account (confidential) client |
-| `KEYCLOAK_AUDIENCE` | Expected JWT audience (default `freecloud-dashboard`) |
 | `FLEET_URL` / `FLEET_API_TOKEN` | Real FleetDM API endpoint + token |
-| `FLEET_WEBHOOK_SECRET` | HMAC key for the Fleet enrollment callback |
-| `SCIM_BEARER_TOKEN` | Dedicated bearer token for inbound SCIM provisioning |
-| `ACCESS_EVAL_TOKEN` | Dedicated bearer token for posture access-evaluation calls |
-| `AUTH_SECRET` | Auth.js session-signing secret (frontend) |
-| `AUTH_KEYCLOAK_ID` / `AUTH_KEYCLOAK_SECRET` | Frontend OIDC client |
+| `POSTURE_CHECK_ENABLED` | Set to `"true"` to enforce device posture at login (optional) |
+
+### Auto-generated secrets (do not set manually)
+
+The following are generated automatically on first boot by the `secrets-init`
+container and stored in `.secrets/secrets.env`. You do not set them in `.env.prod`:
+
+`POSTGRES_PASSWORD`, `AUTH_SECRET`, `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`,
+`FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD`, `KEYCLOAK_CLIENT_SECRET`
+
+To rotate, delete `.secrets/secrets.env` and run `make prod-up` again. The
+`KEYCLOAK_CLIENT_SECRET` is self-managed by the Epic A bootstrap; deleting the
+secrets file causes a new client secret to be generated and registered in Keycloak
+automatically on the next startup.
+
+### Fleet, SMTP, and Identity Providers
+
+These are configured **in-app** after first login — not via environment variables:
+
+- **Settings → Fleet** — Fleet API URL and token (override the env-var values at runtime).
+- **Settings → SMTP** — outbound email for notifications and invitations.
+- **Settings → Identity Providers** — OIDC/SAML federation sources (Google Workspace,
+  Azure AD, Okta, …).
 
 ## Deploy
 
@@ -41,15 +54,20 @@ cp .env.prod.example .env.prod
 make prod-up        # docker compose ... up -d --build
 ```
 
-After the first boot, create the realm, groups, and the `freecloud-service`
-confidential client (run against the Keycloak instance):
+The backend self-bootstraps Keycloak on startup:
 
-```bash
-APP_ENV=production ALLOW_DEV_SETUP=true CREATE_DEMO_USER=false \
-  KEYCLOAK_URL=https://auth.example.com KEYCLOAK_CLIENT_SECRET=... make kc-setup
-```
+- Creates the `freecloud` realm, roles, and the `freecloud-service` confidential client.
+- Registers the client secret it generated (no manual `make kc-setup` required).
+- Runs database migrations.
 
-The backend runs database migrations automatically on startup.
+There is **no** `setup_realm.sh` script to run. Do not run `make kc-setup` — it
+has been removed.
+
+### First login
+
+Open `https://app.example.com`. You will be redirected to the setup wizard (`/setup`)
+on a fresh database. Create your first admin account there. On subsequent boots the
+wizard is skipped automatically (the realm is already provisioned).
 
 ### Verify
 
