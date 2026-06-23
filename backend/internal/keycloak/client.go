@@ -94,6 +94,18 @@ type KeycloakClientInterface interface {
 	TestLDAPConnection(ctx context.Context, componentID, connectionURL, bindDN, bindPassword string) error
 	TriggerFederationSync(ctx context.Context, componentID, action string) error
 	GetUserByID(ctx context.Context, userID string) (*gocloak.User, error)
+
+	// B1 (first-run setup wizard): provisioning-state helpers.
+
+	// HasAdminUser returns true when the realm has at least one user holding
+	// the "admin" realm role. Used by the setup endpoints to determine whether
+	// first-run provisioning is needed.
+	HasAdminUser(ctx context.Context) (bool, error)
+
+	// CreateAdminUser creates a user in Keycloak with the given email/password,
+	// assigns the "admin" realm role, and returns the Keycloak user ID.
+	// Used by the setup wizard.
+	CreateAdminUser(ctx context.Context, email, password string) (string, error)
 }
 
 // CreateUserResult holds the outcome of a CreateUser operation.
@@ -1340,4 +1352,73 @@ func (k *KeycloakClient) GetUserByID(ctx context.Context, userID string) (*goclo
 		return nil, fmt.Errorf("get user %s: %w", userID, err)
 	}
 	return user, nil
+}
+
+// HasAdminUser returns true when the realm has at least one user holding the
+// "admin" realm role. Returns false (not an error) when the role does not yet
+// exist — that is the expected state on a brand-new Keycloak realm.
+func (k *KeycloakClient) HasAdminUser(ctx context.Context) (bool, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return false, err
+	}
+	users, err := k.client.GetUsersByRoleName(ctx, token, k.realm, "admin", gocloak.GetUsersByRoleParams{})
+	if err != nil {
+		if isNotFoundErr(err) {
+			// Role doesn't exist yet — realm is unprovisioned.
+			return false, nil
+		}
+		return false, fmt.Errorf("get users by role admin: %w", err)
+	}
+	return len(users) > 0, nil
+}
+
+// CreateAdminUser creates a Keycloak user with the given email and password,
+// ensures the "admin" realm role exists, assigns it, and returns the user ID.
+func (k *KeycloakClient) CreateAdminUser(ctx context.Context, email, password string) (string, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	// Create the user.
+	userID, err := k.client.CreateUser(ctx, token, k.realm, gocloak.User{
+		Username: &email,
+		Email:    &email,
+		Enabled:  gocloak.BoolP(true),
+	})
+	if err != nil {
+		return "", fmt.Errorf("create admin user: %w", err)
+	}
+
+	// Set a permanent (non-temporary) password.
+	if err := k.client.SetPassword(ctx, token, userID, k.realm, password, false); err != nil {
+		return "", fmt.Errorf("set admin password: %w", err)
+	}
+
+	// Ensure the "admin" realm role exists; create it if missing.
+	role, err := k.client.GetRealmRole(ctx, token, k.realm, "admin")
+	if err != nil {
+		if !isNotFoundErr(err) {
+			return "", fmt.Errorf("get admin realm role: %w", err)
+		}
+		// Role missing — create it.
+		if _, createErr := k.client.CreateRealmRole(ctx, token, k.realm, gocloak.Role{
+			Name: gocloak.StringP("admin"),
+		}); createErr != nil {
+			return "", fmt.Errorf("create admin realm role: %w", createErr)
+		}
+		role, err = k.client.GetRealmRole(ctx, token, k.realm, "admin")
+		if err != nil {
+			return "", fmt.Errorf("get admin realm role after create: %w", err)
+		}
+	}
+
+	// Assign the "admin" role to the new user.
+	if err := k.client.AddRealmRoleToUser(ctx, token, k.realm, userID, []gocloak.Role{*role}); err != nil {
+		return "", fmt.Errorf("assign admin role to user %s: %w", userID, err)
+	}
+
+	zap.L().Info("created admin user", zap.String("user_id", userID), zap.String("email", email))
+	return userID, nil
 }

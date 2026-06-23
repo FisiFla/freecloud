@@ -230,6 +230,9 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		"DELETE /api/v1/portal/me/mfa/factors/{credId}":    true,
 		"GET /api/v1/portal/me/recovery-codes":             true,
 		"POST /api/v1/portal/me/recovery-codes":            true,
+		// B1 (setup wizard): unauthenticated, fail-closed once provisioned.
+		"GET /api/v1/setup/status": true,
+		"POST /api/v1/setup":       true,
 	}
 
 	paramRe := regexp.MustCompile(`\{[^}]*\}`)
