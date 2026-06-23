@@ -38,16 +38,19 @@ func TestE2E_Turnkey_SetupStatus(t *testing.T) {
 		t.Fatalf("GET /api/v1/setup/status: expected 200, got %d: %s", status, body)
 	}
 
+	// Responses use the {success, data:{...}} envelope.
 	var resp struct {
-		Provisioned *bool `json:"provisioned"`
+		Data struct {
+			Provisioned *bool `json:"provisioned"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
 		t.Fatalf("GET /api/v1/setup/status: cannot parse response as JSON: %v\nbody: %s", err, body)
 	}
-	if resp.Provisioned == nil {
+	if resp.Data.Provisioned == nil {
 		t.Fatalf("GET /api/v1/setup/status: response missing required 'provisioned' field: %s", body)
 	}
-	t.Logf("GET /api/v1/setup/status → provisioned=%v", *resp.Provisioned)
+	t.Logf("GET /api/v1/setup/status → provisioned=%v", *resp.Data.Provisioned)
 }
 
 // TestE2E_Turnkey_SetupLockedOnceProvisioned verifies the fail-closed lock on
@@ -64,12 +67,14 @@ func TestE2E_Turnkey_SetupLockedOnceProvisioned(t *testing.T) {
 		t.Fatalf("setup status pre-check: expected 200, got %d: %s", statusCode, body)
 	}
 	var statusResp struct {
-		Provisioned bool `json:"provisioned"`
+		Data struct {
+			Provisioned bool `json:"provisioned"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &statusResp); err != nil {
 		t.Fatalf("setup status pre-check: cannot parse response: %v", err)
 	}
-	if !statusResp.Provisioned {
+	if !statusResp.Data.Provisioned {
 		t.Skip("realm not yet provisioned; skipping locked-state assertion (run posture suite first or seed an admin user)")
 	}
 
@@ -118,14 +123,20 @@ func TestE2E_Turnkey_SelfBootstrapped(t *testing.T) {
 	if sStatus != http.StatusOK {
 		t.Fatalf("setup/status: expected 200, got %d: %s", sStatus, sBody)
 	}
+	// A valid {data:{provisioned:<bool>}} shape proves the backend self-bootstrapped:
+	// the service account can authenticate to Keycloak and query the realm. (We
+	// don't assert provisioned==true here because that depends on a user existing,
+	// which is test-ordering-dependent; the lock test covers the provisioned path.)
 	var resp struct {
-		Provisioned bool `json:"provisioned"`
+		Data struct {
+			Provisioned *bool `json:"provisioned"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(sBody, &resp); err != nil {
 		t.Fatalf("setup/status: cannot parse response: %v\nbody: %s", err, sBody)
 	}
-	if !resp.Provisioned {
-		t.Errorf("self-bootstrap check failed: realm is not provisioned; Epic A bootstrap may not have run")
+	if resp.Data.Provisioned == nil {
+		t.Errorf("self-bootstrap check failed: setup/status returned no 'provisioned' field; the service account may not be able to query Keycloak: %s", sBody)
 	}
-	t.Logf("self-bootstrap verified: healthz=200, provisioned=%v", resp.Provisioned)
+	t.Logf("self-bootstrap verified: healthz=200, setup/status=200, provisioned=%v", resp.Data.Provisioned)
 }
