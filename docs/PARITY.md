@@ -120,6 +120,9 @@ are deferred; see the gaps section below.
 | Feature | Status |
 |---|---|
 | Docker Compose deploy | ✅ |
+| Turnkey single-command deploy (auto-secrets + self-bootstrap) | ✅ |
+| In-app Fleet / SMTP / IdP configuration | ✅ |
+| First-run setup wizard (create first admin without touching env) | ✅ |
 | Caddy TLS termination | ✅ |
 | Observability (Prometheus + Grafana) | ✅ |
 | Backup / restore | ✅ |
@@ -128,7 +131,8 @@ are deferred; see the gaps section below.
 
 | Gap | Notes |
 |---|---|
-| **Real VPS production deploy** | The stack is code-complete but has never been deployed to a real VPS. All validation has been done locally via Docker Compose. |
+| **Real VPS production deploy** | The stack is code-complete and turnkey (single `docker compose up`, auto-secrets, self-bootstrap wizard) but has never been deployed to a real VPS. All validation has been done locally via Docker Compose. |
+| **Multi-tenant / organisation isolation** | v1.6 supports a single organisation. Multi-tenant isolation (separate Keycloak realms per org, tenant-scoped SCIM endpoints) is deferred; see the single-instance ADR for scope. |
 | **Slack live-tenant sync** | The Slack outbound connector stores configuration and token, but does not yet perform live user provisioning or de-provisioning on group changes. |
 | **GitHub Org live-tenant sync** | Same as Slack — connector stub only; no live sync loop implemented. |
 | **HA / multi-instance** | The in-memory rate limiter and startup-migration pattern require a single backend instance. See [ADR 0003](adr/0003-single-instance.md) for the full rationale and what HA would require. |
@@ -138,4 +142,4 @@ are deferred; see the gaps section below.
 
 ## Versioning
 
-This matrix reflects **FreeCloud v1.5.0 (2026-06-23)**.
+This matrix reflects **FreeCloud v1.6.0 (2026-06-23)**.
