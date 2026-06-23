@@ -1,84 +1,127 @@
-# Production stack for FreeCloud. Bring up with:
-#   cp .env.prod.example .env.prod && edit it, then:
-#   docker compose -f docker/docker-compose.prod.yml --env-file .env.prod up -d --build
+# Production stack for FreeCloud.
 #
-# Caddy terminates TLS for all three public hostnames and reverse-proxies them
-# to the internal services. Postgres runs with TLS so the backend connects with
-# sslmode=require. There is NO fleetdm-mock here — point FLEET_URL at a real
-# FleetDM. Run this on the dev MacBook's Docker for testing, not the NAS.
+# USAGE:
+#   1. cp .env.prod.example .env.prod && edit it  (only domains + Fleet credentials)
+#   2. make prod-secrets-init   (generates .secrets/secrets.env on first boot)
+#   3. make prod-up             (sources secrets + brings up the stack)
+#
+# OR combine steps 2-3: make prod-up  (secrets-init runs automatically first).
+#
+# Secrets auto-generated into .secrets/secrets.env on first boot (C1):
+#   POSTGRES_PASSWORD, KC_ADMIN_PASSWORD, AUTH_SECRET,
+#   SCIM_BEARER_TOKEN, ACCESS_EVAL_TOKEN, FLEET_WEBHOOK_SECRET
+# The operator sets NONE of these.
+#
+# What the operator MUST set in .env.prod:
+#   DASHBOARD_DOMAIN, API_DOMAIN, KC_DOMAIN (+ their https:// URL variants)
+#   FLEET_URL, FLEET_API_TOKEN
+# Optionally: SMTP_* for email notifications, POSTURE_CHECK_ENABLED.
+#
+# Caddy auto-provisions TLS. Postgres serves TLS on the internal network.
+#
+# Note on POSTGRES_PASSWORD / KC_ADMIN_PASSWORD interpolation:
+#   These generated secrets must appear in URL strings and KC env vars that
+#   compose resolves at parse time. The `make prod-up` target sources
+#   .secrets/secrets.env before invoking compose so these variables are in
+#   the shell environment when compose reads the file. Running
+#   `docker compose ... config -q` directly (without sourcing) will interpolate
+#   them as empty strings — that is expected and safe (config validation only).
 
 services:
+
+  # ── Secret generation (C1) ────────────────────────────────────────────────
+  secrets-init:
+    image: busybox:1.36
+    volumes:
+      - ../.secrets:/run/freecloud
+      - ./init-secrets/generate.sh:/generate.sh:ro
+    entrypoint: ["/bin/sh", "/generate.sh"]
+    restart: "no"
+
+  # ── Postgres ──────────────────────────────────────────────────────────────
   postgres:
     build:
       context: ./postgres
       dockerfile: Dockerfile
     restart: unless-stopped
+    env_file:
+      - path: ../.secrets/secrets.env
+        required: false
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: freecloud
+      # POSTGRES_PASSWORD: injected from .secrets/secrets.env (auto-generated).
+      POSTGRES_DB: freecloud
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres/init-keycloak-db.sql:/docker-entrypoint-initdb.d/init-keycloak-db.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-freecloud}"]
       interval: 5s
       timeout: 5s
       retries: 10
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
 
+  # ── Keycloak ──────────────────────────────────────────────────────────────
   keycloak:
-    # A2 (FCEX3-6): custom Keycloak image with the posture-check SPI jar.
-    # Build context is repo root; Dockerfile.keycloak is in docker/.
     build:
       context: ..
       dockerfile: docker/Dockerfile.keycloak
     restart: unless-stopped
     command: ["start"]
+    env_file:
+      - path: ../.secrets/secrets.env
+        required: false
     environment:
-      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
-      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_ADMIN: admin
+      # KC_ADMIN_PASSWORD is in the host env when make prod-up sources secrets.env.
+      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-}
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
-      KC_DB_USERNAME: ${POSTGRES_USER}
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KC_DB_USERNAME: freecloud
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-}
       KC_HOSTNAME: ${KC_PUBLIC_URL}
       KC_PROXY_HEADERS: xforwarded
       KC_HTTP_ENABLED: "true"
       KC_HEALTH_ENABLED: "true"
-      # A3: posture-check SPI config — must be set in .env.prod
-      ACCESS_EVAL_URL: ${ACCESS_EVAL_URL}
-      ACCESS_EVAL_TOKEN: ${ACCESS_EVAL_TOKEN}
+      ACCESS_EVAL_URL: ${ACCESS_EVAL_URL:-http://backend:8080/api/v1/access/evaluate}
+      # ACCESS_EVAL_TOKEN: injected from .secrets/secrets.env
       POSTURE_CHECK_ENABLED: ${POSTURE_CHECK_ENABLED:-false}
     depends_on:
       postgres:
         condition: service_healthy
 
+  # ── Backend ───────────────────────────────────────────────────────────────
   backend:
     build:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    env_file:
+      - path: ../.secrets/secrets.env
+        required: false
     environment:
       APP_ENV: production
       PORT: "8080"
-      # TLS to Postgres on the internal network (the custom postgres image serves TLS).
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=require
-      # Public Keycloak URL so the JWT issuer matches and JWKS is fetched through Caddy.
+      # POSTGRES_PASSWORD is in the host env when make prod-up sources secrets.env.
+      DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:-}@postgres:5432/freecloud?sslmode=require
       KEYCLOAK_URL: ${KC_PUBLIC_URL}
-      KEYCLOAK_REALM: ${KEYCLOAK_REALM}
-      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
-      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
-      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-freecloud}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-freecloud-service}
+      # KEYCLOAK_CLIENT_SECRET: self-managed by Epic A bootstrap.
+      KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-freecloud-dashboard}
       FLEET_URL: ${FLEET_URL}
       FLEET_API_TOKEN: ${FLEET_API_TOKEN}
-      FLEET_WEBHOOK_SECRET: ${FLEET_WEBHOOK_SECRET}
-      SCIM_BEARER_TOKEN: ${SCIM_BEARER_TOKEN}
-      ACCESS_EVAL_TOKEN: ${ACCESS_EVAL_TOKEN}
+      # FLEET_WEBHOOK_SECRET, SCIM_BEARER_TOKEN, ACCESS_EVAL_TOKEN: from secrets.env
       CORS_ORIGIN: ${DASHBOARD_PUBLIC_URL}
+      KC_BOOTSTRAP_ADMIN: admin
+      KC_BOOTSTRAP_PASSWORD: ${KC_ADMIN_PASSWORD:-}
     depends_on:
       postgres:
         condition: service_healthy
 
+  # ── Frontend ──────────────────────────────────────────────────────────────
   frontend:
     build:
       context: ../frontend
@@ -86,16 +129,20 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${API_PUBLIC_URL}
     restart: unless-stopped
+    env_file:
+      - path: ../.secrets/secrets.env
+        required: false
     environment:
       NODE_ENV: production
       AUTH_URL: ${DASHBOARD_PUBLIC_URL}
-      AUTH_SECRET: ${AUTH_SECRET}
-      AUTH_KEYCLOAK_ID: ${AUTH_KEYCLOAK_ID}
-      AUTH_KEYCLOAK_SECRET: ${AUTH_KEYCLOAK_SECRET}
-      AUTH_KEYCLOAK_ISSUER: ${KC_PUBLIC_URL}/realms/${KEYCLOAK_REALM}
+      # AUTH_SECRET: injected from .secrets/secrets.env (auto-generated).
+      AUTH_KEYCLOAK_ID: ${AUTH_KEYCLOAK_ID:-freecloud-dashboard}
+      AUTH_KEYCLOAK_SECRET: ${AUTH_KEYCLOAK_SECRET:-}
+      AUTH_KEYCLOAK_ISSUER: ${KC_PUBLIC_URL}/realms/${KEYCLOAK_REALM:-freecloud}
     depends_on:
       - backend
 
+  # ── Caddy (TLS termination) ───────────────────────────────────────────────
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
