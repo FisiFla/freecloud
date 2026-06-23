@@ -941,6 +941,7 @@ export interface ProvisioningStateEntry {
   lastSyncAt?: string;
   lastError?: string;
   retryCount: number;
+  nextRetryAt?: string;
 }
 
 export async function getProvisioningConfig(appId: string): Promise<ProvisioningConfig> {
@@ -1039,4 +1040,108 @@ export async function triggerFederationSync(
     "POST",
     `/api/v1/federation/sources/${id}/sync?action=${action}`,
   );
+}
+
+// E1: Provisioning dry-run
+export interface DryRunProvisioningResponse {
+  userId: string;
+  connectorType: string;
+  endpointUrl?: string;
+  payload: Record<string, unknown>;
+  attributeMap: Record<string, string>;
+}
+
+export async function dryRunProvisioning(
+  appId: string,
+  userId: string,
+): Promise<DryRunProvisioningResponse> {
+  return request<DryRunProvisioningResponse>(
+    "POST",
+    `/api/v1/apps/${appId}/provisioning/dry-run`,
+    { userId },
+  );
+}
+
+// E2: Reconcile all provisioning records
+export async function reconcileAll(appId: string): Promise<{ queued: boolean }> {
+  return request<{ queued: boolean }>(
+    "POST",
+    `/api/v1/apps/${appId}/provisioning/reconcile-all`,
+  );
+}
+
+// E3: Access review schedules
+export interface ReviewSchedule {
+  id: string;
+  name: string;
+  cadence: "weekly" | "monthly" | "quarterly";
+  dayOfMonth?: number;
+  nextRunAt: string;
+  lastRunAt?: string;
+  enabled: boolean;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface CreateScheduleRequest {
+  name: string;
+  cadence: "weekly" | "monthly" | "quarterly";
+  dayOfMonth?: number;
+}
+
+export async function listReviewSchedules(): Promise<ReviewSchedule[]> {
+  return request<ReviewSchedule[]>("GET", "/api/v1/review-schedules");
+}
+
+export async function createReviewSchedule(
+  req: CreateScheduleRequest,
+): Promise<ReviewSchedule> {
+  return request<ReviewSchedule>("POST", "/api/v1/review-schedules", req);
+}
+
+export async function updateReviewSchedule(
+  id: string,
+  updates: { enabled?: boolean; name?: string },
+): Promise<ReviewSchedule> {
+  return request<ReviewSchedule>("PATCH", `/api/v1/review-schedules/${id}`, updates);
+}
+
+export async function deleteReviewSchedule(id: string): Promise<{ deleted: boolean }> {
+  return request<{ deleted: boolean }>("DELETE", `/api/v1/review-schedules/${id}`);
+}
+
+export function downloadCampaignExport(
+  campaignId: string,
+  format: "csv" | "json",
+): void {
+  const base = getBaseUrl();
+  window.location.href = `${base}/api/v1/campaigns/${campaignId}/export?format=${format}`;
+}
+
+// E3: Access review campaigns (new types)
+export interface ReviewCampaign {
+  id: string;
+  name: string;
+  status: "open" | "completed" | "cancelled";
+  createdBy: string;
+  createdAt: string;
+  closedAt?: string;
+  dueDate?: string;
+}
+
+export interface CreateCampaignRequest {
+  name: string;
+  dueDate?: string;
+}
+
+export async function listCampaigns(): Promise<ReviewCampaign[]> {
+  return request<ReviewCampaign[]>("GET", "/api/v1/campaigns");
+}
+
+export async function createCampaign(req: CreateCampaignRequest): Promise<ReviewCampaign> {
+  return request<ReviewCampaign>("POST", "/api/v1/campaigns", req);
+}
+
+export async function completeCampaign(id: string): Promise<{ completed: boolean }> {
+  return request<{ completed: boolean }>("POST", `/api/v1/campaigns/${id}/complete`);
 }
