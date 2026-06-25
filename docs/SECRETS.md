@@ -52,6 +52,7 @@ The following config fields use `resolveSecret`:
 | `KeycloakClientSecret` | `KEYCLOAK_CLIENT_SECRET` |
 | `FleetAPIToken` | `FLEET_API_TOKEN` |
 | `FleetWebhookSecret` | `FLEET_WEBHOOK_SECRET` |
+| `ProvisioningMasterKey` | `PROVISIONING_MASTER_KEY` |
 | `SCIMBearerToken` | `SCIM_BEARER_TOKEN` |
 | `AccessEvalToken` | `ACCESS_EVAL_TOKEN` |
 | `SMTPPassword` | `SMTP_PASSWORD` |

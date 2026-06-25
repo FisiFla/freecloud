@@ -32,12 +32,11 @@ The following are generated automatically on first boot by the `secrets-init`
 container and stored in `.secrets/secrets.env`. You do not set them in `.env.prod`:
 
 `POSTGRES_PASSWORD`, `AUTH_SECRET`, `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`,
-`FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD`, `KEYCLOAK_CLIENT_SECRET`
+`FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD`, `PROVISIONING_MASTER_KEY`
 
 To rotate, delete `.secrets/secrets.env` and run `make prod-up` again. The
-`KEYCLOAK_CLIENT_SECRET` is self-managed by the Epic A bootstrap; deleting the
-secrets file causes a new client secret to be generated and registered in Keycloak
-automatically on the next startup.
+`KEYCLOAK_CLIENT_SECRET` is self-managed by the Epic A bootstrap and is not
+stored in `.secrets/secrets.env`.
 
 ### Fleet, SMTP, and Identity Providers
 
@@ -164,29 +163,30 @@ PUT /api/v1/apps/{appId}/provisioning
 | Connector | Status |
 |---|---|
 | Generic SCIM 2.0 | Fully functional — use this for real provisioning |
-| Slack | Config + token stored; live sync not yet implemented |
-| GitHub Org | Config + token stored; live sync not yet implemented |
+| Slack | Uses Slack SCIM with the saved bearer token |
+| GitHub Org | Manages organization membership; use the organization field for the org name |
 
 **Bearer token encryption:** connector tokens are encrypted at rest using
-AES-256-GCM. Set `PROVISIONING_MASTER_KEY` to a base64-encoded 32-byte key:
+AES-256-GCM. Production installs generate `PROVISIONING_MASTER_KEY`
+automatically into `.secrets/secrets.env`; custom deployments must provide a
+base64-encoded 32-byte key:
 
 ```bash
 openssl rand -base64 32   # generate the key
 ```
 
-Add it to `.env.prod`:
+Add it to your secret store:
 
 ```
 PROVISIONING_MASTER_KEY=<output of the command above>
 ```
 
-In development / test mode (key absent) tokens are stored base64-only without
-encryption. The backend will log a warning at startup if the key is missing and
-`APP_ENV=production`.
+In development / test mode only, a missing key falls back to base64 storage.
+Production startup fails closed when the key is missing or malformed.
 
-> **Note:** Slack and GitHub connectors store configuration but do not perform
-> live sync. Use the Generic SCIM 2.0 connector for production outbound
-> provisioning until those connectors are fully implemented.
+> **Note:** Slack and GitHub live sync still need tenant-level manual
+> verification with real API credentials. The fast verification suite covers
+> wiring and unit behavior only.
 
 ## Reports
 

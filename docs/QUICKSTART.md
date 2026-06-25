@@ -59,8 +59,9 @@ FreeCloud dashboard.
 
 On first boot a `secrets-init` container generates random values for all tokens
 and writes them to `.secrets/secrets.env`. Every other container loads that file
-automatically. You never need to set `SCIM_BEARER_TOKEN`, `AUTH_SECRET`,
-`FLEET_WEBHOOK_SECRET`, or `ACCESS_EVAL_TOKEN` by hand.
+automatically. You never need to set `POSTGRES_PASSWORD`, `KC_ADMIN_PASSWORD`,
+`SCIM_BEARER_TOKEN`, `AUTH_SECRET`, `FLEET_WEBHOOK_SECRET`,
+`ACCESS_EVAL_TOKEN`, or `PROVISIONING_MASTER_KEY` by hand.
 
 To rotate all secrets, delete `.secrets/secrets.env` and restart the stack.
 

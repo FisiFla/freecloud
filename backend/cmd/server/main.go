@@ -22,11 +22,11 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/bootstrap"
 	"github.com/FisiFla/freecloud/backend/internal/config"
 	"github.com/FisiFla/freecloud/backend/internal/db"
-	"github.com/FisiFla/freecloud/backend/internal/fleet"
 	"github.com/FisiFla/freecloud/backend/internal/handlers"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 	"github.com/FisiFla/freecloud/backend/internal/notify"
+	"github.com/FisiFla/freecloud/backend/internal/provisioning"
 	"github.com/FisiFla/freecloud/backend/internal/reconcile"
 	"github.com/FisiFla/freecloud/backend/internal/siem"
 	"github.com/FisiFla/freecloud/backend/internal/snapshot"
@@ -130,8 +130,9 @@ func main() {
 		cfg.KeycloakRealm,
 	)
 
-	// Initialize FleetDM client
-	fleetClient := fleet.NewClient(cfg.FleetURL, cfg.FleetAPIToken)
+	// Initialize FleetDM client facade. It reads saved UI settings at runtime
+	// and falls back to env config during bootstrap.
+	fleetClient := handlers.NewDynamicFleetClient(pool, cfg.FleetURL, cfg.FleetAPIToken, logger)
 
 	// Lifecycle context — cancelled when the shutdown signal arrives.
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
@@ -139,7 +140,7 @@ func main() {
 
 	// D1 — Build event notifier from config.
 	var notifiers []notify.Notifier
-	if cfg.NotifyEmail && cfg.SMTPHost != "" {
+	if cfg.NotifyEmail {
 		var to []string
 		for _, addr := range strings.Split(cfg.SMTPTo, ",") {
 			addr = strings.TrimSpace(addr)
@@ -147,13 +148,14 @@ func main() {
 				to = append(to, addr)
 			}
 		}
-		notifiers = append(notifiers, notify.NewEmailNotifier(notify.EmailConfig{
+		notifiers = append(notifiers, handlers.NewDynamicEmailNotifier(pool, notify.EmailConfig{
 			Host:     cfg.SMTPHost,
 			Port:     cfg.SMTPPort,
+			Username: cfg.SMTPFrom,
 			From:     cfg.SMTPFrom,
 			To:       to,
 			Password: cfg.SMTPPassword,
-		}))
+		}, logger))
 		logger.Info("event notifier: email channel enabled")
 	}
 	if cfg.NotifySlack && cfg.SlackWebhookURL != "" {
@@ -195,6 +197,13 @@ func main() {
 	auditPruner := audit.NewPruner(pool, logger)
 	auditPruner.Start(lifecycleCtx, cfg.AuditPruneInterval, cfg.AuditRetainFor)
 
+	provisionEngine := provisioning.NewEngine(pool, logger)
+	provisionCtx, provisionCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := handlers.ReloadProvisioningConnectors(provisionCtx, provisionEngine, pool, logger); err != nil {
+		logger.Warn("provisioning connectors: initial load failed", zap.Error(err))
+	}
+	provisionCancel()
+
 	// Create handler
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
 	handler.SetFleetWebhookSecret(cfg.FleetWebhookSecret)
@@ -205,6 +214,7 @@ func main() {
 		handler.SetNotifier(eventNotifier)
 	}
 	handler.SetSnapshotter(snap)
+	handler.SetProvisionEngine(provisionEngine)
 	handler.SetLDAPBindPassword(cfg.LDAPBindPassword)
 
 	// Initialize JWT auth middleware, wrapping it with API token support (C2).

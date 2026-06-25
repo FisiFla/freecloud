@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -62,6 +63,7 @@ type Connector interface {
 // Engine drives connectors and persists state.
 type Engine struct {
 	db         DBPool
+	mu         sync.RWMutex
 	connectors map[string]Connector // keyed by app UUID
 	logger     *zap.Logger
 }
@@ -77,12 +79,41 @@ func NewEngine(db DBPool, logger *zap.Logger) *Engine {
 
 // RegisterConnector associates a connector with an app ID.
 func (e *Engine) RegisterConnector(appID string, c Connector) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.connectors[appID] = c
+}
+
+// ReplaceConnectors atomically swaps the active connector registry.
+func (e *Engine) ReplaceConnectors(connectors map[string]Connector) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.connectors = connectors
+}
+
+// ConnectorCount returns the number of registered connectors.
+func (e *Engine) ConnectorCount() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.connectors)
+}
+
+// HasConnector reports whether an app has an active connector.
+func (e *Engine) HasConnector(appID string) bool {
+	_, ok := e.connector(appID)
+	return ok
+}
+
+func (e *Engine) connector(appID string) (Connector, bool) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	c, ok := e.connectors[appID]
+	return c, ok
 }
 
 // ProvisionUser creates or updates a remote account for userID on the given app.
 func (e *Engine) ProvisionUser(ctx context.Context, appID string, user ProvisionableUser) error {
-	c, ok := e.connectors[appID]
+	c, ok := e.connector(appID)
 	if !ok {
 		return fmt.Errorf("provisioning: no connector for app %s", appID)
 	}
@@ -144,7 +175,7 @@ func (e *Engine) ProvisionUser(ctx context.Context, appID string, user Provision
 
 // DeprovisionUser deactivates the remote account for userID on the given app.
 func (e *Engine) DeprovisionUser(ctx context.Context, appID string, userID string) error {
-	c, ok := e.connectors[appID]
+	c, ok := e.connector(appID)
 	if !ok {
 		return fmt.Errorf("provisioning: no connector for app %s", appID)
 	}
@@ -192,7 +223,7 @@ func (e *Engine) DeprovisionUser(ctx context.Context, appID string, userID strin
 
 // SyncGroupMembership pushes group membership to the remote app if provisioned.
 func (e *Engine) SyncGroupMembership(ctx context.Context, appID string, userID string, groups []string) error {
-	c, ok := e.connectors[appID]
+	c, ok := e.connector(appID)
 	if !ok {
 		return fmt.Errorf("provisioning: no connector for app %s", appID)
 	}
@@ -268,7 +299,7 @@ func (e *Engine) ReconcileAll(ctx context.Context) error {
 	}
 
 	for _, se := range entries {
-		c, ok := e.connectors[se.appID]
+		c, ok := e.connector(se.appID)
 		if !ok {
 			continue
 		}

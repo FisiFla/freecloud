@@ -75,5 +75,5 @@ requires Docker and takes several minutes. Merge on green `verify` + `db-integra
   e2e suite without a live Keycloak realm configured with a client that issues
   JWTs. The SCIM flows (bearer-token only) and the enrollment callback (HMAC)
   are fully exercisable without OAuth.
-- To test JWT-gated flows, configure Keycloak via `backend/cmd/scripts/setup_realm.sh`
-  pointing at `keycloak-e2e:8083` and obtain a token from the realm's token endpoint.
+- To test JWT-gated flows, use the self-bootstrapped e2e Keycloak realm and obtain
+  a token from the realm's token endpoint.

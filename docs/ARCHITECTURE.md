@@ -72,7 +72,8 @@ graph LR
   and SCIM 2.0 provisioning (when a SCIM client pushes to the backend, the backend
   mirrors changes into Keycloak).
 - The backend holds a confidential service-account client (`freecloud-service`,
-  created by `make kc-setup`) with `manage-users` + `manage-clients` permissions.
+  created by the startup bootstrap engine) with `manage-users` + `manage-clients`
+  permissions.
 - The frontend holds a separate public/confidential client (`freecloud-dashboard`)
   used by Auth.js for the end-user OIDC login flow.
 - Keycloak admin tokens are cached until shortly before expiry (not re-fetched per
@@ -226,6 +227,7 @@ to insecure defaults):
 | `KEYCLOAK_AUDIENCE` | Expected JWT `aud` claim |
 | `FLEET_API_TOKEN` | FleetDM API token |
 | `FLEET_WEBHOOK_SECRET` | HMAC key for the enrollment callback |
+| `PROVISIONING_MASTER_KEY` | AES-256 key for stored integration secrets |
 | `SCIM_BEARER_TOKEN` | Bearer token for inbound SCIM provisioning |
 | `ACCESS_EVAL_TOKEN` | Bearer token for posture access-evaluation calls |
 | `CORS_ORIGIN` | Allowed CORS origin for the frontend |

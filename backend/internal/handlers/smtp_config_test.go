@@ -148,6 +148,7 @@ func TestUpsertSMTPConfig_SavesConfig(t *testing.T) {
 
 // TestUpsertSMTPConfig_WithPassword verifies that a password is encrypted.
 func TestUpsertSMTPConfig_WithPassword(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var encryptedPW bool
 	db := &fakeDB{
 		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {

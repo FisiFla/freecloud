@@ -58,8 +58,8 @@ are deferred; see the gaps section below.
 | Generic SCIM 2.0 connector | ✅ |
 | Provisioning dry-run preview | ✅ |
 | Reconcile-all (force re-sync every user) | ✅ |
-| Slack connector | ⚠️ Config stored; live sync deferred |
-| GitHub Org connector | ⚠️ Config stored; live sync deferred |
+| Slack connector | ✅ Runtime connector wired; needs live-tenant verification |
+| GitHub Org connector | ✅ Runtime connector wired; needs live-tenant verification |
 
 ### Device Management (MDM)
 
@@ -133,8 +133,7 @@ are deferred; see the gaps section below.
 |---|---|
 | **Real VPS production deploy** | The stack is code-complete and turnkey (single `docker compose up`, auto-secrets, self-bootstrap wizard) but has never been deployed to a real VPS. All validation has been done locally via Docker Compose. |
 | **Multi-tenant / organisation isolation** | v1.6 supports a single organisation. Multi-tenant isolation (separate Keycloak realms per org, tenant-scoped SCIM endpoints) is deferred; see the single-instance ADR for scope. |
-| **Slack live-tenant sync** | The Slack outbound connector stores configuration and token, but does not yet perform live user provisioning or de-provisioning on group changes. |
-| **GitHub Org live-tenant sync** | Same as Slack — connector stub only; no live sync loop implemented. |
+| **Slack/GitHub live-tenant verification** | Runtime connectors are wired, but they still need manual verification against real tenant credentials. |
 | **HA / multi-instance** | The in-memory rate limiter and startup-migration pattern require a single backend instance. See [ADR 0003](adr/0003-single-instance.md) for the full rationale and what HA would require. |
 | **Authenticated e2e round-trips** | The e2e harness has no admin-JWT login path (its bearers are opaque tokens scoped to the SCIM and access-eval endpoints). Admin-gated routes — including provisioning config and federation CRUD — are therefore e2e-covered at the smoke level (route wired + auth-gated against the live stack), consistent with the rest of the suite. A full authenticated provisioning round-trip and live LDAP sync are deferred pending an e2e admin-auth path. |
 | **SPI client-IP forwarding** | The Keycloak authenticator SPI receives the client IP for network-condition evaluation, but only trusts `X-Forwarded-For` when `TRUST_PROXY=true`. A direct (non-proxied) SPI call will see the loopback IP and geo/network conditions will evaluate against 127.0.0.1. |

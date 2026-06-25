@@ -28,8 +28,8 @@ const (
 	EventReconcileDrift     = "reconcile_drift"
 	EventComplianceFailure  = "compliance_failure"
 	EventAccessBlocked      = "access_blocked"      // fired by access_eval when posture denies (A4)
-	EventProvisioningFailed = "provisioning_failed"  // fired when outbound provisioning fails (A4)
-	EventAccessReviewDue    = "access_review_due"    // fired when a review campaign is approaching due date
+	EventProvisioningFailed = "provisioning_failed" // fired when outbound provisioning fails (A4)
+	EventAccessReviewDue    = "access_review_due"   // fired when a review campaign is approaching due date
 )
 
 // notifyErrors counts notification failures by channel and event type.
@@ -132,6 +132,7 @@ func (m *MultiNotifier) eventEnabled(eventType string) bool {
 type EmailConfig struct {
 	Host     string
 	Port     string
+	Username string
 	From     string
 	To       []string
 	Password string
@@ -175,7 +176,11 @@ func (e *EmailNotifier) Notify(_ context.Context, ev Event) error {
 	addr := e.cfg.Host + ":" + e.cfg.Port
 	var auth smtp.Auth
 	if e.cfg.Password != "" {
-		auth = smtp.PlainAuth("", e.cfg.From, e.cfg.Password, e.cfg.Host)
+		username := e.cfg.Username
+		if username == "" {
+			username = e.cfg.From
+		}
+		auth = smtp.PlainAuth("", username, e.cfg.Password, e.cfg.Host)
 	}
 	return smtp.SendMail(addr, auth, e.cfg.From, e.cfg.To, []byte(msg))
 }
