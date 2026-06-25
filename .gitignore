@@ -1,6 +1,7 @@
 node_modules/
 .next/
 bin/
+backend/server
 .env
 *.log
 .DS_Store

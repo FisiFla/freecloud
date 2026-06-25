@@ -200,6 +200,22 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		"connector_type": req.ConnectorType,
 		"token_changed":  req.BearerToken != "",
 	})
+	if h.provisionEngine != nil {
+		if err := ReloadProvisioningConnectors(ctx, h.provisionEngine, h.db, h.logger); err != nil {
+			h.logger.Warn("upsert provisioning config: reload connectors failed", zap.Error(err))
+		}
+	}
+
+	tokenConfigured := tokenHash != nil
+	if !tokenConfigured {
+		var savedHash *string
+		if err := h.db.QueryRow(ctx,
+			`SELECT bearer_token_hash FROM app_provisioning_config WHERE app_id = $1`,
+			appID,
+		).Scan(&savedHash); err == nil && savedHash != nil && *savedHash != "" {
+			tokenConfigured = true
+		}
+	}
 
 	attrMap := req.AttributeMap
 	if attrMap == nil {
@@ -210,7 +226,7 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		Enabled:               req.Enabled,
 		ConnectorType:         req.ConnectorType,
 		EndpointURL:           req.EndpointURL,
-		BearerTokenConfigured: tokenHash != nil,
+		BearerTokenConfigured: tokenConfigured,
 		AttributeMap:          attrMap,
 	})
 }
@@ -288,6 +304,10 @@ func (h *Handler) ResyncUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.provisionEngine == nil {
 		respondError(w, http.StatusServiceUnavailable, "provisioning engine not configured")
+		return
+	}
+	if !h.provisionEngine.HasConnector(appID) {
+		respondError(w, http.StatusServiceUnavailable, "provisioning connector not configured")
 		return
 	}
 
@@ -452,6 +472,10 @@ func (h *Handler) ReconcileAllHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "provisioning engine not configured")
 		return
 	}
+	if !h.provisionEngine.HasConnector(appID) {
+		respondError(w, http.StatusServiceUnavailable, "provisioning connector not configured")
+		return
+	}
 
 	ctx := r.Context()
 	actorID := middleware.GetActorID(ctx)
@@ -489,21 +513,20 @@ func tokenSHA256(plaintext string) string {
 }
 
 // decryptProvisioningToken reverses encryptProvisioningToken.
-// If PROVISIONING_MASTER_KEY is absent the input is treated as a plain
-// base64-encoded string (dev/test mode, matching the encrypt path).
+// In development/test only, a missing PROVISIONING_MASTER_KEY treats the input
+// as plain base64 so local tests do not require secret setup.
 func decryptProvisioningToken(ciphertext string) (string, error) {
-	keyB64 := os.Getenv("PROVISIONING_MASTER_KEY")
 	raw, err := base64.StdEncoding.DecodeString(ciphertext)
 	if err != nil {
 		return "", fmt.Errorf("decode ciphertext: %w", err)
 	}
-	if keyB64 == "" {
+	key, err := provisioningMasterKey()
+	if err != nil {
+		return "", err
+	}
+	if key == nil {
 		// Dev/test mode: the "ciphertext" is just base64(plaintext).
 		return string(raw), nil
-	}
-	key, err := base64.StdEncoding.DecodeString(keyB64)
-	if err != nil || len(key) != 32 {
-		return "", fmt.Errorf("PROVISIONING_MASTER_KEY must be a base64-encoded 32-byte key")
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -527,16 +550,15 @@ func decryptProvisioningToken(ciphertext string) (string, error) {
 
 // encryptProvisioningToken encrypts a plaintext bearer token using AES-256-GCM
 // with the key from PROVISIONING_MASTER_KEY (base64-encoded 32 bytes).
-// If the env var is absent, returns a plain base64 encoding (dev/test mode).
+// In development/test only, a missing key returns a plain base64 encoding.
 func encryptProvisioningToken(plaintext string) (string, error) {
-	keyB64 := os.Getenv("PROVISIONING_MASTER_KEY")
-	if keyB64 == "" {
+	key, err := provisioningMasterKey()
+	if err != nil {
+		return "", err
+	}
+	if key == nil {
 		// Dev/test mode: no encryption, just base64-encode.
 		return base64.StdEncoding.EncodeToString([]byte(plaintext)), nil
-	}
-	key, err := base64.StdEncoding.DecodeString(keyB64)
-	if err != nil || len(key) != 32 {
-		return "", fmt.Errorf("PROVISIONING_MASTER_KEY must be a base64-encoded 32-byte key")
 	}
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -552,4 +574,20 @@ func encryptProvisioningToken(plaintext string) (string, error) {
 	}
 	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+func provisioningMasterKey() ([]byte, error) {
+	keyB64 := os.Getenv("PROVISIONING_MASTER_KEY")
+	if keyB64 == "" {
+		env := os.Getenv("APP_ENV")
+		if env == "development" || env == "test" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("PROVISIONING_MASTER_KEY must be set outside development/test")
+	}
+	key, err := base64.StdEncoding.DecodeString(keyB64)
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("PROVISIONING_MASTER_KEY must be a base64-encoded 32-byte key")
+	}
+	return key, nil
 }

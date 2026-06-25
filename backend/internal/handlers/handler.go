@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -65,6 +66,9 @@ type Handler struct {
 	// auditRetainFor is the configured audit retention window (from AUDIT_RETAIN_FOR).
 	// 0 means keep forever. Exposed via GET /api/v1/audit-logs/integrity.
 	auditRetainFor time.Duration
+	// setupMu serializes first-run setup so two concurrent requests cannot both
+	// pass the "no admin exists" check before either creates the first admin.
+	setupMu sync.Mutex
 	// geoIP resolves client IPs to ISO country codes for geo-allowlist conditions (D1).
 	// Defaults to noopGeoIP{} which always returns "" (unknown) — fail-closed for geo conditions.
 	geoIP GeoIPLookup
@@ -125,11 +129,13 @@ func (h *Handler) SetSnapshotter(s *snapshot.Snapshotter) {
 func (h *Handler) SetProvisionEngine(e *provisioning.Engine) {
 	h.provisionEngine = e
 }
+
 // SetLDAPBindPassword wires the LDAP bind password (resolved via config.LDAPBindPassword).
 func (h *Handler) SetLDAPBindPassword(pw string) { h.ldapBindPassword = pw }
 
 // SetAuditRetainFor wires the configured audit retention window.
 func (h *Handler) SetAuditRetainFor(d time.Duration) { h.auditRetainFor = d }
+
 // SetGeoIPLookup wires a live GeoIP resolver for geo-allowlist conditions (D1).
 // Without this, geo conditions always fail closed (country unknown → deny).
 func (h *Handler) SetGeoIPLookup(g GeoIPLookup) { h.geoIP = g }

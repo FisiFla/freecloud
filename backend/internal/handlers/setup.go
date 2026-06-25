@@ -30,6 +30,9 @@ func (h *Handler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	h.setupMu.Lock()
+	defer h.setupMu.Unlock()
+
 	// Fail-closed: check provisioned FIRST.
 	provisioned, err := h.keycloak.HasAdminUser(ctx)
 	if err != nil {

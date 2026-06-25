@@ -51,6 +51,12 @@ func (r *fakeQueryRows) Scan(dest ...any) error {
 			if v, ok := row[i].(string); ok {
 				*p = v
 			}
+		case **string:
+			if v, ok := row[i].(*string); ok {
+				*p = v
+			} else if v, ok := row[i].(string); ok {
+				*p = &v
+			}
 		case *bool:
 			if v, ok := row[i].(bool); ok {
 				*p = v

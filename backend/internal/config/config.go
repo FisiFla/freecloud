@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"os"
@@ -23,16 +24,17 @@ const defaultKeycloakURL = "http://localhost:8081"
 
 // Config holds application configuration loaded from environment variables.
 type Config struct {
-	Port                 string
-	DatabaseURL          string
-	KeycloakURL          string
-	KeycloakRealm        string
-	KeycloakClientID     string
-	KeycloakClientSecret string
-	KeycloakAudience     string
-	FleetURL             string
-	FleetAPIToken        string
-	FleetWebhookSecret   string
+	Port                  string
+	DatabaseURL           string
+	KeycloakURL           string
+	KeycloakRealm         string
+	KeycloakClientID      string
+	KeycloakClientSecret  string
+	KeycloakAudience      string
+	FleetURL              string
+	FleetAPIToken         string
+	FleetWebhookSecret    string
+	ProvisioningMasterKey string
 	// SCIMBearerToken authenticates inbound SCIM 2.0 provisioning requests.
 	// Must be a high-entropy secret (e.g. 32+ random bytes hex-encoded).
 	// Required in production — Validate() rejects an empty value outside dev/test.
@@ -95,19 +97,20 @@ type Config struct {
 // internal/config/secrets.go and docs/SECRETS.md for details.
 func Load() *Config {
 	return &Config{
-		Port:                 getEnv("PORT", "8080"),
-		DatabaseURL:          resolveSecret("DATABASE_URL", defaultDatabaseURL),
-		KeycloakURL:          getEnv("KEYCLOAK_URL", defaultKeycloakURL),
-		KeycloakRealm:        getEnv("KEYCLOAK_REALM", "freecloud"),
-		KeycloakClientID:     getEnv("KEYCLOAK_CLIENT_ID", defaultKeycloakClientID),
-		KeycloakClientSecret: resolveSecret("KEYCLOAK_CLIENT_SECRET", ""),
-		KeycloakAudience:     getEnv("KEYCLOAK_AUDIENCE", "freecloud-dashboard"),
-		FleetURL:             getEnv("FLEET_URL", "http://localhost:8082"),
-		FleetAPIToken:        resolveSecret("FLEET_API_TOKEN", ""),
-		FleetWebhookSecret:   resolveSecret("FLEET_WEBHOOK_SECRET", ""),
-		SCIMBearerToken:      resolveSecret("SCIM_BEARER_TOKEN", ""),
-		AccessEvalToken:      resolveSecret("ACCESS_EVAL_TOKEN", ""),
-		ReconcileInterval:    parseDuration(getEnv("RECONCILE_INTERVAL", "15m")),
+		Port:                  getEnv("PORT", "8080"),
+		DatabaseURL:           resolveSecret("DATABASE_URL", defaultDatabaseURL),
+		KeycloakURL:           getEnv("KEYCLOAK_URL", defaultKeycloakURL),
+		KeycloakRealm:         getEnv("KEYCLOAK_REALM", "freecloud"),
+		KeycloakClientID:      getEnv("KEYCLOAK_CLIENT_ID", defaultKeycloakClientID),
+		KeycloakClientSecret:  resolveSecret("KEYCLOAK_CLIENT_SECRET", ""),
+		KeycloakAudience:      getEnv("KEYCLOAK_AUDIENCE", "freecloud-dashboard"),
+		FleetURL:              getEnv("FLEET_URL", "http://localhost:8082"),
+		FleetAPIToken:         resolveSecret("FLEET_API_TOKEN", ""),
+		FleetWebhookSecret:    resolveSecret("FLEET_WEBHOOK_SECRET", ""),
+		ProvisioningMasterKey: resolveSecret("PROVISIONING_MASTER_KEY", ""),
+		SCIMBearerToken:       resolveSecret("SCIM_BEARER_TOKEN", ""),
+		AccessEvalToken:       resolveSecret("ACCESS_EVAL_TOKEN", ""),
+		ReconcileInterval:     parseDuration(getEnv("RECONCILE_INTERVAL", "15m")),
 
 		// D1 — Notifications
 		NotifyEmail:           parseBool(getEnv("NOTIFY_EMAIL", "false")),
@@ -200,6 +203,11 @@ func (c *Config) Validate() error {
 	}
 	if c.FleetWebhookSecret == "" {
 		add("FLEET_WEBHOOK_SECRET must be set (used to authenticate Fleet enrollment callbacks)")
+	}
+	if c.ProvisioningMasterKey == "" {
+		add("PROVISIONING_MASTER_KEY must be set (used to encrypt stored integration secrets)")
+	} else if raw, err := base64.StdEncoding.DecodeString(c.ProvisioningMasterKey); err != nil || len(raw) != 32 {
+		add("PROVISIONING_MASTER_KEY must be a base64-encoded 32-byte key")
 	}
 	if c.SCIMBearerToken == "" {
 		add("SCIM_BEARER_TOKEN must be set (used to authenticate inbound SCIM provisioning requests)")

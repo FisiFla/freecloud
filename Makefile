@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-setup kc-build build-backend build-frontend clean verify verify-db verify-all test-db prod-build prod-up prod-down localhost-up localhost-down prod-secrets-init
+.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db prod-build prod-up prod-down localhost-up localhost-down prod-secrets-init
 
 dev-up:
 	docker compose -f docker/docker-compose.yml up -d
@@ -12,10 +12,6 @@ dev-down:
 
 db-migrate:
 	cd backend && go run cmd/server/migrate.go
-
-kc-setup:
-	@chmod +x backend/cmd/scripts/setup_realm.sh
-	@bash backend/cmd/scripts/setup_realm.sh
 
 # A2 (FCEX3-6): Build the custom Keycloak image with the posture-check SPI.
 # Requires Docker. Runs the multi-stage docker/Dockerfile.keycloak build.
@@ -72,12 +68,24 @@ clean:
 	docker compose -f docker/docker-compose.yml down -v
 
 # Fast no-live gate: vet, unit tests, frontend type-check + build.
-verify:
+verify: verify-secrets
 	@echo "==> Go vet + test..."
 	cd backend && go vet ./... && go test ./...
 	@echo "==> Frontend type-check + build..."
 	cd frontend && npm install --no-audit --no-fund --include=dev && npm run verify
 	@echo "==> All checks passed."
+
+verify-secrets:
+	@echo "==> Production secret generator..."
+	@tmp="$$(mktemp -d)"; \
+		trap 'rm -rf "$$tmp"' EXIT; \
+		SECRETS_FILE="$$tmp/secrets.env" sh docker/init-secrets/generate.sh >/dev/null; \
+		for key in POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY; do \
+			if ! grep -q "^$$key=" "$$tmp/secrets.env"; then \
+				echo "missing $$key in generated secrets.env"; \
+				exit 1; \
+			fi; \
+		done
 
 # DB-backed integration tests against TEST_DATABASE_URL (or a spun-up Postgres).
 # These are NOT part of the fast `verify` gate.

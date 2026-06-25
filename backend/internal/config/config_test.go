@@ -17,6 +17,7 @@ func setSecureProdEnv(t *testing.T) {
 	t.Setenv("KEYCLOAK_AUDIENCE", "freecloud-dashboard")
 	t.Setenv("FLEET_API_TOKEN", "fleet-token")
 	t.Setenv("FLEET_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("PROVISIONING_MASTER_KEY", "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=")
 	t.Setenv("CORS_ORIGIN", "https://dashboard.example.com")
 	t.Setenv("SCIM_BEARER_TOKEN", "scim-secret-token")
 	t.Setenv("ACCESS_EVAL_TOKEN", "access-eval-secret")
@@ -118,6 +119,24 @@ func TestValidateProductionMissingWebhookSecret(t *testing.T) {
 	cfg := Load()
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error for missing FLEET_WEBHOOK_SECRET in production, got nil")
+	}
+}
+
+func TestValidateProductionMissingProvisioningMasterKey(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("PROVISIONING_MASTER_KEY", "")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for missing PROVISIONING_MASTER_KEY in production, got nil")
+	}
+}
+
+func TestValidateProductionInvalidProvisioningMasterKey(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("PROVISIONING_MASTER_KEY", "not-a-32-byte-base64-key")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for invalid PROVISIONING_MASTER_KEY in production, got nil")
 	}
 }
 

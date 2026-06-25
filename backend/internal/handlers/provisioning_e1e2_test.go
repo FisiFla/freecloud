@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 )
 
 // setChiURLParam injects a chi URL parameter into the request context.
@@ -76,5 +78,33 @@ func TestReconcileAllHandlerInvalidAppID(t *testing.T) {
 	h.ReconcileAllHandler(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLoadProvisioningConnectorsRegistersEnabledSCIM(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
+	enc, err := encryptProvisioningToken("scim-token")
+	if err != nil {
+		t.Fatalf("encrypt token: %v", err)
+	}
+
+	appID := "00000000-0000-0000-0000-000000000001"
+	db := &fakeDB{
+		queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+			return &fakeQueryRows{rows: [][]interface{}{
+				{appID, "scim", "https://scim.example.com", &enc},
+			}}, nil
+		},
+	}
+
+	connectors, err := LoadProvisioningConnectors(context.Background(), db, zap.NewNop())
+	if err != nil {
+		t.Fatalf("LoadProvisioningConnectors: %v", err)
+	}
+	if len(connectors) != 1 {
+		t.Fatalf("expected one connector, got %d", len(connectors))
+	}
+	if connectors[appID] == nil {
+		t.Fatalf("expected connector for app %s", appID)
 	}
 }

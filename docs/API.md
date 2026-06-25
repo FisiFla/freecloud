@@ -365,6 +365,7 @@ Authentication: `Authorization: Bearer <SCIM_BEARER_TOKEN>`.
 | `FLEET_URL` | `http://localhost:8082` | Yes | FleetDM base URL |
 | `FLEET_API_TOKEN` | `""` | Yes | FleetDM API token |
 | `FLEET_WEBHOOK_SECRET` | `""` | Yes | HMAC key for enrollment callback |
+| `PROVISIONING_MASTER_KEY` | `""` | Yes | Base64 AES-256 key for stored integration secrets |
 | `SCIM_BEARER_TOKEN` | `""` | Yes | Bearer token for SCIM provisioning |
 | `ACCESS_EVAL_TOKEN` | `""` | Yes | Bearer token for access evaluation |
 | `CORS_ORIGIN` | `http://localhost:3000` | Yes | Allowed CORS origin |

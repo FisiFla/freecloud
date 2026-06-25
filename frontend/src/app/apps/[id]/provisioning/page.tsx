@@ -112,10 +112,12 @@ export default function ProvisioningPage() {
           attributeMap[row.field.trim()] = row.remote.trim();
         }
       }
+      const endpointValue =
+        connectorType === "scim" || connectorType === "github" ? endpointUrl.trim() : "";
       const updated = await upsertProvisioningConfig(appId, {
         enabled,
         connectorType,
-        endpointUrl: endpointUrl.trim() || undefined,
+        endpointUrl: endpointValue || undefined,
         bearerToken: bearerToken.trim() || undefined,
         attributeMap: Object.keys(attributeMap).length > 0 ? attributeMap : undefined,
       });
@@ -251,18 +253,18 @@ export default function ProvisioningPage() {
           </select>
         </div>
 
-        {/* Endpoint URL — only for generic SCIM */}
-        {connectorType === "scim" && (
+        {/* Endpoint or organization, depending on connector */}
+        {(connectorType === "scim" || connectorType === "github") && (
           <div>
             <label htmlFor="endpointUrl" className="block text-sm font-medium text-gray-700 mb-1">
-              SCIM endpoint URL
+              {connectorType === "github" ? "GitHub organization" : "SCIM endpoint URL"}
             </label>
             <input
               id="endpointUrl"
-              type="url"
+              type={connectorType === "github" ? "text" : "url"}
               value={endpointUrl}
               onChange={(e) => setEndpointUrl(e.target.value)}
-              placeholder="https://app.example.com/scim/v2"
+              placeholder={connectorType === "github" ? "my-org" : "https://app.example.com/scim/v2"}
               className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>

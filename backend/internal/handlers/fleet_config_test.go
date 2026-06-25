@@ -141,6 +141,44 @@ func TestUpsertFleetConfig_BadJSON(t *testing.T) {
 	}
 }
 
+func TestDynamicFleetClientUsesStoredConfig(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
+
+	authCh := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/fleet/status" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		authCh <- r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	enc, err := encryptProvisioningToken("stored-token")
+	if err != nil {
+		t.Fatalf("encrypt token: %v", err)
+	}
+	db := &fakeDB{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*string)) = srv.URL
+				*(dest[1].(**string)) = &enc
+				return nil
+			}}
+		},
+	}
+
+	client := NewDynamicFleetClient(db, "http://fallback.invalid", "fallback-token", zap.NewNop())
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	seenAuth := <-authCh
+	if seenAuth != "Bearer stored-token" {
+		t.Fatalf("Authorization: want stored token, got %q", seenAuth)
+	}
+}
+
 // TestTestFleetConfig_NoServerURL verifies that TestFleetConfig returns ok=false
 // when no server URL is configured.
 func TestTestFleetConfig_NoServerURL(t *testing.T) {
