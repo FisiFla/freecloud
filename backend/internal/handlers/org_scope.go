@@ -81,3 +81,12 @@ func (h *Handler) requireCampaignInCallerOrg(w http.ResponseWriter, r *http.Requ
 func (h *Handler) requireFederationSourceInCallerOrg(w http.ResponseWriter, r *http.Request, sourceID string) bool {
 	return h.requireResourceInCallerOrg(w, r, "federation_sources", "id", sourceID, "federation source not found")
 }
+
+// requireAppInCallerOrg verifies a connected_apps id belongs to the caller's
+// active org. Used by every app-scoped sub-resource handler (provisioning
+// config/state, access policy, SAML metadata, ...) that takes {appId} from
+// the path — those sub-resources have no org_id of their own, so ownership
+// is always proven through the parent app.
+func (h *Handler) requireAppInCallerOrg(w http.ResponseWriter, r *http.Request, appID string) bool {
+	return h.requireResourceInCallerOrg(w, r, "connected_apps", "id", appID, "app not found")
+}

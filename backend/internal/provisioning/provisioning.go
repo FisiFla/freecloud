@@ -254,24 +254,19 @@ func (e *Engine) SyncGroupMembership(ctx context.Context, appID string, userID s
 	return nil
 }
 
-// ReconcileAll re-syncs stale or errored provisioning_state rows.
+// ReconcileAll re-syncs stale or errored provisioning_state rows, processed
+// one organization at a time (Epic C / v1.7 multi-tenant): each row already
+// carries its own org_id (Migration043) and its connector is looked up by
+// app_id, which itself belongs to exactly one org, so cross-org mixing was
+// never possible here — but reconciling org-by-org (rather than one global
+// pass over every org's rows interleaved) keeps failures, logs, and future
+// per-org controls (pause a single tenant's provisioning, rate-limit one
+// org's outbound calls) scoped and auditable per tenant instead of only
+// inferable after the fact from a shared log stream.
+//
 // It processes entries where: status = 'error' AND next_retry_at <= NOW(),
 // or last_sync_at is older than 24 hours.
 func (e *Engine) ReconcileAll(ctx context.Context) error {
-	rows, err := e.db.Query(ctx,
-		`SELECT ps.app_id::TEXT, ps.user_id::TEXT, COALESCE(ps.remote_id, ''), ps.status, ps.retry_count,
-		        u.email, u.first_name, u.last_name, COALESCE(u.department, '')
-		 FROM provisioning_state ps
-		 JOIN users u ON u.keycloak_user_id = ps.user_id
-		 WHERE (ps.status = 'error' AND (ps.next_retry_at IS NULL OR ps.next_retry_at <= NOW()))
-		    OR (ps.status = 'provisioned' AND (ps.last_sync_at IS NULL OR ps.last_sync_at < NOW() - INTERVAL '24 hours'))
-		 ORDER BY ps.updated_at ASC`,
-	)
-	if err != nil {
-		return fmt.Errorf("provisioning: reconcile query: %w", err)
-	}
-	defer rows.Close()
-
 	type staleEntry struct {
 		appID      string
 		userID     string
@@ -284,92 +279,130 @@ func (e *Engine) ReconcileAll(ctx context.Context) error {
 		department string
 	}
 
-	var entries []staleEntry
+	rows, err := e.db.Query(ctx,
+		`SELECT ps.org_id::TEXT, ps.app_id::TEXT, ps.user_id::TEXT, COALESCE(ps.remote_id, ''), ps.status, ps.retry_count,
+		        u.email, u.first_name, u.last_name, COALESCE(u.department, '')
+		 FROM provisioning_state ps
+		 JOIN users u ON u.keycloak_user_id = ps.user_id AND u.org_id = ps.org_id
+		 WHERE (ps.status = 'error' AND (ps.next_retry_at IS NULL OR ps.next_retry_at <= NOW()))
+		    OR (ps.status = 'provisioned' AND (ps.last_sync_at IS NULL OR ps.last_sync_at < NOW() - INTERVAL '24 hours'))
+		 ORDER BY ps.org_id, ps.updated_at ASC`,
+	)
+	if err != nil {
+		return fmt.Errorf("provisioning: reconcile query: %w", err)
+	}
+	defer rows.Close()
+
+	// byOrg preserves the query's org_id-major ORDER BY, so each org's entries
+	// are contiguous — a plain slice-of-(orgID, entries) keeps that order
+	// (unlike a map, whose iteration order is undefined).
+	type orgBatch struct {
+		orgID   string
+		entries []staleEntry
+	}
+	var batches []orgBatch
 	for rows.Next() {
+		var orgID string
 		var se staleEntry
-		if err := rows.Scan(&se.appID, &se.userID, &se.remoteID, &se.status, &se.retryCount,
+		if err := rows.Scan(&orgID, &se.appID, &se.userID, &se.remoteID, &se.status, &se.retryCount,
 			&se.email, &se.firstName, &se.lastName, &se.department); err != nil {
 			e.logger.Warn("provisioning: reconcile scan error", zap.Error(err))
 			continue
 		}
-		entries = append(entries, se)
+		if len(batches) == 0 || batches[len(batches)-1].orgID != orgID {
+			batches = append(batches, orgBatch{orgID: orgID})
+		}
+		last := &batches[len(batches)-1]
+		last.entries = append(last.entries, se)
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("provisioning: reconcile iterate: %w", err)
 	}
 
-	for _, se := range entries {
-		c, ok := e.connector(se.appID)
-		if !ok {
-			continue
-		}
-		user := ProvisionableUser{
-			ID:         se.userID,
-			Email:      se.email,
-			FirstName:  se.firstName,
-			LastName:   se.lastName,
-			Department: se.department,
-		}
-
-		if se.status == string(StatusProvisioned) {
-			// Periodic re-sync: update existing account.
-			if se.remoteID != "" {
-				if err := c.UpdateUser(ctx, se.remoteID, user); err != nil {
-					e.logger.Warn("provisioning: reconcile update failed",
-						zap.String("app_id", se.appID), zap.String("user_id", se.userID), zap.Error(err))
-					continue
-				}
-			}
-			_, _ = e.db.Exec(ctx,
-				`UPDATE provisioning_state SET last_sync_at = NOW(), updated_at = NOW() WHERE app_id = $1 AND user_id = $2`,
-				se.appID, se.userID,
-			)
-		} else {
-			// Retry errored entry.
-			if se.retryCount >= maxRetries {
-				_, _ = e.db.Exec(ctx,
-					`UPDATE provisioning_state SET status = 'permanent_error', updated_at = NOW() WHERE app_id = $1 AND user_id = $2`,
-					se.appID, se.userID,
-				)
-				e.logger.Warn("provisioning: permanent error — max retries exceeded",
-					zap.String("app_id", se.appID), zap.String("user_id", se.userID))
-				continue
-			}
-			rid, err := c.ProvisionUser(ctx, user)
-			if err != nil {
-				// Use the known retryCount from the stale entry rather than re-reading
-				// from DB, so ReconcileAll doesn't require a DB round-trip just for count.
-				newCount := se.retryCount + 1
-				if newCount >= maxRetries {
-					_, _ = e.db.Exec(ctx,
-						`UPDATE provisioning_state SET status = 'permanent_error', last_error = $3, retry_count = $4, updated_at = NOW() WHERE app_id = $1 AND user_id = $2`,
-						se.appID, se.userID, err.Error(), newCount,
-					)
-					e.logger.Warn("provisioning: permanent error — max retries exceeded",
-						zap.String("app_id", se.appID), zap.String("user_id", se.userID))
-				} else {
-					backoff := time.Duration(5*1<<se.retryCount) * time.Minute
-					if backoff > 2*time.Hour {
-						backoff = 2 * time.Hour
-					}
-					nextRetry := time.Now().Add(backoff)
-					_, _ = e.db.Exec(ctx,
-						`UPDATE provisioning_state SET status = 'error', last_error = $3, retry_count = $4, next_retry_at = $5, updated_at = NOW() WHERE app_id = $1 AND user_id = $2`,
-						se.appID, se.userID, err.Error(), newCount, nextRetry,
-					)
-				}
-				continue
-			}
-			_, _ = e.db.Exec(ctx,
-				`UPDATE provisioning_state
-				 SET status = 'provisioned', remote_id = $3, last_sync_at = NOW(),
-				     last_error = NULL, retry_count = 0, next_retry_at = NULL, updated_at = NOW()
-				 WHERE app_id = $1 AND user_id = $2`,
-				se.appID, se.userID, rid,
-			)
+	for _, batch := range batches {
+		e.logger.Info("provisioning: reconciling organization",
+			zap.String("org_id", batch.orgID), zap.Int("stale_entries", len(batch.entries)))
+		for _, se := range batch.entries {
+			e.reconcileOne(ctx, se.appID, se.userID, se.remoteID, se.status, se.retryCount,
+				se.email, se.firstName, se.lastName, se.department)
 		}
 	}
 	return nil
+}
+
+// reconcileOne processes a single stale provisioning_state row. Extracted
+// from ReconcileAll's per-org loop so the org batching above stays readable.
+func (e *Engine) reconcileOne(ctx context.Context, appID, userID, remoteID, status string, retryCount int, email, firstName, lastName, department string) {
+	c, ok := e.connector(appID)
+	if !ok {
+		return
+	}
+	user := ProvisionableUser{
+		ID:         userID,
+		Email:      email,
+		FirstName:  firstName,
+		LastName:   lastName,
+		Department: department,
+	}
+
+	if status == string(StatusProvisioned) {
+		// Periodic re-sync: update existing account.
+		if remoteID != "" {
+			if err := c.UpdateUser(ctx, remoteID, user); err != nil {
+				e.logger.Warn("provisioning: reconcile update failed",
+					zap.String("app_id", appID), zap.String("user_id", userID), zap.Error(err))
+				return
+			}
+		}
+		_, _ = e.db.Exec(ctx,
+			`UPDATE provisioning_state SET last_sync_at = NOW(), updated_at = NOW() WHERE app_id = $1 AND user_id = $2`,
+			appID, userID,
+		)
+		return
+	}
+
+	// Retry errored entry.
+	if retryCount >= maxRetries {
+		_, _ = e.db.Exec(ctx,
+			`UPDATE provisioning_state SET status = 'permanent_error', updated_at = NOW() WHERE app_id = $1 AND user_id = $2`,
+			appID, userID,
+		)
+		e.logger.Warn("provisioning: permanent error — max retries exceeded",
+			zap.String("app_id", appID), zap.String("user_id", userID))
+		return
+	}
+	rid, err := c.ProvisionUser(ctx, user)
+	if err != nil {
+		// Use the known retryCount from the stale entry rather than re-reading
+		// from DB, so ReconcileAll doesn't require a DB round-trip just for count.
+		newCount := retryCount + 1
+		if newCount >= maxRetries {
+			_, _ = e.db.Exec(ctx,
+				`UPDATE provisioning_state SET status = 'permanent_error', last_error = $3, retry_count = $4, updated_at = NOW() WHERE app_id = $1 AND user_id = $2`,
+				appID, userID, err.Error(), newCount,
+			)
+			e.logger.Warn("provisioning: permanent error — max retries exceeded",
+				zap.String("app_id", appID), zap.String("user_id", userID))
+		} else {
+			backoff := time.Duration(5*1<<retryCount) * time.Minute
+			if backoff > 2*time.Hour {
+				backoff = 2 * time.Hour
+			}
+			nextRetry := time.Now().Add(backoff)
+			_, _ = e.db.Exec(ctx,
+				`UPDATE provisioning_state SET status = 'error', last_error = $3, retry_count = $4, next_retry_at = $5, updated_at = NOW() WHERE app_id = $1 AND user_id = $2`,
+				appID, userID, err.Error(), newCount, nextRetry,
+			)
+		}
+		return
+	}
+	_, _ = e.db.Exec(ctx,
+		`UPDATE provisioning_state
+		 SET status = 'provisioned', remote_id = $3, last_sync_at = NOW(),
+		     last_error = NULL, retry_count = 0, next_retry_at = NULL, updated_at = NOW()
+		 WHERE app_id = $1 AND user_id = $2`,
+		appID, userID, rid,
+	)
 }
 
 // recordError increments retry_count and computes the next backoff time.
