@@ -176,11 +176,10 @@ func (h *Handler) GetFederationSource(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "federation source not found")
 		return
 	}
-	oc := middleware.GetOrgContext(ctx)
-	if oc == nil {
-		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+	if !h.requireFederationSourceInCallerOrg(w, r, id) {
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
 	var fs FederationSource
 	var configStr string
 	var createdAt, updatedAt time.Time
@@ -219,11 +218,10 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
-	oc := middleware.GetOrgContext(ctx)
-	if oc == nil {
-		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+	if !h.requireFederationSourceInCallerOrg(w, r, id) {
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
 
 	var cur FederationSource
 	var configStr string
@@ -273,8 +271,8 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 
 	newConfigJSON, _ := json.Marshal(map[string]string{"connectionUrl": newConnURL, "bindDn": newBindDN, "usersDn": newUsersDN})
 	if _, err := h.db.Exec(ctx,
-		`UPDATE federation_sources SET name=$1, vendor=$2, config=$3, updated_at=NOW() WHERE id=$4`,
-		newName, newVendor, string(newConfigJSON), id); err != nil {
+		`UPDATE federation_sources SET name=$1, vendor=$2, config=$3, updated_at=NOW() WHERE id=$4 AND org_id=$5`,
+		newName, newVendor, string(newConfigJSON), id, oc.OrgID); err != nil {
 		h.logger.Error("failed to update federation source", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to update federation source")
 		return
@@ -285,7 +283,7 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 		ID: cur.ID, Name: newName, ProviderType: cur.ProviderType, Vendor: newVendor,
 		KeycloakComponentID: cur.KeycloakComponentID,
 		Config:              map[string]interface{}{"connectionUrl": newConnURL, "bindDn": newBindDN, "usersDn": newUsersDN},
-		LastSyncAt: cur.LastSyncAt, LastSyncStatus: cur.LastSyncStatus,
+		LastSyncAt:          cur.LastSyncAt, LastSyncStatus: cur.LastSyncStatus,
 		CreatedAt: createdAt.Format(time.RFC3339), UpdatedAt: time.Now().Format(time.RFC3339),
 	})
 }
@@ -300,11 +298,10 @@ func (h *Handler) DeleteFederationSource(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
-	oc := middleware.GetOrgContext(ctx)
-	if oc == nil {
-		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+	if !h.requireFederationSourceInCallerOrg(w, r, id) {
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
 
 	var componentID string
 	err := h.db.QueryRow(ctx,
@@ -322,7 +319,7 @@ func (h *Handler) DeleteFederationSource(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	if _, err := h.db.Exec(ctx, `DELETE FROM federation_sources WHERE id = $1`, id); err != nil {
+	if _, err := h.db.Exec(ctx, `DELETE FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID); err != nil {
 		h.logger.Error("failed to delete federation source", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to delete federation source")
 		return
@@ -342,11 +339,10 @@ func (h *Handler) TestFederationConnection(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
-	oc := middleware.GetOrgContext(ctx)
-	if oc == nil {
-		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+	if !h.requireFederationSourceInCallerOrg(w, r, id) {
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
 
 	var fs FederationSource
 	var configStr string
@@ -390,11 +386,10 @@ func (h *Handler) TriggerFederationSync(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
-	oc := middleware.GetOrgContext(ctx)
-	if oc == nil {
-		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+	if !h.requireFederationSourceInCallerOrg(w, r, id) {
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
 
 	var componentID string
 	err := h.db.QueryRow(ctx, `SELECT COALESCE(keycloak_component_id, '') FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID).Scan(&componentID)
@@ -412,7 +407,7 @@ func (h *Handler) TriggerFederationSync(w http.ResponseWriter, r *http.Request) 
 		h.logger.Warn("federation sync failed", zap.String("id", id), zap.Error(syncErr))
 		syncStatus = "failed: " + syncErr.Error()
 		_, _ = h.db.Exec(ctx,
-			`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2`, syncStatus, id)
+			`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2 AND org_id=$3`, syncStatus, id, oc.OrgID)
 		_ = h.writeAuditEntryBestEffort(actorID, "federation_source.sync", "federation_source", id,
 			map[string]interface{}{"action": action, "status": "failed"})
 		respondJSON(w, http.StatusOK, map[string]interface{}{"synced": false, "status": syncStatus})
@@ -420,7 +415,7 @@ func (h *Handler) TriggerFederationSync(w http.ResponseWriter, r *http.Request) 
 	}
 
 	_, _ = h.db.Exec(ctx,
-		`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2`, syncStatus, id)
+		`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2 AND org_id=$3`, syncStatus, id, oc.OrgID)
 	_ = h.writeAuditEntryBestEffort(actorID, "federation_source.sync", "federation_source", id,
 		map[string]interface{}{"action": action, "status": "success"})
 	respondJSON(w, http.StatusOK, map[string]bool{"synced": true})
