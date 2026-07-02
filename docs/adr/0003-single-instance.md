@@ -2,6 +2,12 @@
 
 ## Status
 
+**Superseded (2026-07) by [ADR 0004](0004-multi-instance-ha.md).** v1.7 Epic
+B implemented the Redis-backed rate limiter, decoupled/locked migrations, and
+background-job leader election this ADR's "what multi-instance would
+require" section called for. The single-instance constraint below no longer
+applies; see ADR 0004 for the current HA posture and its remaining limits.
+
 Accepted (2026-06).
 
 ## Context

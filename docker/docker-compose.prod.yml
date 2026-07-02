@@ -93,6 +93,42 @@ services:
       postgres:
         condition: service_healthy
 
+  # ── Redis (B1, v1.7 HA) ───────────────────────────────────────────────────
+  # Dedicated to the backend's rate limiter — deliberately NOT shared with any
+  # other service, so this budget's isolation doesn't depend on remembering
+  # not to add other keys to it later. REDIS_URL is required in production
+  # (config.Validate fails closed without it); this is the only Redis the
+  # backend is told about.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Migrate (B2, v1.7 HA) ─────────────────────────────────────────────────
+  # One-shot job: applies pending schema migrations then exits. backend waits
+  # for it to complete successfully, so a rolling deploy never has a replica
+  # racing another replica (or this job) to apply the same migration.
+  migrate:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: ["migrate"]
+    restart: "no"
+    env_file:
+      - path: ../.secrets/secrets.env
+        required: false
+    environment:
+      DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:-}@postgres:5432/freecloud?sslmode=require
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # ── Backend ───────────────────────────────────────────────────────────────
   backend:
     build:
@@ -107,6 +143,7 @@ services:
       PORT: "8080"
       # POSTGRES_PASSWORD is in the host env when make prod-up sources secrets.env.
       DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:-}@postgres:5432/freecloud?sslmode=require
+      REDIS_URL: redis://redis:6379/0
       KEYCLOAK_URL: ${KC_PUBLIC_URL}
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-freecloud}
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-freecloud-service}
@@ -122,6 +159,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   # ── Frontend ──────────────────────────────────────────────────────────────
   frontend:
@@ -166,5 +207,6 @@ services:
 
 volumes:
   pgdata:
+  redis_data:
   caddy_data:
   caddy_config:

@@ -62,6 +62,10 @@ type Reconciler struct {
 	pool     DBPool
 	logger   *zap.Logger
 	notifier notify.Notifier
+	// isLeader gates the ticker-driven run (B3, v1.7 HA): nil means "always
+	// run" (single-instance / no leader election wired up), matching prior
+	// behavior exactly. When set, only the leader's tick actually reconciles.
+	isLeader func() bool
 }
 
 // New creates a Reconciler.
@@ -72,6 +76,15 @@ func New(kc keycloak.KeycloakClientInterface, pool DBPool, logger *zap.Logger) *
 // SetNotifier wires the event notifier into the reconciler (D1 / FCEX2-17).
 func (r *Reconciler) SetNotifier(n notify.Notifier) {
 	r.notifier = n
+}
+
+// SetLeaderGate wires a leader-election check (B3, v1.7 HA) so the ticker in
+// Start only performs a reconciliation pass on the instance that currently
+// holds leadership. Manual calls to Run (e.g. the admin drift-report
+// endpoint) are never gated — an operator explicitly asking for a live check
+// should always get one, on any instance.
+func (r *Reconciler) SetLeaderGate(isLeader func() bool) {
+	r.isLeader = isLeader
 }
 
 // Run performs one reconciliation pass and returns the drift. It never mutates
@@ -145,6 +158,9 @@ func (r *Reconciler) Start(ctx context.Context, interval time.Duration) {
 				r.logger.Info("reconciliation job stopped")
 				return
 			case <-ticker.C:
+				if r.isLeader != nil && !r.isLeader() {
+					continue
+				}
 				r.runAndRecord(ctx)
 			}
 		}

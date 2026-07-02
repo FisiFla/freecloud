@@ -14,7 +14,13 @@ import (
 // authMW is applied to all /api/v1 routes except /health.
 // A per-client rate limit protects the sensitive onboarding/offboarding
 // endpoints from abuse.
-func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handler) {
+//
+// newLimiter constructs a rate limiter for a given (limit, window, name).
+// name namespaces the limiter's counters (only meaningful for the
+// Redis-backed implementation, which shares storage across limiter
+// instances) and is otherwise unused. main.go supplies a factory that
+// selects Redis or in-memory based on config (see middleware.NewLimiterFactory).
+func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handler, newLimiter func(limit int, window time.Duration, name string) middleware.Limiter) {
 	// Liveness/readiness probes (k8s-style) and the simple health endpoint.
 	r.Get("/healthz", h.Healthz)
 	r.Get("/readyz", h.Readyz)
@@ -22,7 +28,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 	// The dependency health checks ping Keycloak/Fleet, so rate-limit them to
 	// prevent unauthenticated amplification against those upstreams.
-	healthLimiter := middleware.NewRateLimiter(30, time.Minute)
+	healthLimiter := newLimiter(30, time.Minute, "health")
 	r.Group(func(r chi.Router) {
 		r.Use(healthLimiter.Middleware)
 		r.Get("/api/v1/health/keycloak", h.HealthKeycloak)
@@ -37,7 +43,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	// A3 (FCEX3-7): Device-identity cookie — browser-facing, unauthenticated.
 	// Called after Fleet enrollment to set the freecloud-device-id cookie that
 	// the Keycloak SPI reads during login.  Rate-limited to 20 req/min.
-	deviceCookieLimiter := middleware.NewRateLimiter(20, time.Minute)
+	deviceCookieLimiter := newLimiter(20, time.Minute, "device_cookie")
 	r.Group(func(r chi.Router) {
 		r.Use(deviceCookieLimiter.Middleware)
 		r.Post("/api/v1/enrollment/device-identity", h.SetDeviceIdentityCookie)
@@ -75,7 +81,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 	// C3: self-service password reset — public, no JWT. Rate-limited to
 	// prevent email flooding. Returns a fixed message to avoid user enumeration.
-	forgotLimiter := middleware.NewRateLimiter(10, time.Minute)
+	forgotLimiter := newLimiter(10, time.Minute, "forgot_password")
 	r.Group(func(r chi.Router) {
 		r.Use(forgotLimiter.Middleware)
 		r.Post("/api/v1/auth/forgot-password", h.ForgotPassword)
@@ -83,7 +89,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 	// B1 — First-run setup. Unauthenticated but fail-closed once provisioned.
 	// Rate-limited to prevent brute-force attempts on the setup window.
-	setupLimiter := middleware.NewRateLimiter(10, time.Minute)
+	setupLimiter := newLimiter(10, time.Minute, "setup")
 	r.Group(func(r chi.Router) {
 		r.Use(setupLimiter.Middleware)
 		r.Get("/api/v1/setup/status", h.SetupStatus)
@@ -91,7 +97,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	})
 
 	// Rate limiter for mutating endpoints: 20 requests / minute / client.
-	mutateLimiter := middleware.NewRateLimiter(20, time.Minute)
+	mutateLimiter := newLimiter(20, time.Minute, "mutate")
 
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)

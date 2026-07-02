@@ -88,6 +88,20 @@ services:
       postgres:
         condition: service_healthy
 
+  # ── Redis (B1, v1.7 HA) ───────────────────────────────────────────────────
+  # Dedicated to the backend's rate limiter — not shared with Fleet or anything
+  # else, so a future Fleet-adjacent cache doesn't silently share this budget.
+  # Turnkey requirement: no persistence/auth needed for a single-box localhost
+  # stack; REDIS_URL is fixed since it never leaves the Docker bridge network.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # ── FleetDM mock ──────────────────────────────────────────────────────────
   fleetdm-mock:
     build:
@@ -106,6 +120,23 @@ services:
       secrets-init:
         condition: service_completed_successfully
 
+  # ── Migrate (B2, v1.7 HA) ─────────────────────────────────────────────────
+  # One-shot job: applies pending schema migrations then exits. The backend
+  # waits for this to complete successfully before starting, so migrations
+  # never race against server startup (or against each other, if this stack
+  # is ever scaled to multiple backend replicas).
+  migrate:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: ["migrate"]
+    restart: "no"
+    environment:
+      DATABASE_URL: postgres://freecloud:freecloud-local@postgres:5432/freecloud?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # ── Backend ───────────────────────────────────────────────────────────────
   backend:
     build:
@@ -119,6 +150,8 @@ services:
       APP_ENV: development
       PORT: "8080"
       DATABASE_URL: postgres://freecloud:freecloud-local@postgres:5432/freecloud?sslmode=disable
+      # B1: rate limiter — dedicated Redis on the compose bridge network.
+      REDIS_URL: redis://redis:6379/0
       KC_BOOTSTRAP_ADMIN: admin
       KC_BOOTSTRAP_PASSWORD: admin-local
       # Internal URL for bootstrap admin login; JWT issuer validation uses the
@@ -138,6 +171,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       keycloak:
         condition: service_started
       fleetdm-mock:

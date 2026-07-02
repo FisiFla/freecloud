@@ -53,6 +53,31 @@ services:
     # endpoint needs KC_HEALTH_ENABLED on the management port. Readiness is
     # handled by the backend, which retries the admin login until Keycloak is up.
 
+  # B1 (v1.7 HA): dedicated Redis for the backend rate limiter in e2e.
+  redis-e2e:
+    image: redis:7-alpine
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # B2 (v1.7 HA): one-shot migration job. backend-e2e (and, in the HA overlay,
+  # backend-e2e-2) both depend on this completing first — proves migrations
+  # run exactly once even with multiple replicas (see B4 e2e tests).
+  migrate-e2e:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    command: ["migrate"]
+    environment:
+      DATABASE_URL: postgres://freecloud:freecloud@postgres-e2e:5432/freecloud_e2e?sslmode=disable
+    depends_on:
+      postgres-e2e:
+        condition: service_healthy
+
   fleetdm-e2e:
     build:
       context: ./fleetdm-mock
@@ -97,6 +122,8 @@ services:
       DATABASE_URL: postgres://freecloud:freecloud@postgres-e2e:5432/freecloud_e2e?sslmode=disable
       APP_ENV: test
       PORT: "8080"
+      # B1: e2e's dedicated Redis (not shared with the localhost/prod ones).
+      REDIS_URL: redis://redis-e2e:6379/0
       KEYCLOAK_URL: http://keycloak-e2e:8080
       KEYCLOAK_REALM: freecloud-e2e
       KEYCLOAK_CLIENT_ID: freecloud-service
@@ -118,17 +145,19 @@ services:
     depends_on:
       postgres-e2e:
         condition: service_healthy
+      redis-e2e:
+        condition: service_healthy
+      migrate-e2e:
+        condition: service_completed_successfully
       keycloak-e2e:
         condition: service_started
       fleetdm-e2e:
         condition: service_healthy
       openldap-e2e:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/healthz || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
+    # No healthcheck: the backend image is distroless (no shell, no wget —
+    # see backend/Dockerfile), so a CMD-SHELL check can never succeed here.
+    # Readiness is polled externally (CI curls /readyz) instead of gated via
+    # depends_on: condition: service_healthy.
 
 volumes: {}
