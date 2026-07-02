@@ -82,6 +82,12 @@ func (h *Handler) requireFederationSourceInCallerOrg(w http.ResponseWriter, r *h
 	return h.requireResourceInCallerOrg(w, r, "federation_sources", "id", sourceID, "federation source not found")
 }
 
+// requireReviewScheduleInCallerOrg verifies a review_schedules id belongs to
+// the caller's active org.
+func (h *Handler) requireReviewScheduleInCallerOrg(w http.ResponseWriter, r *http.Request, scheduleID string) bool {
+	return h.requireResourceInCallerOrg(w, r, "review_schedules", "id", scheduleID, "schedule not found")
+}
+
 // requireAppInCallerOrg verifies a connected_apps id belongs to the caller's
 // active org. Used by every app-scoped sub-resource handler (provisioning
 // config/state, access policy, SAML metadata, ...) that takes {appId} from
