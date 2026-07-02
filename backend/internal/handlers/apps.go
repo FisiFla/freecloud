@@ -361,10 +361,19 @@ func (h *Handler) ListApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// C2: org-scoped read. Fail closed — no org context means no rows.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	rows, err := h.db.Query(ctx,
 		`SELECT id, keycloak_client_id, name, protocol, COALESCE(base_url, ''), enabled, created_at
 		 FROM connected_apps
+		 WHERE org_id = $1
 		 ORDER BY created_at DESC`,
+		oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("failed to query connected apps", zap.Error(err))

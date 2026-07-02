@@ -344,7 +344,13 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 			auditDetails := map[string]interface{}{
 				"email": req.Email, "approval_id": approvalID,
 			}
-			if err := h.persistOnboard(ctx, kcUserID, req, approverID, auditDetails, enrollmentToken); err != nil {
+			// C2: the approver's currently-resolved org owns the onboarded user.
+			// Fail closed rather than defaulting silently.
+			oc := middleware.GetOrgContext(ctx)
+			if oc == nil {
+				return fmt.Errorf("no organization context for approval execution")
+			}
+			if err := h.persistOnboard(ctx, kcUserID, req, approverID, auditDetails, enrollmentToken, oc.OrgID); err != nil {
 				return fmt.Errorf("persist onboard: %w", err)
 			}
 		}

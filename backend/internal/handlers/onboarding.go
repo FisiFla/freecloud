@@ -85,10 +85,21 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
+	// C2: onboarding creates an org-scoped user row; the active org must be
+	// resolvable. Fail closed rather than defaulting silently.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	var warnings []string
 
 	// Idempotency: if this email already maps to a Keycloak user locally, do not
 	// create a second Keycloak user — report the existing mapping as a conflict.
+	// Email is unique realm-wide (see docs/adr/0004), so this check is
+	// intentionally NOT org-scoped: a duplicate email across orgs is always a
+	// conflict, matching the accepted shared-realm limitation.
 	if h.db != nil {
 		var existingID string
 		lookupErr := h.db.QueryRow(ctx,
@@ -169,7 +180,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 		}
 		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, auditDetails, enrollmentToken); persistErr != nil {
+		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, auditDetails, enrollmentToken, oc.OrgID); persistErr != nil {
 			logger.Error("failed to persist onboarded user; rolling back Keycloak user",
 				zap.String("kc_user_id", kcUserID), zap.Error(persistErr))
 			respondError(w, http.StatusInternalServerError, "failed to persist user")
@@ -223,7 +234,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 // enrollment token was issued) the token→user mapping, all in a single
 // transaction — so a persisted onboarding always has a matching audit record,
 // and a device that later enrolls with that token can be linked to its owner.
-func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req OnboardRequest, actorID string, auditDetails any, enrollmentToken string) error {
+func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req OnboardRequest, actorID string, auditDetails any, enrollmentToken string, orgID string) error {
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -231,11 +242,19 @@ func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req Onboa
 	defer tx.Rollback(ctx)
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO users (keycloak_user_id, email, first_name, last_name, department, role)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		kcUserID, req.Email, req.FirstName, req.LastName, req.Department, req.Role,
+		`INSERT INTO users (keycloak_user_id, email, first_name, last_name, department, role, org_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		kcUserID, req.Email, req.FirstName, req.LastName, req.Department, req.Role, orgID,
 	); err != nil {
 		return fmt.Errorf("insert user: %w", err)
+	}
+	// C2: every onboarded user is a member of the org that onboarded them.
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO org_memberships (org_id, user_id, role) VALUES ($1, $2, 'member')
+		 ON CONFLICT (org_id, user_id) DO NOTHING`,
+		orgID, kcUserID,
+	); err != nil {
+		return fmt.Errorf("insert org membership: %w", err)
 	}
 	if err := writeAuditEntry(ctx, tx, actorID, "onboard", "user", kcUserID, auditDetails); err != nil {
 		return fmt.Errorf("insert audit log: %w", err)

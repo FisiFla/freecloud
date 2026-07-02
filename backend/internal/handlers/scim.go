@@ -20,6 +20,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 // ---- SCIM JSON types ----
@@ -400,9 +402,14 @@ func (h *Handler) SCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	// C4 (scoped down): SCIM bearer tokens are not yet per-org (see
+	// docs/adr/0004 / Migration043's scim_bearer_tokens table, added but not
+	// yet wired to a lookup here). The legacy SCIM_BEARER_TOKEN authenticates
+	// on behalf of the Default Organization until per-org SCIM tokens are
+	// wired up.
 	if err := h.persistOnboard(persistCtx, kcUserID, onboardReq, "scim-provisioner", map[string]interface{}{
 		"source": "scim",
-	}, ""); err != nil {
+	}, "", middleware.DefaultOrgID); err != nil {
 		h.logger.Error("scim create: persist failed", zap.String("kc_user_id", kcUserID), zap.Error(err))
 		scimRespondError(w, http.StatusInternalServerError, "failed to persist user", "")
 		return

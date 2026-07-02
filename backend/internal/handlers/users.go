@@ -7,6 +7,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 // User represents a row in the users table along with associated devices.
@@ -48,6 +50,13 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// C2: org-scoped read. Fail closed — no org context means no rows.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	rows, err := h.db.Query(ctx,
 		`SELECT u.keycloak_user_id, u.email, u.first_name, u.last_name,
 		        COALESCE(u.department, ''), COALESCE(u.role, ''), COALESCE(u.disabled, false),
@@ -60,7 +69,9 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		 FROM users u
 		 LEFT JOIN users_devices_mapping m ON m.user_id = u.keycloak_user_id
 		 LEFT JOIN devices d ON d.fleet_host_id = m.device_id
+		 WHERE u.org_id = $1
 		 ORDER BY u.created_at DESC, d.hostname`,
+		oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("failed to query users", zap.Error(err))
@@ -147,13 +158,21 @@ func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// C2: org-scoped read. Fail closed — no org context means "not found",
+	// never an implicit cross-org lookup.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	var u User
 	var createdAt, updatedAt time.Time
 	err := h.db.QueryRow(ctx,
 		`SELECT keycloak_user_id, email, first_name, last_name,
 		        COALESCE(department, ''), COALESCE(role, ''), COALESCE(disabled, false), created_at, updated_at
-	 FROM users WHERE keycloak_user_id = $1`,
-		userID,
+	 FROM users WHERE keycloak_user_id = $1 AND org_id = $2`,
+		userID, oc.OrgID,
 	).Scan(&u.KeycloakUserID, &u.Email, &u.FirstName, &u.LastName,
 		&u.Department, &u.Role, &u.Disabled, &createdAt, &updatedAt)
 

@@ -100,6 +100,12 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	var expiresAt *time.Time
 	if req.ExpiresInDays > 0 {
 		t := time.Now().UTC().Add(time.Duration(req.ExpiresInDays) * 24 * time.Hour)
@@ -117,10 +123,10 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	var id string
 	var createdAt time.Time
 	err = tx.QueryRow(ctx,
-		`INSERT INTO api_tokens (name, token_hash, role, scopes, service_identity, created_by, expires_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO api_tokens (name, token_hash, role, scopes, service_identity, created_by, expires_at, org_id)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		 RETURNING id, created_at`,
-		req.Name, hash, req.Role, []string{}, req.ServiceIdentity, actorID, expiresAt,
+		req.Name, hash, req.Role, []string{}, req.ServiceIdentity, actorID, expiresAt, oc.OrgID,
 	).Scan(&id, &createdAt)
 	if err != nil {
 		h.logger.Error("failed to insert api token", zap.Error(err))
@@ -164,9 +170,16 @@ func (h *Handler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	// C2: org-scoped read. Fail closed — no org context means no rows.
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 	rows, err := h.db.Query(r.Context(),
 		`SELECT id, name, role, service_identity, created_at, expires_at
-		 FROM api_tokens WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC`,
+		 FROM api_tokens WHERE org_id = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > NOW()) ORDER BY created_at DESC`,
+		oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("failed to list api tokens", zap.Error(err))
@@ -214,6 +227,13 @@ func (h *Handler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	actorID := middleware.GetActorID(ctx)
+
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		h.logger.Error("failed to begin api token revocation", zap.Error(err))
@@ -226,9 +246,9 @@ func (h *Handler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 	err = tx.QueryRow(ctx,
 		`UPDATE api_tokens
 		 SET revoked_at = NOW()
-		 WHERE id = $1 AND revoked_at IS NULL
+		 WHERE id = $1 AND org_id = $2 AND revoked_at IS NULL
 		 RETURNING name, role, service_identity`,
-		id,
+		id, oc.OrgID,
 	).Scan(&name, &role, &serviceIdentity)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
