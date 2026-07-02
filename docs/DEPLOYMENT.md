@@ -226,6 +226,40 @@ The request body is the same JSON as `PUT .../policy`. The response returns
 `{"allow": true/false, "reasons": [...]}` for a synthetic evaluation, without
 modifying the stored policy.
 
+### GeoIP (MaxMind GeoLite2)
+
+The `Geography` condition above is **fail-closed by default**: FreeCloud ships
+with a no-op GeoIP lookup that always reports "unknown", so any policy with a
+non-empty `geoCountryAllowlist` denies every request until you supply a real
+GeoIP database.
+
+To enable live geo resolution:
+
+1. **Get a GeoLite2 database.** Create a free MaxMind account and generate a
+   license key at <https://www.maxmind.com/en/geolite2/signup>, then download
+   `GeoLite2-Country.mmdb` (or `GeoLite2-City.mmdb` — both work; City is
+   larger and includes extra fields FreeCloud doesn't use) via MaxMind's
+   `geoipupdate` tool or the direct download link in your account console.
+   FreeCloud does **not** auto-download this for you — MaxMind's license
+   terms require you to accept them and use your own credentials.
+2. **Place the file** on a volume the backend container can read, e.g.
+   `/etc/freecloud/GeoLite2-Country.mmdb`.
+3. **Set `GEOIP_MMDB_PATH`** to that path in `.env.prod` (or the container's
+   environment) and mount the directory into the `backend` service in
+   `docker-compose.prod.yml`.
+4. Restart the backend. On startup it loads the file and wires it in; if the
+   path is set but the file is missing, unreadable, or not a valid MaxMind DB,
+   **the backend refuses to start** (fail closed) rather than boot with a geo
+   gate that silently denies everyone.
+5. **Keep it updated.** GeoLite2 databases are rebuilt roughly weekly; stale
+   data degrades accuracy but never becomes unsafe (the lookup either
+   resolves correctly or falls back to unknown/deny). Re-download
+   periodically (MaxMind's `geoipupdate` can automate this) and restart the
+   backend, or bind-mount a path that a host-side cron job refreshes in place.
+
+If `GEOIP_MMDB_PATH` is unset, geography conditions keep failing closed and
+every other condition type (time window, network/IP) is unaffected.
+
 ## Provisioning Dry-Run and Reconcile
 
 **Dry-run** previews what a full provisioning push would do without sending any

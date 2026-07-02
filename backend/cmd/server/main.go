@@ -22,6 +22,7 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/bootstrap"
 	"github.com/FisiFla/freecloud/backend/internal/config"
 	"github.com/FisiFla/freecloud/backend/internal/db"
+	"github.com/FisiFla/freecloud/backend/internal/geoip"
 	"github.com/FisiFla/freecloud/backend/internal/handlers"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/leader"
@@ -315,6 +316,21 @@ func runServer() {
 	handler.SetSnapshotter(snap)
 	handler.SetProvisionEngine(provisionEngine)
 	handler.SetLDAPBindPassword(cfg.LDAPBindPassword)
+
+	// A2 — Live GeoIP (optional). GEOIP_MMDB_PATH unset keeps the handlers
+	// package's no-op default (fails closed: unknown country whenever a
+	// policy sets a geo allowlist). When set, a bad/corrupt/unreadable mmdb
+	// must refuse to start rather than silently keep every geo-gated login
+	// denied — Open() itself is fail-closed, so any error here is fatal.
+	if cfg.GeoIPMMDBPath != "" {
+		geoResolver, err := geoip.Open(cfg.GeoIPMMDBPath)
+		if err != nil {
+			logger.Fatal("geoip: failed to load GEOIP_MMDB_PATH", zap.Error(err))
+		}
+		defer geoResolver.Close()
+		handler.SetGeoIPLookup(geoResolver)
+		logger.Info("geoip: live GeoIP resolver loaded", zap.String("path", cfg.GeoIPMMDBPath))
+	}
 
 	// Initialize JWT auth middleware, wrapping it with API token support (C2).
 	baseAuth := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)

@@ -49,6 +49,15 @@ jobs:
           go-version: '1.25'
           cache-dependency-path: backend/go.sum
 
+      - name: Generate A2 GeoIP e2e fixture
+        # A tiny, non-MaxMind-licensed mmdb (NOT a real GeoLite2 database) so
+        # the geo-condition enforcement e2e test has a live GeoIP lookup to
+        # exercise. Real deployments supply their own operator-downloaded
+        # GeoLite2 file — see docs/DEPLOYMENT.md "GeoIP (MaxMind GeoLite2)".
+        run: |
+          mkdir -p backend/.e2e-fixtures
+          cd backend && go run ./cmd/genfixturemmdb -out .e2e-fixtures/geoip-fixture.mmdb
+
       - name: Build e2e stack
         # docker/Dockerfile.keycloak is a multi-stage build: maven stage builds the jar,
         # second stage bakes it into the Keycloak image.  No Java/Maven needed here

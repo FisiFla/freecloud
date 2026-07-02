@@ -104,6 +104,13 @@ type Config struct {
 	// until schema_migrations reflects the current version before serving.
 	// 0 disables waiting: startup fails immediately if the schema is behind.
 	WaitForSchemaTimeout time.Duration
+
+	// A2 — GeoIPMMDBPath points at an operator-supplied MaxMind GeoLite2/GeoIP2
+	// mmdb file (Country or City — both include the "country" record). Empty
+	// (the default) keeps geo-allowlist conditions on the no-op lookup, which
+	// fails closed (unknown country) whenever a policy sets a geo allowlist.
+	// See docs/DEPLOYMENT.md "GeoIP (MaxMind GeoLite2)" for how to obtain one.
+	GeoIPMMDBPath string
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -168,6 +175,8 @@ func Load() *Config {
 		RedisURL: resolveSecret("REDIS_URL", ""),
 		// B2 — schema-wait polling; 0 = fail immediately if schema is behind.
 		WaitForSchemaTimeout: parseDuration(getEnv("WAIT_FOR_SCHEMA_TIMEOUT", "0")),
+		// A2 — GeoIP (optional; empty keeps the no-op fail-closed default)
+		GeoIPMMDBPath: getEnv("GEOIP_MMDB_PATH", ""),
 	}
 }
 
