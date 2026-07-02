@@ -444,10 +444,19 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// C5: org-scoped read. audit_logs keeps ONE global hash chain (see the
+	// multi-tenant ADR) — org_id here is a filter column only, never a chain
+	// boundary. Fail closed: no org context means no rows, not "all orgs".
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	query := `SELECT id, actor_id, action, COALESCE(target_type, ''), COALESCE(target_id, ''), details, created_at
-		 FROM audit_logs WHERE 1=1`
-	args := []interface{}{}
-	argIdx := 1
+		 FROM audit_logs WHERE org_id = $1`
+	args := []interface{}{oc.OrgID}
+	argIdx := 2
 
 	if actorFilter != "" {
 		query += ` AND actor_id = $` + strconv.Itoa(argIdx)

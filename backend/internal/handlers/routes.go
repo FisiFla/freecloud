@@ -102,6 +102,27 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)
 		r.Use(middleware.ActorIDMiddleware)
+		// C1: resolve the active organization for every authenticated request.
+		// Fails closed (403) when no org context can be resolved — see
+		// middleware.OrgContextMiddleware for the resolution order.
+		r.Use(middleware.OrgContextMiddleware(h.db))
+
+		// C2: org + membership management (system-admin creates orgs; org-admin
+		// manages their own org's members).
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequirePermission(middleware.PermManageOrgs))
+			r.Post("/api/v1/orgs", h.CreateOrg)
+			r.Get("/api/v1/orgs", h.ListOrgs)
+		})
+		r.With(middleware.RequirePermission(middleware.PermSelfService)).Get("/api/v1/me", h.Me)
+		r.Group(func(r chi.Router) {
+			// Org-scoped: system-admin (any org) or org-admin (their own org,
+			// enforced inside the handlers against the resolved OrgContext).
+			r.Use(middleware.RequireOrgAdminOrSystemAdmin)
+			r.Get("/api/v1/orgs/{orgId}/members", h.ListOrgMembers)
+			r.Post("/api/v1/orgs/{orgId}/members", h.AddOrgMember)
+			r.Delete("/api/v1/orgs/{orgId}/members/{userId}", h.RemoveOrgMember)
+		})
 
 		// Sensitive write endpoints get the stricter rate limit.
 		r.Group(func(r chi.Router) {

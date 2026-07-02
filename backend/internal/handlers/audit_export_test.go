@@ -13,7 +13,20 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
+
+// withDefaultOrg attaches a resolved org context to a test request. These
+// tests call handlers directly (bypassing SetupRoutes / OrgContextMiddleware),
+// so org resolution must be injected manually — mirrors what the real
+// middleware chain would have set for an org-admin of the Default Organization.
+func withDefaultOrg(req *http.Request) *http.Request {
+	ctx := middleware.SetOrgContext(req.Context(), &middleware.OrgContext{
+		OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin,
+	})
+	return req.WithContext(ctx)
+}
 
 // fakeRows implements pgx.Rows for ExportAuditLogs tests.
 type fakeAuditRows struct {
@@ -82,7 +95,7 @@ func TestExportAuditLogsCSV(t *testing.T) {
 	}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs/export?format=csv", nil)
+	req := withDefaultOrg(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs/export?format=csv", nil))
 	rec := httptest.NewRecorder()
 	h.ExportAuditLogs(rec, req)
 
@@ -129,7 +142,7 @@ func TestExportAuditLogsJSON(t *testing.T) {
 	}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs/export?format=json", nil)
+	req := withDefaultOrg(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs/export?format=json", nil))
 	rec := httptest.NewRecorder()
 	h.ExportAuditLogs(rec, req)
 
@@ -170,7 +183,7 @@ func TestExportAuditLogsDefaultFormat(t *testing.T) {
 		},
 	}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs/export", nil)
+	req := withDefaultOrg(httptest.NewRequest(http.MethodGet, "/api/v1/audit-logs/export", nil))
 	rec := httptest.NewRecorder()
 	h.ExportAuditLogs(rec, req)
 	if rec.Code != http.StatusOK {
@@ -228,16 +241,16 @@ func TestExportAuditLogsDateRangePassedToQuery(t *testing.T) {
 	}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 
-	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/audit-logs/export?format=csv&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z", nil)
+	req := withDefaultOrg(httptest.NewRequest(http.MethodGet,
+		"/api/v1/audit-logs/export?format=csv&from=2024-01-01T00:00:00Z&to=2024-12-31T23:59:59Z", nil))
 	rec := httptest.NewRecorder()
 	h.ExportAuditLogs(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	// The two time args must appear in capturedArgs (no actor/action → positions 0 and 1).
-	if len(capturedArgs) < 2 {
-		t.Fatalf("expected at least 2 SQL args (from/to), got %d", len(capturedArgs))
+	// org_id is always arg 0; the two time args follow (no actor/action → positions 1 and 2).
+	if len(capturedArgs) < 3 {
+		t.Fatalf("expected at least 3 SQL args (org_id, from, to), got %d", len(capturedArgs))
 	}
 }
 
@@ -276,15 +289,15 @@ func TestListAuditLogsDateRangePassedToQuery(t *testing.T) {
 	}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 
-	req := httptest.NewRequest(http.MethodGet,
-		"/api/v1/audit-logs?from=2024-01-01T00:00:00Z&to=2024-06-30T00:00:00Z", nil)
+	req := withDefaultOrg(httptest.NewRequest(http.MethodGet,
+		"/api/v1/audit-logs?from=2024-01-01T00:00:00Z&to=2024-06-30T00:00:00Z", nil))
 	rec := httptest.NewRecorder()
 	h.ListAuditLogs(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	// No actor/action → args are: from, to, limit, offset (4 args).
-	if len(capturedArgs) < 4 {
-		t.Fatalf("expected 4 SQL args (from, to, limit, offset), got %d", len(capturedArgs))
+	// org_id is always arg 0; no actor/action → args are: org_id, from, to, limit, offset (5 args).
+	if len(capturedArgs) < 5 {
+		t.Fatalf("expected 5 SQL args (org_id, from, to, limit, offset), got %d", len(capturedArgs))
 	}
 }

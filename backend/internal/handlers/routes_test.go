@@ -25,8 +25,14 @@ func testLimiterFactory(limit int, window time.Duration, _ string) middleware.Li
 	return middleware.NewRateLimiter(limit, window)
 }
 
-// fakeRoleAuthMW injects valid claims and the actor ID into the context,
-// bypassing real JWT verification. Used only by router-level tests.
+// fakeRoleAuthMW injects valid claims, the actor ID, and a resolved org
+// context into the request, bypassing real JWT verification and DB-backed
+// org-membership lookups. Used only by router-level tests. The org membership
+// role mirrors the global role for test simplicity: RoleSuperAdmin resolves
+// as org-admin (system-admins can act on any org); every other role resolves
+// as a plain "member" so org-admin-gated routes correctly deny them, matching
+// how a real end-user/helpdesk/etc. would have no org_memberships.role =
+// 'org-admin' row unless explicitly granted one.
 func fakeRoleAuthMW(role middleware.Role) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,8 +43,16 @@ func fakeRoleAuthMW(role middleware.Role) func(http.Handler) http.Handler {
 				IsAdmin:           role == middleware.RoleSuperAdmin,
 				Role:              role,
 			}
+			orgRole := "member"
+			if role == middleware.RoleSuperAdmin {
+				orgRole = middleware.OrgMembershipRoleAdmin
+			}
 			ctx := middleware.SetClaims(r.Context(), claims)
 			ctx = context.WithValue(ctx, middleware.ActorIDKey, "test-user")
+			ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{
+				OrgID: middleware.DefaultOrgID,
+				Role:  orgRole,
+			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -234,6 +248,10 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		"GET /api/v1/portal/me/apps":                       true,
 		"GET /api/v1/portal/me/compliance":                 true,
 		"POST /api/v1/portal/access-requests":              true,
+		// C1/C3 (Epic C multi-tenant): every authenticated user can see their
+		// own identity, global role, and org memberships — gated by
+		// PermSelfService, which end-user holds.
+		"GET /api/v1/me": true,
 		// B1: MFA self-service — gated by PermSelfService, which end-user holds.
 		"GET /api/v1/portal/me/mfa/factors":                true,
 		"POST /api/v1/portal/me/mfa/totp/enroll":           true,
