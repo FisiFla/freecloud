@@ -35,14 +35,34 @@ services:
       KC_DB_DATABASE: keycloak_e2e
       KC_DB_USERNAME: freecloud
       KC_DB_PASSWORD: freecloud
-      KC_HOSTNAME: localhost
-      KC_HOSTNAME_PORT: 8083
+      # KC_HOSTNAME must match what the backend uses to validate JWT issuers
+      # (KEYCLOAK_URL below in backend-e2e: http://keycloak-e2e:8080) —
+      # Keycloak stamps this into every token's "iss" claim regardless of
+      # which address a caller actually used to reach it. A full URL (not
+      # just a bare hostname) pins the scheme+host+port that Keycloak's
+      # hostname-v2 provider stamps into "iss", overriding what it would
+      # otherwise infer per-request from the Host header/port — needed so the
+      # issuer stays consistent whether a caller reaches Keycloak via the
+      # direct port mapping (8083) or via keycloak-proxy-e2e (8089). start-dev
+      # disables hostname strict-checking, so this does not block requests
+      # that arrive via a different address/port than what's advertised.
+      KC_HOSTNAME: http://keycloak-e2e:8080
       # A3: propagate posture-check config so the SPI can call the backend.
       # In e2e the backend is reachable at its internal compose hostname.
       ACCESS_EVAL_URL: http://backend-e2e:8080/api/v1/access/evaluate
       ACCESS_EVAL_TOKEN: e2e-access-eval-token
       # Feature flag: enable enforcement in e2e (A4 tests verify the SPI fires).
       POSTURE_CHECK_ENABLED: "true"
+      # A3: trust X-Forwarded-For — ONLY safe because keycloak-proxy-e2e below
+      # is the sole intended path in the network-condition e2e test. Port 8083
+      # (this container, exposed directly) stays reachable too because other
+      # e2e helpers (admin_auth_test.go's ROPC token exchange) use it and don't
+      # go through a proxy — those flows don't hit the posture-check SPI at
+      # all (direct grant bypasses the browser flow), so TRUST_PROXY here has
+      # no effect on them. See docs/DEPLOYMENT.md "Reverse Proxy Requirements
+      # (SPI Client-IP Forwarding)" for why direct access must be network-
+      # blocked in a real deployment.
+      TRUST_PROXY: "true"
     ports:
       - "8083:8080"
     depends_on:
@@ -78,6 +98,22 @@ services:
       postgres-e2e:
         condition: service_healthy
 
+  # A3: reverse proxy in front of Keycloak for the client-IP-forwarding e2e
+  # test. Caddy's reverse_proxy appends the real connecting peer's address to
+  # X-Forwarded-For (never replaces an existing value), which is exactly the
+  # "trust only the rightmost hop" contract ClientIPResolver implements.
+  keycloak-proxy-e2e:
+    image: caddy:2-alpine
+    ports:
+      # NOT 8086/8087 — those are claimed by the B4 HA overlay's lb-e2e and
+      # backend-e2e-2 (docker-compose.e2e-ha.yml), which layers on top of
+      # this base file. Keep this and scim-mock-e2e's ports out of that range.
+      - "8089:8080"
+    volumes:
+      - ./keycloak-proxy-e2e/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - keycloak-e2e
+
   fleetdm-e2e:
     build:
       context: ./fleetdm-mock
@@ -87,6 +123,28 @@ services:
     environment:
       BACKEND_URL: http://backend-e2e:8080
       FLEET_WEBHOOK_SECRET: e2e-webhook-secret
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # A1: minimal SCIM mock standing in for a downstream SaaS tenant, used only
+  # by TestE2E_Admin_ProvisioningRoundTrip. Self-looping outbound provisioning
+  # back into this backend's own inbound SCIM doesn't work (the employee
+  # already exists there by email -> 409), so the round-trip needs a
+  # genuinely separate target — this is not a contract-fidelity mock (see A4's
+  # httptest-based Slack/GitHub tests for that).
+  scim-mock-e2e:
+    build:
+      context: ./scim-mock-e2e
+      dockerfile: Dockerfile
+    ports:
+      # See keycloak-proxy-e2e's port comment — kept clear of the B4 HA
+      # overlay's 8086/8087.
+      - "8088:8080"
+    environment:
+      SCIM_MOCK_TOKEN: e2e-scim-mock-token
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/health || exit 1"]
       interval: 5s
@@ -176,6 +234,8 @@ services:
       fleetdm-e2e:
         condition: service_healthy
       openldap-e2e:
+        condition: service_healthy
+      scim-mock-e2e:
         condition: service_healthy
     # No healthcheck: the backend image is distroless (no shell, no wget —
     # see backend/Dockerfile), so a CMD-SHELL check can never succeed here.

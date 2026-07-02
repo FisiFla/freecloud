@@ -59,6 +59,13 @@ type Result struct {
 	// ServiceAccountSecret is the secret currently set on the freecloud-service client.
 	// Use this to initialise the runtime Keycloak client.
 	ServiceAccountSecret string
+	// E2EAdminUserID is the Keycloak user UUID of the seeded e2e admin, set
+	// only when Config.SeedE2EAdmin is true. The caller (main.go) uses this to
+	// also upsert a matching row into the backend's local `users` table —
+	// bootstrap only talks to Keycloak, it has no DB handle — so the seeded
+	// admin can pass access-eval's local-user lookup and be used for
+	// full browser-flow e2e logins that exercise the posture-check SPI.
+	E2EAdminUserID string
 }
 
 func (c *Config) defaults() {
@@ -150,17 +157,20 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 	}
 
+	var e2eAdminUserID string
 	if cfg.SeedE2EAdmin {
-		if err := ensureE2EAdmin(ctx, gc, token, cfg, logger); err != nil {
+		userID, err := ensureE2EAdmin(ctx, gc, token, cfg, logger)
+		if err != nil {
 			return nil, err
 		}
+		e2eAdminUserID = userID
 		if err := enableDirectAccessGrants(ctx, gc, token, cfg, logger); err != nil {
 			return nil, err
 		}
 	}
 
 	logger.Info("bootstrap: complete")
-	return &Result{ServiceAccountSecret: secret}, nil
+	return &Result{ServiceAccountSecret: secret, E2EAdminUserID: e2eAdminUserID}, nil
 }
 
 // ensureAdminRole creates the "admin" realm role if absent, so the realm is
@@ -447,16 +457,41 @@ func ensurePostureFlow(ctx context.Context, gc *gocloak.GoCloak, token string, c
 	}
 	logger.Info("bootstrap: copied browser flow", zap.String("alias", cfg.PostureFlowAlias))
 
-	// Add the posture-check execution.
+	// Add the posture-check execution INSIDE the "forms" sub-flow (copied
+	// browser flow's built-in username/password + OTP sub-flow), not as a
+	// top-level sibling of "forms" itself.
+	//
+	// Why: PostureCheckAuthenticator.requiresUser() is true (it needs
+	// context.getUser() to call access/evaluate). Keycloak's
+	// DefaultAuthenticationFlow.processFlow() walks a flow's REQUIRED
+	// executions in order within a SINGLE request/response pass, and any
+	// execution requiring a user before one has actually authenticated
+	// throws "requires user to be set... but user is not set yet" —
+	// even if a REQUIRED "Username Password Form" sibling appears earlier in
+	// the same list, because top-level "forms" itself is only ALTERNATIVE
+	// (not REQUIRED) at the parent level, so the parent's REQUIRED-list logic
+	// does not gate on it completing first. Nesting our authenticator inside
+	// the SAME "forms" sub-flow, positioned after "Username Password Form",
+	// means it only runs once that sub-flow has already produced/validated
+	// an authenticated user in a prior request within the same flow.
+	//
+	// Keycloak's "add execution" API also inserts new entries at the START
+	// of a flow's execution list, not the end (an easy-to-miss quirk) — the
+	// lower-priority calls below fix that up explicitly rather than relying
+	// on creation order.
+	formsFlowAlias := cfg.PostureFlowAlias + " forms"
 	provider := "freecloud-posture-check"
-	if err := gc.CreateAuthenticationExecution(ctx, token, cfg.TargetRealm, cfg.PostureFlowAlias,
+	if err := gc.CreateAuthenticationExecution(ctx, token, cfg.TargetRealm, formsFlowAlias,
 		gocloak.CreateAuthenticationExecutionRepresentation{Provider: &provider}); err != nil {
 		return fmt.Errorf("bootstrap: add posture execution: %w", err)
 	}
-	logger.Info("bootstrap: added freecloud-posture-check execution")
+	logger.Info("bootstrap: added freecloud-posture-check execution", zap.String("flow", formsFlowAlias))
 
-	// Find the execution we just added and mark it REQUIRED.
-	executions, err := gc.GetAuthenticationExecutions(ctx, token, cfg.TargetRealm, cfg.PostureFlowAlias)
+	// Find the execution we just added, mark it REQUIRED, and move it below
+	// every other execution already in the "forms" sub-flow (Username
+	// Password Form, Conditional OTP) so it always runs last — i.e. only
+	// after a user is authenticated.
+	executions, err := gc.GetAuthenticationExecutions(ctx, token, cfg.TargetRealm, formsFlowAlias)
 	if err != nil {
 		return fmt.Errorf("bootstrap: get executions: %w", err)
 	}
@@ -470,12 +505,36 @@ func ensurePostureFlow(ctx context.Context, gc *gocloak.GoCloak, token string, c
 	if postureExec == nil {
 		return fmt.Errorf("bootstrap: could not find posture execution after creation")
 	}
+	// Count siblings at the SAME level as the posture-check execution (the
+	// top of the "forms" sub-flow) so we lower it exactly past them — nested
+	// children (e.g. the Conditional OTP sub-flow's own internal executions)
+	// report a deeper Level and must be excluded, or we'd over-lower past
+	// the end of the list.
+	othersInFlow := 0
+	for _, e := range executions {
+		if e.ProviderID != nil && *e.ProviderID == provider {
+			continue
+		}
+		if e.Level != nil && postureExec.Level != nil && *e.Level == *postureExec.Level {
+			othersInFlow++
+		}
+	}
 	required := "REQUIRED"
 	postureExec.Requirement = &required
-	if err := gc.UpdateAuthenticationExecution(ctx, token, cfg.TargetRealm, cfg.PostureFlowAlias, *postureExec); err != nil {
+	if err := gc.UpdateAuthenticationExecution(ctx, token, cfg.TargetRealm, formsFlowAlias, *postureExec); err != nil {
 		return fmt.Errorf("bootstrap: set posture execution REQUIRED: %w", err)
 	}
 	logger.Info("bootstrap: set posture execution REQUIRED")
+
+	if postureExec.ID != nil {
+		for i := 0; i < othersInFlow; i++ {
+			if err := lowerExecutionPriority(ctx, cfg, token, *postureExec.ID); err != nil {
+				return fmt.Errorf("bootstrap: reorder posture execution: %w", err)
+			}
+		}
+		logger.Info("bootstrap: reordered posture execution to run last in forms sub-flow",
+			zap.Int("lower_priority_calls", othersInFlow))
+	}
 
 	// Bind as realm browser flow.
 	realm, err := gc.GetRealm(ctx, token, cfg.TargetRealm)
@@ -487,6 +546,31 @@ func ensurePostureFlow(ctx context.Context, gc *gocloak.GoCloak, token string, c
 		return fmt.Errorf("bootstrap: bind browser flow: %w", err)
 	}
 	logger.Info("bootstrap: bound posture flow as realm browser flow")
+	return nil
+}
+
+// lowerExecutionPriority calls Keycloak's raw admin endpoint to move an
+// authentication execution one position later within its flow. gocloak v13
+// has no typed method for this (same situation as the flow-copy endpoint
+// above), so it's a direct HTTP call.
+func lowerExecutionPriority(ctx context.Context, cfg Config, token, executionID string) error {
+	baseURL := strings.TrimRight(cfg.KeycloakURL, "/")
+	url := fmt.Sprintf("%s/admin/realms/%s/authentication/executions/%s/lower-priority",
+		baseURL, cfg.TargetRealm, executionID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return fmt.Errorf("build lower-priority request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("lower-priority request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("lower-priority: status %d: %s", resp.StatusCode, string(b))
+	}
 	return nil
 }
 
@@ -538,8 +622,8 @@ func ensureDemoUser(ctx context.Context, gc *gocloak.GoCloak, token string, cfg 
 // for e2e tests. It is idempotent: if the user already exists its password is
 // re-synced to cfg.E2EAdminPassword so re-runs against a persisted volume
 // don't drift from a stale credential. NEVER call this outside dev/e2e — see
-// Config.SeedE2EAdmin.
-func ensureE2EAdmin(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) error {
+// Config.SeedE2EAdmin. Returns the Keycloak user UUID.
+func ensureE2EAdmin(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) (string, error) {
 	username := cfg.E2EAdminUsername
 	exact := true
 	users, err := gc.GetUsers(ctx, token, cfg.TargetRealm, gocloak.GetUsersParams{
@@ -547,7 +631,7 @@ func ensureE2EAdmin(ctx context.Context, gc *gocloak.GoCloak, token string, cfg 
 		Exact:    &exact,
 	})
 	if err != nil {
-		return fmt.Errorf("bootstrap: check e2e admin user: %w", err)
+		return "", fmt.Errorf("bootstrap: check e2e admin user: %w", err)
 	}
 
 	var userID string
@@ -567,7 +651,7 @@ func ensureE2EAdmin(ctx context.Context, gc *gocloak.GoCloak, token string, cfg 
 			EmailVerified: gocloak.BoolP(true),
 		})
 		if err != nil {
-			return fmt.Errorf("bootstrap: create e2e admin user: %w", err)
+			return "", fmt.Errorf("bootstrap: create e2e admin user: %w", err)
 		}
 		logger.Info("bootstrap: created e2e admin user", zap.String("user_id", userID))
 	}
@@ -575,17 +659,17 @@ func ensureE2EAdmin(ctx context.Context, gc *gocloak.GoCloak, token string, cfg 
 	// Always (re)sync the password so a re-run against a persisted volume with a
 	// pre-existing user still yields the documented credential.
 	if err := gc.SetPassword(ctx, token, userID, cfg.TargetRealm, cfg.E2EAdminPassword, false); err != nil {
-		return fmt.Errorf("bootstrap: set e2e admin password: %w", err)
+		return "", fmt.Errorf("bootstrap: set e2e admin password: %w", err)
 	}
 
 	// Grant the "admin" realm role so resolveRole() maps it to RoleSuperAdmin.
 	adminRole, err := gc.GetRealmRole(ctx, token, cfg.TargetRealm, "admin")
 	if err != nil {
-		return fmt.Errorf("bootstrap: get admin realm role: %w", err)
+		return "", fmt.Errorf("bootstrap: get admin realm role: %w", err)
 	}
 	existingRoles, err := gc.GetRealmRolesByUserID(ctx, token, cfg.TargetRealm, userID)
 	if err != nil {
-		return fmt.Errorf("bootstrap: get e2e admin's realm roles: %w", err)
+		return "", fmt.Errorf("bootstrap: get e2e admin's realm roles: %w", err)
 	}
 	hasAdmin := false
 	for _, r := range existingRoles {
@@ -596,12 +680,12 @@ func ensureE2EAdmin(ctx context.Context, gc *gocloak.GoCloak, token string, cfg 
 	}
 	if !hasAdmin {
 		if err := gc.AddRealmRoleToUser(ctx, token, cfg.TargetRealm, userID, []gocloak.Role{*adminRole}); err != nil {
-			return fmt.Errorf("bootstrap: grant admin role to e2e admin: %w", err)
+			return "", fmt.Errorf("bootstrap: grant admin role to e2e admin: %w", err)
 		}
 		logger.Info("bootstrap: granted admin realm role to e2e admin")
 	}
 
-	return nil
+	return userID, nil
 }
 
 // enableDirectAccessGrants turns on the OAuth2 Resource Owner Password

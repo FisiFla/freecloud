@@ -240,15 +240,23 @@ func TestE2E_Admin_ProvisioningRoundTrip(t *testing.T) {
 	waitReady(t, 60*time.Second)
 	admin := adminHeaders(t)
 
-	// 1. Create the target app and point its provisioning config at this
-	// backend's own inbound SCIM endpoint (self-loop) — a real, in-stack SCIM
-	// server without needing an extra mock container.
+	// 1. Create the target app and point its provisioning config at the
+	// dedicated scim-mock-e2e container (a genuinely separate downstream
+	// target). Self-looping outbound provisioning back into this backend's
+	// own inbound SCIM doesn't work: the employee created in step 2 below
+	// already exists there by email, so the connector's create call 409s.
+	//
+	// endpointUrl is the backend CONTAINER's view of the mock (the compose
+	// internal hostname — the backend, not this test process, makes the
+	// outbound call), which is why it's a fixed internal URL rather than
+	// flagSCIMMockURL (that flag is the host-facing port mapping, unused
+	// here since this test never calls the mock directly).
 	appID := createOIDCApp(t, admin, fmt.Sprintf("e2e-roundtrip-app-%d", time.Now().UnixNano()))
 	putBody := map[string]interface{}{
 		"enabled":       true,
 		"connectorType": "scim",
-		"endpointUrl":   "http://backend-e2e:8080/scim/v2",
-		"bearerToken":   *flagSCIMToken,
+		"endpointUrl":   "http://scim-mock-e2e:8080",
+		"bearerToken":   *flagSCIMMockToken,
 	}
 	status, body := do(t, http.MethodPut, "/api/v1/apps/"+appID+"/provisioning", admin, putBody)
 	if status != http.StatusOK {

@@ -29,6 +29,9 @@ type fakeKC struct {
 	e2eAdminHasRole          bool
 	dashboardDirectGrants    bool
 	dashboardUpdateCalls     int32
+
+	// A3: posture-flow execution ordering.
+	lowerPriorityCalls int32
 }
 
 func newFakeKC(t *testing.T) *fakeKC {
@@ -275,23 +278,40 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// POST add posture execution
+	// POST add posture execution (into the "forms" sub-flow — see
+	// ensurePostureFlow's formsFlowAlias).
 	if strings.HasSuffix(p, "/executions/execution") && m == http.MethodPost {
 		w.WriteHeader(http.StatusCreated)
 		return
 	}
 
-	// GET/PUT executions for posture flow
-	if strings.HasSuffix(p, "/browser-with-posture/executions") {
+	// GET/PUT executions for the "forms" sub-flow (URL-encoded space in the
+	// alias "browser-with-posture forms" — accept either encoding).
+	if strings.HasSuffix(p, "/browser-with-posture%20forms/executions") || strings.HasSuffix(p, "/browser-with-posture forms/executions") {
 		if m == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`[{"id":"exec-1","providerId":"freecloud-posture-check","requirement":"DISABLED"}]`))
+			// Two siblings at level 0 (Username Password Form + our posture
+			// check) plus one nested at level 1 (inside a Conditional OTP
+			// sub-flow), matching the real shape closely enough to exercise
+			// the same-level counting logic in ensurePostureFlow.
+			_, _ = w.Write([]byte(`[
+				{"id":"exec-pwd","providerId":"auth-username-password-form","requirement":"REQUIRED","level":0},
+				{"id":"exec-otp-nested","providerId":"auth-otp-form","requirement":"REQUIRED","level":1},
+				{"id":"exec-1","providerId":"freecloud-posture-check","requirement":"DISABLED","level":0}
+			]`))
 			return
 		}
 		if m == http.MethodPut {
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
+	}
+
+	// POST lower-priority for the posture execution.
+	if strings.HasSuffix(p, "/executions/exec-1/lower-priority") && m == http.MethodPost {
+		atomic.AddInt32(&f.lowerPriorityCalls, 1)
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 
 	// Demo user password reset
@@ -415,6 +435,37 @@ func TestBootstrap_SecretReturnedOnSecondRun(t *testing.T) {
 	}
 	if result.ServiceAccountSecret == "old-secret" {
 		t.Error("expected secret to be regenerated, but got the old secret")
+	}
+}
+
+// TestBootstrap_PostureFlow_ReordersExecutionPastSiblings verifies the A3 fix:
+// the posture-check execution is added inside the "forms" sub-flow and moved
+// below its one REQUIRED sibling at the same level (Username Password Form)
+// via lower-priority, so it never runs before a user is authenticated.
+// Regression guard for the real bug this caught: a REQUIRED authenticator
+// with requiresUser()==true placed before/alongside the credential form
+// causes Keycloak to throw "requires user to be set... but user is not set
+// yet" on every login attempt when POSTURE_CHECK_ENABLED=true.
+func TestBootstrap_PostureFlow_ReordersExecutionPastSiblings(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	_, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	// The fake's execution list has exactly one REQUIRED sibling at the same
+	// level as the posture check (Username Password Form) plus one nested
+	// execution at a deeper level that must NOT be counted — so exactly one
+	// lower-priority call is expected, not two.
+	if f.lowerPriorityCalls != 1 {
+		t.Errorf("expected exactly 1 lower-priority call (past the one same-level sibling), got %d", f.lowerPriorityCalls)
 	}
 }
 

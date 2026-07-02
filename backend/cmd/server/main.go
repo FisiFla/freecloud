@@ -140,8 +140,9 @@ func runServer() {
 	logger.Info("database schema is current", zap.Int("schema_version", db.LatestMigrationID()))
 
 	// Self-bootstrap Keycloak idempotently under a pg advisory lock so only one
-	// replica runs provisioning at a time. Returns the active service-account secret.
-	kcSecret, err := func() (string, error) {
+	// replica runs provisioning at a time. Returns the active service-account
+	// secret and (e2e-only) the seeded admin's Keycloak user ID.
+	kcSecret, e2eAdminUserID, err := func() (string, string, error) {
 		// Acquiring the lock can legitimately take as long as another
 		// replica's bootstrap run does (Keycloak cold start + full realm
 		// provisioning, up to the 4-minute budget below) — use a dedicated,
@@ -162,13 +163,13 @@ func runServer() {
 
 		conn, err := pool.Acquire(lockCtx)
 		if err != nil {
-			return "", fmt.Errorf("acquire conn for bootstrap lock: %w", err)
+			return "", "", fmt.Errorf("acquire conn for bootstrap lock: %w", err)
 		}
 		defer conn.Release()
 		if err := db.AcquireAdvisoryLock(lockCtx, conn, 7919876543, 5*time.Minute, func() {
 			logger.Info("bootstrap: waiting for another replica to finish bootstrapping")
 		}); err != nil {
-			return "", fmt.Errorf("acquire bootstrap advisory lock: %w", err)
+			return "", "", fmt.Errorf("acquire bootstrap advisory lock: %w", err)
 		}
 		defer func() { _, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(7919876543)") }()
 
@@ -198,14 +199,42 @@ func runServer() {
 			E2EAdminPassword:             os.Getenv("E2E_ADMIN_PASSWORD"),
 		})
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		return result.ServiceAccountSecret, nil
+		return result.ServiceAccountSecret, result.E2EAdminUserID, nil
 	}()
 	if err != nil {
 		logger.Fatal("keycloak bootstrap failed", zap.Error(err))
 	}
 	logger.Info("keycloak bootstrap complete")
+
+	// bootstrap only talks to Keycloak (no DB handle), but the seeded e2e
+	// admin needs a matching `users` row to pass access-eval's local-user
+	// lookup — otherwise it can authenticate but every posture/access
+	// decision denies with "user not found or disabled". Best-effort: this
+	// only ever runs when E2EAdminUserID is non-empty (i.e. only under the
+	// same dev/e2e gate as SeedE2EAdmin itself). The email must match what
+	// bootstrap.ensureE2EAdmin actually used (its own default when the env
+	// var is unset), or this row's email won't match the Keycloak account.
+	if e2eAdminUserID != "" {
+		e2eAdminUsername := os.Getenv("E2E_ADMIN_USERNAME")
+		if e2eAdminUsername == "" {
+			e2eAdminUsername = "e2e-admin"
+		}
+		// Fresh context: the outer `ctx` above was scoped to the initial DB
+		// connect (10s) and is long expired by the time bootstrap (up to 4m)
+		// completes.
+		upsertCtx, upsertCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer upsertCancel()
+		if _, err := pool.Exec(upsertCtx,
+			`INSERT INTO users (keycloak_user_id, email, first_name, last_name, role)
+			 VALUES ($1, $2, 'E2E', 'Admin', 'admin')
+			 ON CONFLICT (keycloak_user_id) DO NOTHING`,
+			e2eAdminUserID, e2eAdminUsername+"@freecloud.local",
+		); err != nil {
+			logger.Warn("failed to upsert local users row for seeded e2e admin", zap.Error(err))
+		}
+	}
 
 	// Initialize Keycloak client
 	kcClient := keycloak.NewClient(

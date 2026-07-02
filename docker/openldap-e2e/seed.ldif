@@ -1,8 +1,17 @@
 # F2/A1: seed users for the LDAP federation e2e sync test.
-# Bitnami's openldap image imports every .ldif file under LDAP_CUSTOM_LDIF_DIR
-# on first boot (after the base dc=example,dc=com domain + admin bind DN exist).
-# Two plain users are enough to prove a real sync pulls real entries into
-# Keycloak — this is not meant to model a realistic directory.
+#
+# IMPORTANT: setting LDAP_CUSTOM_LDIF_DIR makes Bitnami's entrypoint SKIP its
+# own ldap_create_tree step entirely (see ldap_initialize() in
+# libopenldap.sh) — the domain root object is normally created there, but
+# when a custom LDIF dir is used, this file is the ONLY thing that runs. It
+# must therefore create the dc=example,dc=com root itself, or every child
+# entry below fails with "No such object" (LDAP error 32).
+dn: dc=example,dc=com
+objectClass: dcObject
+objectClass: organization
+dc: example
+o: example
+
 dn: uid=e2eldapuser1,dc=example,dc=com
 objectClass: inetOrgPerson
 objectClass: top

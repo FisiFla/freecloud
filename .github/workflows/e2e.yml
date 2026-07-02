@@ -100,6 +100,12 @@ jobs:
           E2E_ADMIN_USERNAME: e2e-admin
           E2E_ADMIN_PASSWORD: e2e-admin-password
           E2E_DASHBOARD_CLIENT_ID: freecloud-dashboard
+          # A3: reverse proxy in front of Keycloak for the client-IP-forwarding
+          # test. Port 8089 — 8086/8087 are reserved for the B4 HA overlay's
+          # lb-e2e / backend-e2e-2 in the e2e-ha job below.
+          E2E_KEYCLOAK_PROXY_URL: http://localhost:8089
+          # A1: downstream SCIM mock target for the provisioning round-trip test.
+          E2E_SCIM_MOCK_TOKEN: e2e-scim-mock-token
         run: |
           cd backend && go test -tags=e2e -v -timeout 5m ./internal/e2e/...
 

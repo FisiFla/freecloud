@@ -260,6 +260,58 @@ To enable live geo resolution:
 If `GEOIP_MMDB_PATH` is unset, geography conditions keep failing closed and
 every other condition type (time window, network/IP) is unaffected.
 
+### Reverse Proxy Requirements (SPI Client-IP Forwarding)
+
+The Keycloak authenticator SPI (`keycloak-authenticator/`) forwards the
+resolved client IP to `access/evaluate` for the Network and Geography
+conditions above. By default it uses the direct TCP peer address of whoever
+connects to Keycloak. If Keycloak sits behind a reverse proxy or load
+balancer (the normal production topology — Caddy, nginx, an ALB, etc.), that
+peer address is always the proxy's own address, not the real end-user IP, so
+network/geo conditions would evaluate against the wrong IP.
+
+To fix this, set `TRUST_PROXY=true` on the Keycloak container/pod. When
+enabled, the SPI reads `X-Forwarded-For` and uses the **rightmost** entry —
+not the leftmost. Reverse proxies conventionally *append* the connecting
+peer's address to any existing `X-Forwarded-For` value rather than replacing
+it (nginx's `$proxy_add_x_forwarded_for`, Caddy's default `reverse_proxy`
+behavior, and equivalents on managed load balancers all do this). That means:
+
+```
+X-Forwarded-For: <anything-the-client-sent>, <your-proxy's-real-peer-address>
+```
+
+Only the rightmost hop is guaranteed to have been set by infrastructure you
+control — everything to its left is attacker-controlled input carried
+through unmodified. Taking the leftmost entry (a common mistake) lets anyone
+who can reach the proxy directly forge an arbitrary "client IP" and bypass
+network/geo conditions.
+
+**This only works if there is exactly one reverse-proxy hop and it is the
+only path to Keycloak.** `TRUST_PROXY=true` is a blanket setting — it doesn't
+distinguish "this request came through my proxy" from "this request hit
+Keycloak directly." If Keycloak's port is *also* reachable directly (bypassing
+the proxy) while `TRUST_PROXY=true` is set, an attacker with direct access can
+send a single forged `X-Forwarded-For` value that becomes the (only, hence
+rightmost) hop and is trusted outright. **You must firewall/network-isolate
+Keycloak so the reverse proxy is the only thing that can reach it** — never
+expose Keycloak's port directly to the same network the proxy is meant to
+gate access from.
+
+Configuration checklist:
+
+1. Deploy exactly one reverse proxy in front of Keycloak.
+2. Ensure Keycloak is not reachable on any network path that bypasses that proxy.
+3. Set `TRUST_PROXY=true` in the Keycloak container's environment.
+4. Confirm your proxy is configured to forward (append to) `X-Forwarded-For`
+   — this is the default for Caddy's `reverse_proxy` and nginx's
+   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`.
+
+If `TRUST_PROXY` is unset or `false` (the default), `X-Forwarded-For` is
+never read at all, and network/geo conditions evaluate the direct connection
+IP — safe by default, but requires no proxy in front of Keycloak for those
+conditions to see the real client IP.
+
 ## Provisioning Dry-Run and Reconcile
 
 **Dry-run** previews what a full provisioning push would do without sending any

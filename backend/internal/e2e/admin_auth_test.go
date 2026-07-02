@@ -18,6 +18,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -34,6 +35,13 @@ var (
 	flagAdminUsername = flag.String("admin-username", envOr("E2E_ADMIN_USERNAME", "e2e-admin"), "seeded e2e admin username")
 	flagAdminPassword = flag.String("admin-password", envOr("E2E_ADMIN_PASSWORD", "e2e-admin-password"), "seeded e2e admin password")
 	flagDashboardID   = flag.String("dashboard-client-id", envOr("E2E_DASHBOARD_CLIENT_ID", "freecloud-dashboard"), "public dashboard OIDC client id")
+	// flagSCIMMockToken is the bearer token for scim-mock-e2e, the downstream
+	// SCIM target for TestE2E_Admin_ProvisioningRoundTrip. Only the token is
+	// needed here — the endpoint URL sent to the backend must be the compose
+	// internal hostname (http://scim-mock-e2e:8080), not the host-facing port
+	// mapping, since the backend container makes the outbound call, not this
+	// test process.
+	flagSCIMMockToken = flag.String("scim-mock-token", envOr("E2E_SCIM_MOCK_TOKEN", "e2e-scim-mock-token"), "scim-mock-e2e bearer token")
 )
 
 // adminToken exchanges the seeded e2e admin's credentials for a real signed
@@ -103,4 +111,30 @@ func requestAdminToken(tokenURL string, form url.Values) (string, error) {
 func adminHeaders(t *testing.T) map[string]string {
 	t.Helper()
 	return map[string]string{"Authorization": "Bearer " + adminToken(t, 60*time.Second)}
+}
+
+// adminUserID decodes the "sub" claim (Keycloak user UUID) out of a freshly
+// minted admin JWT, without verifying the signature — this is a test helper
+// operating on a token this same process just requested, not untrusted input.
+func adminUserID(t *testing.T) string {
+	t.Helper()
+	token := adminToken(t, 60*time.Second)
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("adminUserID: malformed JWT (expected 3 parts, got %d)", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("adminUserID: decode JWT payload: %v", err)
+	}
+	var claims struct {
+		Sub string `json:"sub"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatalf("adminUserID: unmarshal JWT claims: %v", err)
+	}
+	if claims.Sub == "" {
+		t.Fatalf("adminUserID: JWT has empty sub claim")
+	}
+	return claims.Sub
 }

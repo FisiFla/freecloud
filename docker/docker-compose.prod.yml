@@ -89,6 +89,12 @@ services:
       ACCESS_EVAL_URL: ${ACCESS_EVAL_URL:-http://backend:8080/api/v1/access/evaluate}
       # ACCESS_EVAL_TOKEN: injected from .secrets/secrets.env
       POSTURE_CHECK_ENABLED: ${POSTURE_CHECK_ENABLED:-false}
+      # A3: safe to trust X-Forwarded-For here because this service has no
+      # `ports:` mapping — Caddy is the only path to Keycloak in this
+      # topology. See docs/DEPLOYMENT.md "Reverse Proxy Requirements (SPI
+      # Client-IP Forwarding)" before changing this compose file's network
+      # exposure.
+      TRUST_PROXY: "true"
     depends_on:
       postgres:
         condition: service_healthy
