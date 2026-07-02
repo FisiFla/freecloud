@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -15,6 +16,14 @@ import (
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
+
+// testLimiterFactory builds in-memory limiters, matching the dev/test default
+// selected by main.go when REDIS_URL is unset. Router-level tests exercise
+// the rate-limit wiring itself, not the Redis-vs-memory choice (that is
+// covered by middleware/ratelimit_redis_test.go).
+func testLimiterFactory(limit int, window time.Duration, _ string) middleware.Limiter {
+	return middleware.NewRateLimiter(limit, window)
+}
 
 // fakeRoleAuthMW injects valid claims and the actor ID into the context,
 // bypassing real JWT verification. Used only by router-level tests.
@@ -43,13 +52,13 @@ func fakeAuthMW(next http.Handler) http.Handler {
 // (auth + actor + rate-limited mutating endpoints) but with a fake auth MW.
 func newTestRouter(h *Handler) *chi.Mux {
 	r := chi.NewRouter()
-	SetupRoutes(r, h, fakeAuthMW)
+	SetupRoutes(r, h, fakeAuthMW, testLimiterFactory)
 	return r
 }
 
 func newRoleTestRouter(h *Handler, role middleware.Role) *chi.Mux {
 	r := chi.NewRouter()
-	SetupRoutes(r, h, fakeRoleAuthMW(role))
+	SetupRoutes(r, h, fakeRoleAuthMW(role), testLimiterFactory)
 	return r
 }
 

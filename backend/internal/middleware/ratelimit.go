@@ -9,6 +9,16 @@ import (
 	"time"
 )
 
+// Limiter is satisfied by any rate-limiter implementation that can be wired
+// into the HTTP middleware chain. RateLimiter (in-memory) and
+// RedisRateLimiter (backend/internal/middleware/ratelimit_redis.go) both
+// implement it, so callers (routes.go) can select an implementation without
+// changing call sites.
+type Limiter interface {
+	Middleware(next http.Handler) http.Handler
+	Stop()
+}
+
 // rateLimitEntry tracks request timestamps for a single client key.
 type rateLimitEntry struct {
 	mu    sync.Mutex
@@ -16,8 +26,10 @@ type rateLimitEntry struct {
 }
 
 // RateLimiter is a simple in-memory, per-client sliding-window rate limiter.
-// It is suitable for a single-instance deployment. For multi-instance setups,
-// replace the storage with Redis or similar.
+// It is suitable for a single-instance deployment: each replica keeps its own
+// counters, so with N replicas a client can burst to N times the configured
+// limit by round-robining across them. For multi-instance deployments use
+// RedisRateLimiter instead, which shares one counter across all replicas.
 type RateLimiter struct {
 	mu      sync.Mutex
 	entries map[string]*rateLimitEntry

@@ -48,11 +48,21 @@ type SnapshotRow struct {
 type Snapshotter struct {
 	pool   DBPool
 	logger *zap.Logger
+	// isLeader gates the ticker-driven snapshot (B3, v1.7 HA): nil means
+	// "always run" (single-instance / no leader election wired up), matching
+	// prior behavior exactly.
+	isLeader func() bool
 }
 
 // New creates a Snapshotter.
 func New(pool DBPool, logger *zap.Logger) *Snapshotter {
 	return &Snapshotter{pool: pool, logger: logger}
+}
+
+// SetLeaderGate wires a leader-election check (B3, v1.7 HA) so the ticker in
+// Start only takes a snapshot on the instance that currently holds leadership.
+func (s *Snapshotter) SetLeaderGate(isLeader func() bool) {
+	s.isLeader = isLeader
 }
 
 // SyncPostureCache upserts a batch of posture entries into device_posture_cache.
@@ -292,6 +302,9 @@ func (s *Snapshotter) Start(ctx context.Context, interval time.Duration) {
 				s.logger.Info("analytics snapshot job stopped")
 				return
 			case <-ticker.C:
+				if s.isLeader != nil && !s.isLeader() {
+					continue
+				}
 				if err := s.TakeSnapshot(ctx); err != nil {
 					s.logger.Warn("analytics snapshot failed", zap.Error(err))
 				} else {
