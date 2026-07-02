@@ -85,6 +85,9 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
+		return
+	}
 
 	ctx := r.Context()
 
@@ -193,18 +196,9 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Verify user exists locally
+	// Verify user exists locally AND belongs to the caller's org.
 	if h.db != nil {
-		var email string
-		if err := h.db.QueryRow(ctx,
-			`SELECT email FROM users WHERE keycloak_user_id = $1`, userID,
-		).Scan(&email); err != nil {
-			if err == pgx.ErrNoRows {
-				respondError(w, http.StatusNotFound, "user not found")
-				return
-			}
-			h.logger.Error("failed to look up user for password reset", zap.Error(err))
-			respondError(w, http.StatusInternalServerError, "internal error")
+		if !h.requireUserInCallerOrg(w, r, userID) {
 			return
 		}
 	}

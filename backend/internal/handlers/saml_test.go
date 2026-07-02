@@ -20,13 +20,13 @@ func TestGetSAMLIdPInitiatedURL(t *testing.T) {
 	const wantURL = "https://keycloak.local/realms/freecloud/protocol/saml/clients/my-app"
 
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = kcClientID
 				*(dest[1].(*string)) = "SAML"
 				return nil
 			}}
-		},
+		}),
 	}
 	kc := &fakeKeycloak{
 		getSAMLIdPInitiatedURLFn: func(_ context.Context, keycloakClientID string) (string, error) {
@@ -43,6 +43,7 @@ func TestGetSAMLIdPInitiatedURL(t *testing.T) {
 	chiCtx := chi.NewRouteContext()
 	chiCtx.URLParams.Add("appId", appID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, chiCtx))
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetSAMLIdPInitiatedURL(rec, req)
@@ -71,13 +72,13 @@ func TestGetSAMLIdPInitiatedURL(t *testing.T) {
 // app returns 400.
 func TestGetSAMLIdPInitiatedURLNotSAML(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "kc-oidc-client"
 				*(dest[1].(*string)) = "OIDC"
 				return nil
 			}}
-		},
+		}),
 	}
 
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
@@ -86,6 +87,7 @@ func TestGetSAMLIdPInitiatedURLNotSAML(t *testing.T) {
 	chiCtx := chi.NewRouteContext()
 	chiCtx.URLParams.Add("appId", "app-oidc")
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, chiCtx))
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetSAMLIdPInitiatedURL(rec, req)
@@ -101,12 +103,12 @@ func TestGetSAMLMetadata(t *testing.T) {
 	const stubXML = `<?xml version="1.0" encoding="UTF-8"?><EntityDescriptor entityID="https://keycloak.local/realms/freecloud"/>`
 
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "SAML"
 				return nil
 			}}
-		},
+		}),
 	}
 	kc := &fakeKeycloak{
 		getSAMLMetadataXMLFn: func(_ context.Context) (string, error) {
@@ -120,6 +122,7 @@ func TestGetSAMLMetadata(t *testing.T) {
 	chiCtx := chi.NewRouteContext()
 	chiCtx.URLParams.Add("appId", appID)
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, chiCtx))
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetSAMLMetadata(rec, req)
@@ -139,12 +142,12 @@ func TestGetSAMLMetadata(t *testing.T) {
 // TestGetSAMLMetadataNotSAML verifies 400 for OIDC apps.
 func TestGetSAMLMetadataNotSAML(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "OIDC"
 				return nil
 			}}
-		},
+		}),
 	}
 
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
@@ -153,6 +156,7 @@ func TestGetSAMLMetadataNotSAML(t *testing.T) {
 	chiCtx := chi.NewRouteContext()
 	chiCtx.URLParams.Add("appId", "app-oidc")
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, chiCtx))
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetSAMLMetadata(rec, req)

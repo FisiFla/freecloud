@@ -7,6 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 	"github.com/FisiFla/freecloud/backend/internal/snapshot"
 )
 
@@ -16,6 +17,12 @@ import (
 func (h *Handler) GetAnalyticsSnapshots(w http.ResponseWriter, r *http.Request) {
 	if h.snapshotter == nil {
 		respondError(w, http.StatusServiceUnavailable, "analytics snapshots not configured")
+		return
+	}
+
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
 		return
 	}
 
@@ -50,14 +57,14 @@ func (h *Handler) GetAnalyticsSnapshots(w http.ResponseWriter, r *http.Request) 
 	)
 
 	if from.IsZero() && to.IsZero() {
-		raw, e := h.snapshotter.GetSeries(r.Context(), limit)
+		raw, e := h.snapshotter.GetSeries(r.Context(), oc.OrgID, limit)
 		if e != nil {
 			err = e
 		} else {
 			series = toSnapshotResponse(raw)
 		}
 	} else {
-		raw, e := h.snapshotter.GetSeriesRange(r.Context(), from, to, limit)
+		raw, e := h.snapshotter.GetSeriesRange(r.Context(), oc.OrgID, from, to, limit)
 		if e != nil {
 			err = e
 		} else {

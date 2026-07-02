@@ -298,13 +298,14 @@ func TestEngineSyncGroupMembership_SkipsIfNotProvisioned(t *testing.T) {
 func TestEngineReconcileAll_PermanentErrorAfterMaxRetries(t *testing.T) {
 	appID := "app-reconcile"
 	userID := "user-reconcile"
+	orgID := "org-reconcile"
 
 	calls := 0
 	db := &fakeDB{
 		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 			calls++
 			return &fakeRows{data: [][]any{
-				{appID, userID, "", "error", 2, "a@b.com", "A", "B", ""},
+				{orgID, appID, userID, "", "error", 2, "a@b.com", "A", "B", ""},
 			}}, nil
 		},
 	}
@@ -331,5 +332,52 @@ func TestEngineReconcileAll_PermanentErrorAfterMaxRetries(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected permanent_error after max retries in execSQL: %v", db.execSQL)
+	}
+}
+
+// TestEngineReconcileAll_MultiOrgProcessesEachOrgsOwnConnector proves
+// ReconcileAll processes stale entries from multiple organizations in one
+// pass, and that each org's row is provisioned through THAT org's own
+// connector (never the other org's) -- the per-org batching added for
+// auditability must not accidentally cross-wire connectors between orgs.
+func TestEngineReconcileAll_MultiOrgProcessesEachOrgsOwnConnector(t *testing.T) {
+	const (
+		orgA, appA, userA = "org-a", "app-a", "user-a"
+		orgB, appB, userB = "org-b", "app-b", "user-b"
+	)
+
+	db := &fakeDB{
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			// ORDER BY ps.org_id groups each org's rows together, as the real
+			// query does.
+			return &fakeRows{data: [][]any{
+				{orgA, appA, userA, "", "error", 0, "a@example.com", "A", "One", ""},
+				{orgB, appB, userB, "", "error", 0, "b@example.com", "B", "One", ""},
+			}}, nil
+		},
+	}
+
+	mcA := &mockConnector{}
+	mcB := &mockConnector{}
+	eng := NewEngine(db, zap.NewNop())
+	eng.RegisterConnector(appA, mcA)
+	eng.RegisterConnector(appB, mcB)
+
+	if err := eng.ReconcileAll(context.Background()); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	mcA.mu.Lock()
+	aCalls := mcA.provisionCalls
+	mcA.mu.Unlock()
+	mcB.mu.Lock()
+	bCalls := mcB.provisionCalls
+	mcB.mu.Unlock()
+
+	if aCalls != 1 {
+		t.Errorf("org A's connector: expected 1 ProvisionUser call, got %d", aCalls)
+	}
+	if bCalls != 1 {
+		t.Errorf("org B's connector: expected 1 ProvisionUser call, got %d", bCalls)
 	}
 }

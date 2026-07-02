@@ -60,6 +60,11 @@ func (h *Handler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	payloadBytes, err := json.Marshal(req.Payload)
 	if err != nil {
@@ -69,10 +74,10 @@ func (h *Handler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 
 	var id string
 	err = h.db.QueryRow(r.Context(),
-		`INSERT INTO approval_requests (action_type, requester_id, payload)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO approval_requests (action_type, requester_id, payload, org_id)
+		 VALUES ($1, $2, $3, $4)
 		 RETURNING id`,
-		req.ActionType, actorID, payloadBytes,
+		req.ActionType, actorID, payloadBytes, oc.OrgID,
 	).Scan(&id)
 	if err != nil {
 		h.logger.Error("failed to insert approval request", zap.Error(err))
@@ -98,6 +103,11 @@ func (h *Handler) ListApprovalRequests(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, []ApprovalRequest{})
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	statusFilter := r.URL.Query().Get("status")
 	if statusFilter == "" {
@@ -106,10 +116,10 @@ func (h *Handler) ListApprovalRequests(w http.ResponseWriter, r *http.Request) {
 
 	query := `SELECT id, action_type, requester_id, payload, status,
 	                 COALESCE(decided_by, ''), COALESCE(decided_at::text, ''), created_at
-	          FROM approval_requests`
-	var args []interface{}
+	          FROM approval_requests WHERE org_id = $1`
+	args := []interface{}{oc.OrgID}
 	if statusFilter != "all" {
-		query += ` WHERE status = $1`
+		query += ` AND status = $2`
 		args = append(args, statusFilter)
 	}
 	query += ` ORDER BY created_at DESC LIMIT 200`
@@ -180,13 +190,18 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	// Fetch and lock the approval request.
 	var actionType, status, requesterID string
 	var payloadBytes []byte
 	err := h.db.QueryRow(r.Context(),
-		`SELECT action_type, status, payload, requester_id FROM approval_requests WHERE id = $1`,
-		approvalID,
+		`SELECT action_type, status, payload, requester_id FROM approval_requests WHERE id = $1 AND org_id = $2`,
+		approvalID, oc.OrgID,
 	).Scan(&actionType, &status, &payloadBytes, &requesterID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "approval request not found")
@@ -344,7 +359,13 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 			auditDetails := map[string]interface{}{
 				"email": req.Email, "approval_id": approvalID,
 			}
-			if err := h.persistOnboard(ctx, kcUserID, req, approverID, auditDetails, enrollmentToken); err != nil {
+			// C2: the approver's currently-resolved org owns the onboarded user.
+			// Fail closed rather than defaulting silently.
+			oc := middleware.GetOrgContext(ctx)
+			if oc == nil {
+				return fmt.Errorf("no organization context for approval execution")
+			}
+			if err := h.persistOnboard(ctx, kcUserID, req, approverID, auditDetails, enrollmentToken, oc.OrgID); err != nil {
 				return fmt.Errorf("persist onboard: %w", err)
 			}
 		}
@@ -355,20 +376,36 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 		if userID == "" {
 			return fmt.Errorf("missing userId in offboard payload")
 		}
+		// C2: the approval-request payload carries a caller-supplied userId —
+		// verify it belongs to the approver's own org before touching Keycloak
+		// or the DB. Without this, an org-B approver could offboard an org-A
+		// user by submitting a crafted approval request naming their ID.
+		oc := middleware.GetOrgContext(ctx)
+		if oc == nil {
+			return fmt.Errorf("no organization context for approval execution")
+		}
+		if h.db == nil {
+			return fmt.Errorf("database not available")
+		}
+		var found string
+		if err := h.db.QueryRow(ctx,
+			`SELECT keycloak_user_id::TEXT FROM users WHERE keycloak_user_id = $1 AND org_id = $2`,
+			userID, oc.OrgID,
+		).Scan(&found); err != nil {
+			return fmt.Errorf("offboard target not found in caller's organization")
+		}
 		if err := h.keycloak.DisableUser(ctx, userID); err != nil {
 			return fmt.Errorf("disable user: %w", err)
 		}
 		_ = h.keycloak.LogoutAllSessions(ctx, userID)
-		if h.db != nil {
-			_, _ = h.db.Exec(ctx,
-				`UPDATE users SET disabled = true, updated_at = NOW() WHERE keycloak_user_id = $1`,
-				userID,
-			)
-			if err := h.writeAuditEntryBestEffort(approverID, "offboard", "user", userID, map[string]interface{}{
-				"approval_id": approvalID,
-			}); err != nil {
-				h.logger.Warn("failed to write approved offboard audit log", zap.Error(err))
-			}
+		_, _ = h.db.Exec(ctx,
+			`UPDATE users SET disabled = true, updated_at = NOW() WHERE keycloak_user_id = $1`,
+			userID,
+		)
+		if err := h.writeAuditEntryBestEffort(approverID, "offboard", "user", userID, map[string]interface{}{
+			"approval_id": approvalID,
+		}); err != nil {
+			h.logger.Warn("failed to write approved offboard audit log", zap.Error(err))
 		}
 		return nil
 

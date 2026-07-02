@@ -115,24 +115,34 @@ func queryRowCallSeq(responses []func(dest ...any) error) func(context.Context, 
 	}
 }
 
+// singleOrgQueryFn returns a fakePool.queryFn that answers the
+// `SELECT id::TEXT FROM organizations` call TakeSnapshot issues first, with
+// exactly one org row — matching the single-org shape most tests need.
+func singleOrgQueryFn(orgID string) func(context.Context, string, ...any) (pgx.Rows, error) {
+	return func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+		return &fakeRows{rows: [][]any{{orgID}}}, nil
+	}
+}
+
 func TestTakeSnapshot_HappyPath(t *testing.T) {
 	execCalled := false
 
 	pool := &fakePool{
+		queryFn: singleOrgQueryFn("11111111-1111-1111-1111-111111111111"),
 		queryRowFn: queryRowCallSeq([]func(dest ...any) error{
-			// COUNT(*) FROM devices
+			// COUNT(*) FROM devices WHERE org_id = $1
 			func(dest ...any) error { *(dest[0].(*int)) = 5; return nil },
-			// COUNT(*) FROM device_posture_cache (cacheTotal)
+			// COUNT(*) FROM device_posture_cache JOIN devices (cacheTotal)
 			func(dest ...any) error { *(dest[0].(*int)) = 4; return nil },
-			// COUNT(*) FROM device_posture_cache WHERE compliant = TRUE (cacheCompliant)
+			// COUNT(*) ... WHERE compliant = TRUE (cacheCompliant)
 			func(dest ...any) error { *(dest[0].(*int)) = 3; return nil },
-			// COUNT(*) FROM users (mfaTotal for coverage)
+			// COUNT(*) FROM users WHERE org_id = $1 (mfaTotal for coverage)
 			func(dest ...any) error { *(dest[0].(*int)) = 5; return nil },
-			// COUNT(*) FROM mfa_coverage_cache WHERE has_mfa = TRUE (mfaEnrolled)
+			// COUNT(*) FROM mfa_coverage_cache JOIN users WHERE has_mfa = TRUE (mfaEnrolled)
 			func(dest ...any) error { *(dest[0].(*int)) = 3; return nil },
-			// COUNT(*) FROM connected_apps
+			// COUNT(*) FROM connected_apps WHERE org_id = $1
 			func(dest ...any) error { *(dest[0].(*int)) = 3; return nil },
-			// MAX(captured_at) FROM analytics_snapshots
+			// MAX(captured_at) FROM analytics_snapshots WHERE org_id = $1
 			func(dest ...any) error { *(dest[0].(*time.Time)) = time.Time{}; return nil },
 			// onboard count
 			func(dest ...any) error { *(dest[0].(*int)) = 2; return nil },
@@ -154,8 +164,50 @@ func TestTakeSnapshot_HappyPath(t *testing.T) {
 	}
 }
 
+func TestTakeSnapshot_MultiOrgIteratesEach(t *testing.T) {
+	execCount := 0
+	orgIDs := []string{"11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"}
+
+	pool := &fakePool{
+		queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+			rows := make([][]any, len(orgIDs))
+			for i, id := range orgIDs {
+				rows[i] = []any{id}
+			}
+			return &fakeRows{rows: rows}, nil
+		},
+		// Every QueryRow call (across both orgs' metric queries) returns a
+		// harmless zero value — this test only cares that Exec (the INSERT)
+		// runs once per org, i.e. that TakeSnapshot actually iterates.
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error {
+				switch p := dest[0].(type) {
+				case *int:
+					*p = 0
+				case *time.Time:
+					*p = time.Time{}
+				}
+				return nil
+			}}
+		},
+		execFn: func(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+			execCount++
+			return pgconn.CommandTag{}, nil
+		},
+	}
+
+	s := New(pool, zaptest.NewLogger(t))
+	if err := s.TakeSnapshot(context.Background()); err != nil {
+		t.Fatalf("TakeSnapshot returned error: %v", err)
+	}
+	if execCount != len(orgIDs) {
+		t.Errorf("expected one INSERT per org (%d), got %d", len(orgIDs), execCount)
+	}
+}
+
 func TestTakeSnapshot_DBError(t *testing.T) {
 	pool := &fakePool{
+		queryFn: singleOrgQueryFn("11111111-1111-1111-1111-111111111111"),
 		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error { return errors.New("db down") }}
 		},
@@ -163,6 +215,18 @@ func TestTakeSnapshot_DBError(t *testing.T) {
 	s := New(pool, zaptest.NewLogger(t))
 	if err := s.TakeSnapshot(context.Background()); err == nil {
 		t.Error("expected error when DB returns error")
+	}
+}
+
+func TestTakeSnapshot_ListOrgsError(t *testing.T) {
+	pool := &fakePool{
+		queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+			return nil, errors.New("query failed")
+		},
+	}
+	s := New(pool, zaptest.NewLogger(t))
+	if err := s.TakeSnapshot(context.Background()); err == nil {
+		t.Error("expected error when listing organizations fails")
 	}
 }
 
@@ -178,7 +242,7 @@ func TestGetSeries_HappyPath(t *testing.T) {
 	}
 
 	s := New(pool, zaptest.NewLogger(t))
-	series, err := s.GetSeries(context.Background(), 10)
+	series, err := s.GetSeries(context.Background(), "11111111-1111-1111-1111-111111111111", 10)
 	if err != nil {
 		t.Fatalf("GetSeries returned error: %v", err)
 	}
@@ -201,7 +265,7 @@ func TestGetSeries_QueryError(t *testing.T) {
 		},
 	}
 	s := New(pool, zaptest.NewLogger(t))
-	_, err := s.GetSeries(context.Background(), 10)
+	_, err := s.GetSeries(context.Background(), "11111111-1111-1111-1111-111111111111", 10)
 	if err == nil {
 		t.Error("expected error when query fails")
 	}
@@ -239,9 +303,9 @@ func TestSyncPostureCache_Empty(t *testing.T) {
 func TestGetSeries_LimitClamped(t *testing.T) {
 	pool := &fakePool{
 		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
-			// Verify limit is clamped to 1000
-			if len(args) > 0 {
-				if v, ok := args[0].(int); ok && v != 1000 {
+			// Verify limit (arg[1]; arg[0] is org_id) is clamped to 1000.
+			if len(args) > 1 {
+				if v, ok := args[1].(int); ok && v != 1000 {
 					return nil, errors.New("limit not clamped")
 				}
 			}
@@ -249,7 +313,7 @@ func TestGetSeries_LimitClamped(t *testing.T) {
 		},
 	}
 	s := New(pool, zaptest.NewLogger(t))
-	_, err := s.GetSeries(context.Background(), 99999)
+	_, err := s.GetSeries(context.Background(), "11111111-1111-1111-1111-111111111111", 99999)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

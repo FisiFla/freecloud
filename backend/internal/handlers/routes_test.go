@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -25,8 +27,14 @@ func testLimiterFactory(limit int, window time.Duration, _ string) middleware.Li
 	return middleware.NewRateLimiter(limit, window)
 }
 
-// fakeRoleAuthMW injects valid claims and the actor ID into the context,
-// bypassing real JWT verification. Used only by router-level tests.
+// fakeRoleAuthMW injects valid claims, the actor ID, and a resolved org
+// context into the request, bypassing real JWT verification and DB-backed
+// org-membership lookups. Used only by router-level tests. The org membership
+// role mirrors the global role for test simplicity: RoleSuperAdmin resolves
+// as org-admin (system-admins can act on any org); every other role resolves
+// as a plain "member" so org-admin-gated routes correctly deny them, matching
+// how a real end-user/helpdesk/etc. would have no org_memberships.role =
+// 'org-admin' row unless explicitly granted one.
 func fakeRoleAuthMW(role middleware.Role) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,8 +45,16 @@ func fakeRoleAuthMW(role middleware.Role) func(http.Handler) http.Handler {
 				IsAdmin:           role == middleware.RoleSuperAdmin,
 				Role:              role,
 			}
+			orgRole := "member"
+			if role == middleware.RoleSuperAdmin {
+				orgRole = middleware.OrgMembershipRoleAdmin
+			}
 			ctx := middleware.SetClaims(r.Context(), claims)
 			ctx = context.WithValue(ctx, middleware.ActorIDKey, "test-user")
+			ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{
+				OrgID: middleware.DefaultOrgID,
+				Role:  orgRole,
+			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -226,6 +242,18 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		"GET /scim/v2/Groups/{id}":    true,
 		"PATCH /scim/v2/Groups/{id}":  true,
 		"DELETE /scim/v2/Groups/{id}": true,
+		// C4: org-scoped SCIM surface — dedicated per-org bearer token
+		// (SCIMOrgBearerMiddleware), same auth class as the legacy path above.
+		"GET /scim/v2/orgs/{orgID}/Users":          true,
+		"POST /scim/v2/orgs/{orgID}/Users":         true,
+		"GET /scim/v2/orgs/{orgID}/Users/{id}":     true,
+		"PATCH /scim/v2/orgs/{orgID}/Users/{id}":   true,
+		"DELETE /scim/v2/orgs/{orgID}/Users/{id}":  true,
+		"GET /scim/v2/orgs/{orgID}/Groups":         true,
+		"POST /scim/v2/orgs/{orgID}/Groups":        true,
+		"GET /scim/v2/orgs/{orgID}/Groups/{id}":    true,
+		"PATCH /scim/v2/orgs/{orgID}/Groups/{id}":  true,
+		"DELETE /scim/v2/orgs/{orgID}/Groups/{id}": true,
 		// Test-only enrollment-token helper — SCIM-bearer-authenticated (APP_ENV=test only).
 		"POST /api/v1/e2e/enrollment-token": true,
 		// Self-service — gated by PermSelfService, which end-user holds.
@@ -234,6 +262,10 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		"GET /api/v1/portal/me/apps":                       true,
 		"GET /api/v1/portal/me/compliance":                 true,
 		"POST /api/v1/portal/access-requests":              true,
+		// C1/C3 (Epic C multi-tenant): every authenticated user can see their
+		// own identity, global role, and org memberships — gated by
+		// PermSelfService, which end-user holds.
+		"GET /api/v1/me": true,
 		// B1: MFA self-service — gated by PermSelfService, which end-user holds.
 		"GET /api/v1/portal/me/mfa/factors":                true,
 		"POST /api/v1/portal/me/mfa/totp/enroll":           true,
@@ -285,5 +317,145 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		t.Fatalf("these routes are NOT permission-gated (a minimal end-user token did not get 403).\n"+
 			"Wrap each with middleware.RequirePermission(...) in routes.go, or add it to the allowlist "+
 			"if it is intentionally public/self-service:\n  %s", strings.Join(ungated, "\n  "))
+	}
+}
+
+// zeroMembershipDB is a full DBPool (so it can back a real *Handler) that
+// reports no memberships/organizations/rows for any lookup. It lets
+// OrgContextMiddleware's real DB-backed resolution path execute (the
+// loadMemberships query it always runs before validating X-Org-Id) without
+// needing a live Postgres connection.
+type zeroMembershipDB struct{}
+
+func (zeroMembershipDB) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+	return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+}
+func (zeroMembershipDB) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+	return &fakeQueryRows{rows: nil}, nil
+}
+func (zeroMembershipDB) Exec(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+func (zeroMembershipDB) Begin(_ context.Context) (pgx.Tx, error) {
+	return nil, errors.New("zeroMembershipDB.Begin not implemented")
+}
+
+// authOnlyMW sets JWT claims (as AuthMiddleware would after verifying a real
+// token) but does NOT pre-resolve an OrgContext, so the real
+// middleware.OrgContextMiddleware wired in routes.go actually runs — unlike
+// fakeRoleAuthMW (used by newRoleTestRouter), which pre-sets an OrgContext
+// and thereby causes OrgContextMiddleware to skip its own resolution logic
+// entirely (see the "already set" short-circuit in org.go). Using
+// fakeRoleAuthMW here would make this test vacuously pass regardless of
+// whether OrgContextMiddleware is even wired.
+func authOnlyMW(role middleware.Role) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims := &middleware.JWTClaims{
+				Sub:               "test-user-no-preset-org",
+				PreferredUsername: "test-user-no-preset-org",
+				Email:             "user@test.local",
+				IsAdmin:           role == middleware.RoleSuperAdmin,
+				Role:              role,
+			}
+			ctx := middleware.SetClaims(r.Context(), claims)
+			ctx = context.WithValue(ctx, middleware.ActorIDKey, "test-user-no-preset-org")
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// TestEveryTenantScopedRouteResolvesOrgContext is the C2-mandated extension of
+// the route-coverage guard: every tenant-scoped route must pass through
+// OrgContextMiddleware, not just RequirePermission(...). A route that skips
+// org resolution entirely is exactly the cross-org-leak vulnerability class
+// this epic must not create.
+//
+// Technique: send a malformed X-Org-Id header ("not-a-uuid"). Only
+// OrgContextMiddleware validates that header's shape (isValidOrgID) — no
+// handler duplicates that check — so a route wired through it MUST reject
+// with 403 regardless of which permission/role gate sits in front of it.
+// A route that responds with anything else (200, a handler-specific 400/404,
+// a 5xx from treating the garbage string as a real ID, ...) proves the
+// header — and therefore the whole org-resolution step — was never
+// consulted for that route.
+//
+// This is deliberately independent of TestEveryAPIRouteIsPermissionGated:
+// that test proves permission gates exist; this one proves org resolution
+// sits in the SAME chain as those gates, by using a super-admin identity
+// (so every permission gate passes) and letting a bad X-Org-Id be the only
+// possible source of rejection.
+func TestEveryTenantScopedRouteResolvesOrgContext(t *testing.T) {
+	h := NewHandler(zeroMembershipDB{}, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	r := chi.NewRouter()
+	SetupRoutes(r, h, authOnlyMW(middleware.RoleSuperAdmin), testLimiterFactory)
+
+	// Routes intentionally outside the org-scoped authenticated group: public
+	// probes, dedicated-bearer service surfaces (own auth, no X-Org-Id
+	// concept), and unauthenticated setup/discovery endpoints. Mirrors the
+	// "public/self-authenticating" half of TestEveryAPIRouteIsPermissionGated's
+	// allowlist — these never reach OrgContextMiddleware by design, so a
+	// garbage X-Org-Id header is inert for them.
+	exempt := map[string]bool{
+		"GET /healthz": true, "GET /readyz": true, "GET /api/v1/health": true,
+		"GET /api/v1/health/keycloak": true, "GET /api/v1/health/fleetdm": true,
+		"POST /api/v1/fleet/enrollment-callback":  true,
+		"POST /api/v1/auth/forgot-password":       true,
+		"POST /api/v1/access/evaluate":            true,
+		"POST /api/v1/enrollment/device-identity": true,
+		"GET /scim/v2/ServiceProviderConfig":       true,
+		"GET /scim/v2/ResourceTypes":               true,
+		"GET /scim/v2/Schemas":                     true,
+		"GET /scim/v2/Users": true, "POST /scim/v2/Users": true,
+		"GET /scim/v2/Users/{id}": true, "PATCH /scim/v2/Users/{id}": true, "DELETE /scim/v2/Users/{id}": true,
+		"GET /scim/v2/Groups": true, "POST /scim/v2/Groups": true,
+		"GET /scim/v2/Groups/{id}": true, "PATCH /scim/v2/Groups/{id}": true, "DELETE /scim/v2/Groups/{id}": true,
+		"POST /api/v1/e2e/enrollment-token": true,
+		"GET /api/v1/setup/status":          true,
+		"POST /api/v1/setup":                true,
+		// C4: org-scoped SCIM surface authenticates via SCIMOrgBearerMiddleware
+		// against the {orgID} path param directly (not X-Org-Id / claims-based
+		// OrgContextMiddleware resolution) — a malformed X-Org-Id header is
+		// inert here by design; the middleware validates {orgID} instead
+		// (fail-closed 404 for a non-UUID org segment, proven by
+		// TestSCIMOrgBearerMiddleware in scim_test.go).
+		"GET /scim/v2/orgs/{orgID}/Users": true, "POST /scim/v2/orgs/{orgID}/Users": true,
+		"GET /scim/v2/orgs/{orgID}/Users/{id}": true, "PATCH /scim/v2/orgs/{orgID}/Users/{id}": true, "DELETE /scim/v2/orgs/{orgID}/Users/{id}": true,
+		"GET /scim/v2/orgs/{orgID}/Groups": true, "POST /scim/v2/orgs/{orgID}/Groups": true,
+		"GET /scim/v2/orgs/{orgID}/Groups/{id}": true, "PATCH /scim/v2/orgs/{orgID}/Groups/{id}": true, "DELETE /scim/v2/orgs/{orgID}/Groups/{id}": true,
+	}
+
+	paramRe := regexp.MustCompile(`\{[^}]*\}`)
+	var routeCount int
+	var bypassed []string
+
+	walkErr := chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		routeCount++
+		key := method + " " + route
+		if exempt[key] {
+			return nil
+		}
+		req := httptest.NewRequest(method, paramRe.ReplaceAllString(route, "x"), nil)
+		req.Header.Set("X-Org-Id", "not-a-uuid")
+		req.RemoteAddr = fmt.Sprintf("10.12.%d.%d:1000", routeCount/256, routeCount%256)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			bypassed = append(bypassed, fmt.Sprintf("%s -> %d (body: %s)", key, rec.Code, strings.TrimSpace(rec.Body.String())))
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("chi.Walk failed: %v", walkErr)
+	}
+	if routeCount < 30 {
+		t.Fatalf("route walk found only %d routes; the walk is likely broken", routeCount)
+	}
+	if len(bypassed) > 0 {
+		t.Fatalf("these tenant-scoped routes did NOT reject a malformed X-Org-Id with 403, meaning "+
+			"OrgContextMiddleware is not in their chain (a super-admin identity passes every permission "+
+			"gate, so anything other than 403 here means org resolution was skipped):\n  %s",
+			strings.Join(bypassed, "\n  "))
 	}
 }

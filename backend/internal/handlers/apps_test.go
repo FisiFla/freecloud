@@ -20,12 +20,12 @@ func TestAssignAppCompensatesWhenAssignmentInsertFails(t *testing.T) {
 	const userID = "00000000-0000-0000-0000-000000000099"
 
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = keycloakClientID
 				return nil
 			}}
-		},
+		}),
 		beginFn: func(context.Context) (pgx.Tx, error) {
 			return &fakeTx{
 				execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -59,7 +59,9 @@ func TestAssignAppCompensatesWhenAssignmentInsertFails(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	chiCtx := chi.NewRouteContext()
 	chiCtx.URLParams.Add("appId", appID)
-	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, chiCtx))
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, chiCtx)
+	req = req.WithContext(ctx)
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.AssignApp(rec, req)

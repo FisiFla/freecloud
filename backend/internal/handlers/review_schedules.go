@@ -84,6 +84,11 @@ func (h *Handler) CreateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 	actorID := middleware.GetActorID(ctx)
 	nextRunAt := nextRunFromCadence(req.Cadence)
 
@@ -96,10 +101,10 @@ func (h *Handler) CreateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 	var nextRunAtDB time.Time
 	var dbEnabled bool
 	err := h.db.QueryRow(ctx,
-		`INSERT INTO review_schedules (name, cadence, day_of_month, next_run_at, created_by)
-		 VALUES ($1, $2, $3, $4, $5)
+		`INSERT INTO review_schedules (name, cadence, day_of_month, next_run_at, created_by, org_id)
+		 VALUES ($1, $2, $3, $4, $5, $6)
 		 RETURNING id, created_by, created_at, next_run_at, enabled`,
-		req.Name, req.Cadence, dayOfMonthPtr, nextRunAt, actorID,
+		req.Name, req.Cadence, dayOfMonthPtr, nextRunAt, actorID, oc.OrgID,
 	).Scan(&id, &createdBy, &createdAt, &nextRunAtDB, &dbEnabled)
 	if err != nil {
 		h.logger.Error("create review schedule: insert failed", zap.Error(err))
@@ -132,9 +137,15 @@ func (h *Handler) ListReviewSchedules(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 	rows, err := h.db.Query(r.Context(),
 		`SELECT id, name, cadence, COALESCE(day_of_month, 0), next_run_at, last_run_at, enabled, created_by, created_at
-		 FROM review_schedules ORDER BY created_at DESC`,
+		 FROM review_schedules WHERE org_id = $1 ORDER BY created_at DESC`,
+		oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("list review schedules: query failed", zap.Error(err))
@@ -179,6 +190,9 @@ func (h *Handler) UpdateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if !h.requireReviewScheduleInCallerOrg(w, r, schedID) {
 		return
 	}
 
@@ -242,6 +256,9 @@ func (h *Handler) DeleteReviewSchedule(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if !h.requireReviewScheduleInCallerOrg(w, r, schedID) {
 		return
 	}
 

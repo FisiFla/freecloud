@@ -44,8 +44,8 @@ func TestBulkOnboardJSON(t *testing.T) {
 		{FirstName: "Bob", LastName: "B", Email: "bob@example.com", Department: "Eng", Role: "SWE"},
 	}
 	body, _ := json.Marshal(rows)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard/bulk",
-		bytes.NewReader(body))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard/bulk",
+		bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.BulkOnboard(rec, req)
@@ -67,7 +67,7 @@ func TestBulkOnboardJSON(t *testing.T) {
 func TestBulkOnboardCSV(t *testing.T) {
 	h := setupTestHandler(t)
 	csv := "firstName,lastName,email,department,role\nCarol,C,carol@example.com,Sales,AE\n"
-	req := buildBulkMultipart(t, csv)
+	req := withDefaultOrg(buildBulkMultipart(t, csv))
 	rec := httptest.NewRecorder()
 	h.BulkOnboard(rec, req)
 	if rec.Code != http.StatusOK {
@@ -124,7 +124,7 @@ func TestBulkOnboardPartialFailure(t *testing.T) {
 		{FirstName: "", LastName: "Bad", Email: "bad@example.com"}, // missing firstName
 	}
 	body, _ := json.Marshal(rows)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard/bulk", bytes.NewReader(body))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard/bulk", bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.BulkOnboard(rec, req)
@@ -207,7 +207,7 @@ func TestBulkOnboardKCFailure(t *testing.T) {
 		{FirstName: "Ok", LastName: "O", Email: "ok@example.com"},
 	}
 	body, _ := json.Marshal(rows)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard/bulk", bytes.NewReader(body))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard/bulk", bytes.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.BulkOnboard(rec, req)

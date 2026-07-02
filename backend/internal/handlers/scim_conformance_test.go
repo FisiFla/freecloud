@@ -268,7 +268,9 @@ func newUserCRUDRouter(t *testing.T) (chi.Router, *Handler, func() map[string]in
 		// inside a transaction — the fake must provide a working tx.
 		beginFn: func(ctx context.Context) (pgx.Tx, error) {
 			return &fakeTx{
-				execFn:   func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) { return pgconn.CommandTag{}, nil },
+				execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+					return pgconn.CommandTag{}, nil
+				},
 				commitFn: func(ctx context.Context) error { return nil },
 			}, nil
 		},
@@ -692,9 +694,12 @@ func newFilterRouter(t *testing.T) chi.Router {
 
 	db := &fakeDB{
 		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
-			// When filter is applied, the SQL will include WHERE u.email = $1
-			if strings.Contains(sql, "WHERE u.email = $") && len(args) >= 1 {
-				email, _ := args[0].(string)
+			// C4/C5: SCIMListUsers is org-scoped, so the query is always
+			// `WHERE u.org_id = $1` plus, when a userName/email filter is
+			// applied, `AND u.email = $2` (org_id is always arg[0]; the email
+			// filter value, when present, is arg[1]).
+			if strings.Contains(sql, "AND u.email = $") && len(args) >= 2 {
+				email, _ := args[1].(string)
 				for _, row := range rows {
 					if row[1].(string) == email {
 						return &fakeQueryRows{rows: [][]interface{}{row}}, nil
