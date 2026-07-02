@@ -53,11 +53,18 @@ These are configured **in-app** after first login — not via environment variab
 make prod-up        # docker compose ... up -d --build
 ```
 
-The backend self-bootstraps Keycloak on startup:
+Startup sequence (all automatic, single command):
 
-- Creates the `freecloud` realm, roles, and the `freecloud-service` confidential client.
-- Registers the client secret it generated (no manual `make kc-setup` required).
-- Runs database migrations.
+- A one-shot `migrate` container applies database migrations under an advisory
+  lock, then exits; the backend only **verifies** the schema version at startup
+  and refuses to serve if it is behind (`WAIT_FOR_SCHEMA_TIMEOUT` optionally
+  makes it poll-wait instead).
+- The backend self-bootstraps Keycloak: creates the `freecloud` realm, roles,
+  and the `freecloud-service` confidential client, and registers the client
+  secret it generated (no manual `make kc-setup` required).
+- A dedicated `redis` container backs the shared rate limiter. `REDIS_URL` is
+  **required in production** — the backend fails closed at startup without it
+  (it is pre-wired in the prod compose file; nothing to configure).
 
 There is **no** `setup_realm.sh` script to run. Do not run `make kc-setup` — it
 has been removed.
@@ -104,8 +111,9 @@ an untested backup is not a backup.
 
 1. Back up (above).
 2. Pull/rebuild: `make prod-up` (rebuilds images and recreates containers).
-3. The backend applies any new migrations on startup; watch logs for
-   `database migrations completed`.
+3. The one-shot `migrate` container applies any new migrations before the
+   backend starts; check `docker compose logs migrate` if the backend reports
+   the schema is behind.
 4. Smoke-test `/readyz` and a login.
 
 **Rollback:** redeploy the previous image tag and, if a migration must be undone,
@@ -123,14 +131,16 @@ restore the pre-upgrade backup (migrations are forward-only).
 - **Enrollment callback returns 401** — `FLEET_WEBHOOK_SECRET` mismatch between
   the backend and Fleet's webhook configuration.
 
-## Scale note (v1)
+## Scale note
 
-This release targets a **single backend instance**. The rate limiter is
-in-memory and migrations run on startup without a distributed lock; running
-multiple backend replicas requires a shared (e.g. Redis) rate limiter and an
-advisory-lock around migrations first. See
-[docs/adr/0003-single-instance.md](adr/0003-single-instance.md) for the full
-rationale.
+As of v1.7 the backend is **multi-instance capable**: rate limiting is shared
+via Redis, migrations run in a dedicated one-shot job under an advisory lock,
+Keycloak bootstrap is advisory-lock-serialised, and background jobs (reconcile,
+audit retention, snapshots) use Postgres advisory-lock leader election so
+exactly one replica runs each. This is proven in CI by a two-replica e2e suite
+behind a load balancer. Replicas must share the same Postgres and Redis. See
+[docs/adr/0004-multi-instance-ha.md](adr/0004-multi-instance-ha.md) (supersedes
+ADR 0003).
 
 ## Observability
 

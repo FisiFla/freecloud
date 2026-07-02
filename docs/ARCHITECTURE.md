@@ -235,13 +235,33 @@ to insecure defaults):
 See `.env.prod.example` for the full set including Caddy public hostnames, SMTP,
 Slack, Webhook, and SIEM variables.
 
-## Single-Instance Constraint (v1)
+## Multi-Organisation Tenancy (v1.7)
 
-FreeCloud v1 runs as a single backend process. The in-memory rate limiter and the
-startup migration runner (no advisory lock) both assume a single instance. Running
-two replicas against the same database risks migration races and bypasses rate
-limits. See [ADR 0003](adr/0003-single-instance.md) for the full rationale and
-what multi-instance would require.
+FreeCloud supports multiple organisations in one deployment (MSP-style) using a
+**shared Keycloak realm**: every tenant-scoped table carries an `org_id` foreign
+key to `organizations`, requests resolve their active org via the `X-Org-Id`
+header validated against `org_memberships` (fail-closed 403 without a resolvable
+org), and RBAC distinguishes system admins (cross-org) from org admins. SCIM is
+tenant-scoped via per-org bearer tokens and `/scim/v2/orgs/{orgID}/...` paths
+(the legacy path serves the Default Organization for backward compatibility).
+The audit hash chain remains global with `org_id` as a filter column, so chain
+integrity verification is unaffected by org-filtered reads. Cross-org isolation
+is enforced query-side (`WHERE org_id = ...` plus per-statement guards on
+mutations) and proven by a dedicated isolation test suite (unit + live-stack
+e2e). Hard realm-per-org isolation is deferred — see
+[ADR 0005](adr/0005-multi-tenant-shared-realm.md).
+
+## Multi-Instance / HA (v1.7)
+
+The backend runs with N replicas behind a load balancer: rate limiting is
+Redis-backed (required in production, fail-closed), schema migrations run in a
+dedicated one-shot `migrate` job under a Postgres advisory lock while serving
+instances only verify the schema version, Keycloak bootstrap is serialised by
+an advisory try-lock poll, and background jobs (reconcile, audit retention,
+analytics snapshots) elect exactly one leader per job via session-scoped
+advisory locks. Replicas must share Postgres and Redis. Proven in CI by a
+two-replica compose overlay behind Caddy. See
+[ADR 0004](adr/0004-multi-instance-ha.md) (supersedes ADR 0003).
 
 ## ADR Index
 
@@ -249,5 +269,9 @@ what multi-instance would require.
   (synchronous compensation / saga-style rollback for onboarding/offboarding)
 - [ADR 0002](adr/0002-fleet-enrollment-callback.md) — FleetDM enrollment callback
   (HMAC-authenticated webhook; token single-use; device↔user linking)
-- [ADR 0003](adr/0003-single-instance.md) — Single-instance constraint (in-memory
-  rate limiter, no advisory-lock migrations)
+- [ADR 0003](adr/0003-single-instance.md) — Single-instance constraint
+  (superseded by ADR 0004)
+- [ADR 0004](adr/0004-multi-instance-ha.md) — Multi-instance HA (Redis rate
+  limiting, decoupled migrations, advisory-lock leader election)
+- [ADR 0005](adr/0005-multi-tenant-shared-realm.md) — Multi-tenant foundations
+  (shared realm + org_id scoping; realm-per-org deferred)

@@ -2,10 +2,11 @@
 
 FreeCloud is an open-source alternative to JumpCloud for teams that want full
 control over their identity and device management stack. It covers the core
-JumpCloud surface area — SSO, SCIM, MDM, audit, and access governance — while
-being self-hostable on a single Docker Compose host. Some JumpCloud capabilities
-(HA/multi-instance, live outbound-sync connectors, real VPS production deploy)
-are deferred; see the gaps section below.
+JumpCloud surface area — SSO, SCIM, MDM, audit, access governance, multi-org
+tenancy, and multi-instance HA — self-hostable via Docker Compose. The
+remaining deferrals (real VPS production deploy, live outbound-connector
+tenant verification, hard realm-per-org isolation) are in the gaps section
+below.
 
 ## Feature Matrix
 
@@ -58,8 +59,9 @@ are deferred; see the gaps section below.
 | Generic SCIM 2.0 connector | ✅ |
 | Provisioning dry-run preview | ✅ |
 | Reconcile-all (force re-sync every user) | ✅ |
-| Slack connector | ✅ Runtime connector wired; needs live-tenant verification |
-| GitHub Org connector | ✅ Runtime connector wired; needs live-tenant verification |
+| Slack connector | ✅ Contract-verified against recorded SCIM fixtures; live-tenant run pending sandbox credentials |
+| GitHub Org connector | ✅ Contract-verified against recorded API fixtures; live-tenant run pending sandbox credentials |
+| Live connector verification tool (`make verify-provisioning-live`) | ✅ |
 
 ### Device Management (MDM)
 
@@ -110,9 +112,12 @@ are deferred; see the gaps section below.
 
 | Feature | Status |
 |---|---|
-| API tokens with RBAC | ✅ |
+| API tokens with RBAC (org-scoped) | ✅ |
 | RBAC roles (super-admin / helpdesk / auditor / read-only) | ✅ |
-| Multi-instance / HA | ❌ Documented in [ADR 0003](adr/0003-single-instance.md) |
+| Multi-organisation tenancy (shared realm + org isolation) | ✅ [ADR 0005](adr/0005-multi-tenant-shared-realm.md) |
+| Org management UI + org switcher | ✅ |
+| Per-org SCIM bearer tokens + org-scoped SCIM endpoints | ✅ |
+| Multi-instance / HA (Redis rate limiting, decoupled migrations, leader election) | ✅ [ADR 0004](adr/0004-multi-instance-ha.md), proven by a two-replica e2e suite |
 | Dark mode UI | ✅ |
 
 ### Operations
@@ -121,6 +126,8 @@ are deferred; see the gaps section below.
 |---|---|
 | Docker Compose deploy | ✅ |
 | Turnkey single-command deploy (auto-secrets + self-bootstrap) | ✅ |
+| Decoupled schema migrations (`server migrate` + one-shot compose job) | ✅ |
+| Live GeoIP (operator-supplied MaxMind GeoLite2, fail-closed) | ✅ |
 | In-app Fleet / SMTP / IdP configuration | ✅ |
 | First-run setup wizard (create first admin without touching env) | ✅ |
 | Caddy TLS termination | ✅ |
@@ -131,14 +138,15 @@ are deferred; see the gaps section below.
 
 | Gap | Notes |
 |---|---|
-| **Real VPS production deploy** | The stack is code-complete and turnkey (single `docker compose up`, auto-secrets, self-bootstrap wizard) but has never been deployed to a real VPS. All validation has been done locally via Docker Compose. |
-| **Multi-tenant / organisation isolation** | v1.6 supports a single organisation. Multi-tenant isolation (separate Keycloak realms per org, tenant-scoped SCIM endpoints) is deferred; see the single-instance ADR for scope. |
-| **Slack/GitHub live-tenant verification** | Runtime connectors are wired, but they still need manual verification against real tenant credentials. |
-| **HA / multi-instance** | The in-memory rate limiter and startup-migration pattern require a single backend instance. See [ADR 0003](adr/0003-single-instance.md) for the full rationale and what HA would require. |
-| **Authenticated e2e round-trips** | The e2e harness has no admin-JWT login path (its bearers are opaque tokens scoped to the SCIM and access-eval endpoints). Admin-gated routes — including provisioning config and federation CRUD — are therefore e2e-covered at the smoke level (route wired + auth-gated against the live stack), consistent with the rest of the suite. A full authenticated provisioning round-trip and live LDAP sync are deferred pending an e2e admin-auth path. |
-| **SPI client-IP forwarding** | The Keycloak authenticator SPI receives the client IP for network-condition evaluation, but only trusts `X-Forwarded-For` when `TRUST_PROXY=true`. A direct (non-proxied) SPI call will see the loopback IP and geo/network conditions will evaluate against 127.0.0.1. |
-| **Live GeoIP resolution** | Geo conditions in conditional-access policies compare against a static IP→country lookup. A production-grade MaxMind GeoLite2 integration is deferred; the current lookup covers common test IPs only. |
+| **Real VPS production deploy** | The stack is code-complete and turnkey (single `docker compose up`, auto-secrets, self-bootstrap wizard) — and, as of v1.7, HA-capable — but has **never been deployed to a real VPS** (deferred for the seventh consecutive release). All validation, including the two-replica HA suite, runs in local/CI Docker Compose. This is the largest unquantified risk in the project. |
+| **Realm-per-org isolation** | v1.7 ships multi-org tenancy in a **shared Keycloak realm**: org isolation is enforced in FreeCloud's data model, RBAC, API, SCIM, and UI, proven by a cross-org isolation test suite. Hard isolation (separate realm per org: separate user namespaces, login flows, token issuers) is designed-for but deferred — see [ADR 0005](adr/0005-multi-tenant-shared-realm.md). Known limitation: user emails are unique across the whole deployment, not per org. |
+| **Slack/GitHub live-tenant verification** | Connectors are contract-verified against recorded API fixtures (create/update/deactivate/offboard) and an optional live-verification tool exists (`make verify-provisioning-live`, gated on sandbox credentials). A live run still hasn't happened: GitHub needs a sandbox org token; Slack SCIM additionally requires a paid (Business+) plan. |
+
+Gaps retired in v1.7: HA / multi-instance ([ADR 0004](adr/0004-multi-instance-ha.md)),
+authenticated e2e round-trips (seeded admin-JWT path, e2e-only), SPI client-IP
+forwarding (trusted-proxy resolution proven end-to-end incl. spoof rejection),
+and live GeoIP (operator-supplied GeoLite2 via `GEOIP_MMDB_PATH`, fail-closed).
 
 ## Versioning
 
-This matrix reflects **FreeCloud v1.6.0 (2026-06-23)**.
+This matrix reflects **FreeCloud v1.7.0 (2026-07-02)**.
