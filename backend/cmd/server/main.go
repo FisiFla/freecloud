@@ -178,6 +178,13 @@ func runServer() {
 		// everything is already in place instead of skipping the call.
 		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer bootstrapCancel()
+		// E2E_SEED_ADMIN seeds a known admin user + enables direct-access-grant on
+		// the dashboard client so the e2e harness can mint a real admin JWT
+		// directly from Keycloak's token endpoint. FAIL-CLOSED: only honoured
+		// when APP_ENV is development/test (config.IsDevOrE2E) — the flag itself
+		// is ignored in any other environment, so a stray env var can never
+		// enable this in production.
+		seedE2EAdmin := config.IsDevOrE2E() && os.Getenv("E2E_SEED_ADMIN") == "true"
 		result, err := bootstrap.Run(bootstrapCtx, bootstrap.Config{
 			KeycloakURL:                  cfg.KeycloakURL,
 			AdminUsername:                cfg.BootstrapAdminUser,
@@ -185,6 +192,9 @@ func runServer() {
 			TargetRealm:                  cfg.KeycloakRealm,
 			ServiceAccountSecretOverride: cfg.KeycloakClientSecret,
 			CreateDemoUser:               os.Getenv("CREATE_DEMO_USER") == "true",
+			SeedE2EAdmin:                 seedE2EAdmin,
+			E2EAdminUsername:             os.Getenv("E2E_ADMIN_USERNAME"),
+			E2EAdminPassword:             os.Getenv("E2E_ADMIN_PASSWORD"),
 		})
 		if err != nil {
 			return "", err

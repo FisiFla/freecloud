@@ -258,6 +258,16 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// IsDevOrE2E reports whether APP_ENV is "development" or "test" (the e2e
+// stack sets APP_ENV=test — see docker/docker-compose.e2e.yml). Any other
+// value, including unset, is treated as production. FAIL-CLOSED: gates
+// dev/e2e-only affordances (like bootstrap.Config.SeedE2EAdmin) that must
+// never be reachable in a real deployment.
+func IsDevOrE2E() bool {
+	env := os.Getenv("APP_ENV")
+	return env == "development" || env == "test"
+}
+
 // parseBool parses a boolean environment variable. Returns false on invalid values.
 func parseBool(s string) bool {
 	return s == "true" || s == "1" || s == "yes"

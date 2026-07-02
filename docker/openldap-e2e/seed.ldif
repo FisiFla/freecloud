@@ -1,0 +1,24 @@
+# F2/A1: seed users for the LDAP federation e2e sync test.
+# Bitnami's openldap image imports every .ldif file under LDAP_CUSTOM_LDIF_DIR
+# on first boot (after the base dc=example,dc=com domain + admin bind DN exist).
+# Two plain users are enough to prove a real sync pulls real entries into
+# Keycloak — this is not meant to model a realistic directory.
+dn: uid=e2eldapuser1,dc=example,dc=com
+objectClass: inetOrgPerson
+objectClass: top
+uid: e2eldapuser1
+cn: E2E LDAP One
+sn: One
+givenName: E2E
+mail: e2eldapuser1@example.com
+userPassword: e2eldappassword1
+
+dn: uid=e2eldapuser2,dc=example,dc=com
+objectClass: inetOrgPerson
+objectClass: top
+uid: e2eldapuser2
+cn: E2E LDAP Two
+sn: Two
+givenName: E2E
+mail: e2eldapuser2@example.com
+userPassword: e2eldappassword2

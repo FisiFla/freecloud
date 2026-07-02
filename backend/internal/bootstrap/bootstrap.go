@@ -40,6 +40,18 @@ type Config struct {
 	CreateDemoUser bool
 	// DemoPassword is the demo user password. Generated if empty.
 	DemoPassword string
+
+	// SeedE2EAdmin creates a known admin user + enables a direct-access-grant
+	// path on the dashboard client so e2e tests can mint a real admin JWT from
+	// Keycloak's token endpoint. Callers MUST gate this to dev/e2e environments
+	// only (see config.IsDevOrE2E) — it is never safe in production because it
+	// both creates a standing admin credential AND turns on password-grant (ROPC)
+	// on a public client, which bypasses the browser posture-check flow entirely.
+	SeedE2EAdmin bool
+	// E2EAdminUsername / E2EAdminPassword are the seeded admin's credentials.
+	// Defaults applied in defaults() if empty.
+	E2EAdminUsername string
+	E2EAdminPassword string
 }
 
 // Result is returned by Run.
@@ -61,6 +73,14 @@ func (c *Config) defaults() {
 	}
 	if c.PostureFlowAlias == "" {
 		c.PostureFlowAlias = "browser-with-posture"
+	}
+	if c.SeedE2EAdmin {
+		if c.E2EAdminUsername == "" {
+			c.E2EAdminUsername = "e2e-admin"
+		}
+		if c.E2EAdminPassword == "" {
+			c.E2EAdminPassword = "e2e-admin-password"
+		}
 	}
 }
 
@@ -130,6 +150,15 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		}
 	}
 
+	if cfg.SeedE2EAdmin {
+		if err := ensureE2EAdmin(ctx, gc, token, cfg, logger); err != nil {
+			return nil, err
+		}
+		if err := enableDirectAccessGrants(ctx, gc, token, cfg, logger); err != nil {
+			return nil, err
+		}
+	}
+
 	logger.Info("bootstrap: complete")
 	return &Result{ServiceAccountSecret: secret}, nil
 }
@@ -164,14 +193,14 @@ func ensureRealm(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Con
 
 	logger.Info("bootstrap: creating realm")
 	_, err = gc.CreateRealm(ctx, token, gocloak.RealmRepresentation{
-		Realm:                   gocloak.StringP(cfg.TargetRealm),
-		Enabled:                 gocloak.BoolP(true),
-		DisplayName:             gocloak.StringP("FreeCloud"),
-		LoginWithEmailAllowed:   gocloak.BoolP(true),
-		DuplicateEmailsAllowed:  gocloak.BoolP(false),
-		ResetPasswordAllowed:    gocloak.BoolP(true),
-		EditUsernameAllowed:     gocloak.BoolP(true),
-		RegistrationAllowed:     gocloak.BoolP(false),
+		Realm:                  gocloak.StringP(cfg.TargetRealm),
+		Enabled:                gocloak.BoolP(true),
+		DisplayName:            gocloak.StringP("FreeCloud"),
+		LoginWithEmailAllowed:  gocloak.BoolP(true),
+		DuplicateEmailsAllowed: gocloak.BoolP(false),
+		ResetPasswordAllowed:   gocloak.BoolP(true),
+		EditUsernameAllowed:    gocloak.BoolP(true),
+		RegistrationAllowed:    gocloak.BoolP(false),
 	})
 	return err
 }
@@ -226,18 +255,18 @@ func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string,
 		// Create the client.
 		falseVal := false
 		_, err = gc.CreateClient(ctx, token, cfg.TargetRealm, gocloak.Client{
-			ClientID:                  &clientID,
-			Name:                      gocloak.StringP("FreeCloud Backend Service"),
-			Enabled:                   gocloak.BoolP(true),
-			PublicClient:              &falseVal,
-			ServiceAccountsEnabled:    gocloak.BoolP(true),
+			ClientID:                     &clientID,
+			Name:                         gocloak.StringP("FreeCloud Backend Service"),
+			Enabled:                      gocloak.BoolP(true),
+			PublicClient:                 &falseVal,
+			ServiceAccountsEnabled:       gocloak.BoolP(true),
 			AuthorizationServicesEnabled: &falseVal,
-			StandardFlowEnabled:       &falseVal,
-			DirectAccessGrantsEnabled: &falseVal,
+			StandardFlowEnabled:          &falseVal,
+			DirectAccessGrantsEnabled:    &falseVal,
 			// Without full scope, KC 25 omits the SA's assigned realm-management
 			// roles (manage-users/view-users/…) from its token, so admin calls 403.
-			FullScopeAllowed:          gocloak.BoolP(true),
-			Secret:                    &secretValue,
+			FullScopeAllowed: gocloak.BoolP(true),
+			Secret:           &secretValue,
 		})
 		if err != nil {
 			return "", fmt.Errorf("bootstrap: create service client: %w", err)
@@ -502,6 +531,109 @@ func ensureDemoUser(ctx context.Context, gc *gocloak.GoCloak, token string, cfg 
 		return fmt.Errorf("bootstrap: set demo user password: %w", err)
 	}
 	logger.Info("bootstrap: created demo user", zap.String("user_id", userID))
+	return nil
+}
+
+// ensureE2EAdmin creates a known admin user (member of the "admin" realm role)
+// for e2e tests. It is idempotent: if the user already exists its password is
+// re-synced to cfg.E2EAdminPassword so re-runs against a persisted volume
+// don't drift from a stale credential. NEVER call this outside dev/e2e — see
+// Config.SeedE2EAdmin.
+func ensureE2EAdmin(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) error {
+	username := cfg.E2EAdminUsername
+	exact := true
+	users, err := gc.GetUsers(ctx, token, cfg.TargetRealm, gocloak.GetUsersParams{
+		Username: &username,
+		Exact:    &exact,
+	})
+	if err != nil {
+		return fmt.Errorf("bootstrap: check e2e admin user: %w", err)
+	}
+
+	var userID string
+	if len(users) > 0 && users[0].ID != nil {
+		userID = *users[0].ID
+		logger.Info("bootstrap: e2e admin user already exists")
+	} else {
+		email := cfg.E2EAdminUsername + "@freecloud.local"
+		first := "E2E"
+		last := "Admin"
+		userID, err = gc.CreateUser(ctx, token, cfg.TargetRealm, gocloak.User{
+			Username:      &username,
+			Email:         &email,
+			FirstName:     &first,
+			LastName:      &last,
+			Enabled:       gocloak.BoolP(true),
+			EmailVerified: gocloak.BoolP(true),
+		})
+		if err != nil {
+			return fmt.Errorf("bootstrap: create e2e admin user: %w", err)
+		}
+		logger.Info("bootstrap: created e2e admin user", zap.String("user_id", userID))
+	}
+
+	// Always (re)sync the password so a re-run against a persisted volume with a
+	// pre-existing user still yields the documented credential.
+	if err := gc.SetPassword(ctx, token, userID, cfg.TargetRealm, cfg.E2EAdminPassword, false); err != nil {
+		return fmt.Errorf("bootstrap: set e2e admin password: %w", err)
+	}
+
+	// Grant the "admin" realm role so resolveRole() maps it to RoleSuperAdmin.
+	adminRole, err := gc.GetRealmRole(ctx, token, cfg.TargetRealm, "admin")
+	if err != nil {
+		return fmt.Errorf("bootstrap: get admin realm role: %w", err)
+	}
+	existingRoles, err := gc.GetRealmRolesByUserID(ctx, token, cfg.TargetRealm, userID)
+	if err != nil {
+		return fmt.Errorf("bootstrap: get e2e admin's realm roles: %w", err)
+	}
+	hasAdmin := false
+	for _, r := range existingRoles {
+		if r.Name != nil && *r.Name == "admin" {
+			hasAdmin = true
+			break
+		}
+	}
+	if !hasAdmin {
+		if err := gc.AddRealmRoleToUser(ctx, token, cfg.TargetRealm, userID, []gocloak.Role{*adminRole}); err != nil {
+			return fmt.Errorf("bootstrap: grant admin role to e2e admin: %w", err)
+		}
+		logger.Info("bootstrap: granted admin realm role to e2e admin")
+	}
+
+	return nil
+}
+
+// enableDirectAccessGrants turns on the OAuth2 Resource Owner Password
+// Credentials grant on the public dashboard client so the e2e harness can
+// exchange the seeded admin's username/password for a real JWT directly from
+// Keycloak's token endpoint (no browser/posture flow involved).
+//
+// FAIL-CLOSED BY CALLER: this function has no internal environment check —
+// callers (main.go) MUST only set Config.SeedE2EAdmin when APP_ENV is dev/e2e.
+// Enabling ROPC on a public client is a deliberate e2e-only convenience: it
+// lets tests skip the interactive browser flow (and therefore the posture
+// authenticator), which is by design for testing the API layer directly. It
+// must never run in production, where it would let anyone with valid
+// credentials bypass posture enforcement via direct password grant.
+func enableDirectAccessGrants(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) error {
+	clientID := cfg.DashboardClientID
+	clients, err := gc.GetClients(ctx, token, cfg.TargetRealm, gocloak.GetClientsParams{ClientID: &clientID})
+	if err != nil {
+		return fmt.Errorf("bootstrap: list dashboard clients for direct-grant: %w", err)
+	}
+	if len(clients) == 0 || clients[0].ID == nil {
+		return fmt.Errorf("bootstrap: dashboard client not found, cannot enable direct access grants")
+	}
+	if clients[0].DirectAccessGrantsEnabled != nil && *clients[0].DirectAccessGrantsEnabled {
+		logger.Info("bootstrap: direct access grants already enabled on dashboard client")
+		return nil
+	}
+	clients[0].DirectAccessGrantsEnabled = gocloak.BoolP(true)
+	if err := gc.UpdateClient(ctx, token, cfg.TargetRealm, *clients[0]); err != nil {
+		return fmt.Errorf("bootstrap: enable direct access grants: %w", err)
+	}
+	logger.Info("bootstrap: enabled direct access grants on dashboard client (e2e-only)")
 	return nil
 }
 

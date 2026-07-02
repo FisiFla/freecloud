@@ -105,6 +105,11 @@ services:
       LDAP_ADMIN_PASSWORD: adminpassword
       LDAP_ROOT: dc=example,dc=com
       LDAP_ADMIN_DN: cn=admin,dc=example,dc=com
+      # A1: seed two plain users so the federation-sync e2e test can prove a
+      # real sync pulls real entries into Keycloak (not just "the call succeeds").
+      LDAP_CUSTOM_LDIF_DIR: /ldifs
+    volumes:
+      - ./openldap-e2e/seed.ldif:/ldifs/seed.ldif:ro
     healthcheck:
       test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost:1389 -D 'cn=admin,dc=example,dc=com' -w adminpassword -b 'dc=example,dc=com' -s base >/dev/null 2>&1 || exit 1"]
       interval: 10s
@@ -139,6 +144,14 @@ services:
       FLEET_WEBHOOK_SECRET: e2e-webhook-secret
       SCIM_BEARER_TOKEN: e2e-scim-token
       ACCESS_EVAL_TOKEN: e2e-access-eval-token
+      # A1: seed a known admin user + enable direct-access-grant on the
+      # dashboard client so the e2e harness can mint a real admin JWT from
+      # Keycloak's token endpoint. Fail-closed at the app layer: only honoured
+      # because APP_ENV=test above (config.IsDevOrE2E) — this flag alone does
+      # nothing outside dev/e2e.
+      E2E_SEED_ADMIN: "true"
+      E2E_ADMIN_USERNAME: e2e-admin
+      E2E_ADMIN_PASSWORD: e2e-admin-password
       CORS_ORIGIN: http://localhost:3000
       # F2: LDAP bind password for federation source creation.
       LDAP_BIND_PASSWORD: adminpassword

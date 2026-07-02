@@ -2,15 +2,15 @@
 
 // Package e2e — outbound SCIM provisioning route smoke tests (F2).
 //
-// FreeCloud's admin endpoints are JWT-gated (RequirePermission). This harness
-// has no admin-JWT path — the SCIM and access-eval bearers are opaque tokens
-// scoped to their own endpoints — so, consistent with the rest of this suite
-// (see TestE2E_AppCreateStub / TestE2E_CompliancePosure), we verify the new
-// A4 provisioning routes are wired into the live stack and correctly auth-gated,
-// rather than driving a fully authenticated round-trip. We also confirm the
-// inbound SCIM endpoint (the target of outbound provisioning) is reachable with
-// the SCIM bearer. A fully authenticated provisioning round-trip + live
-// downstream sync is deferred — see docs/PARITY.md.
+// FreeCloud's admin endpoints are JWT-gated (RequirePermission). This file
+// verifies the A4 provisioning routes are wired into the live stack and
+// correctly reject unauthenticated requests (defense-in-depth alongside the
+// RBAC unit tests). We also confirm the inbound SCIM endpoint (the target of
+// outbound provisioning) is reachable with the SCIM bearer. A1 added a real
+// admin-JWT path, so the fully authenticated provisioning round-trip (create
+// employee -> connector provisions -> verify) is now exercised in
+// admin_authenticated_e2e_test.go (TestE2E_Admin_ProvisioningRoundTrip)
+// rather than deferred.
 package e2e
 
 import (
