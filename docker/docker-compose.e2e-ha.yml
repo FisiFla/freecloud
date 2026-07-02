@@ -1,0 +1,84 @@
+## B4 (v1.7 HA) — multi-instance e2e overlay.
+##
+## Layers a second backend replica + a round-robin load balancer on top of
+## the base e2e stack (docker-compose.e2e.yml), WITHOUT modifying it — the
+## single-replica e2e path keeps working unchanged; this file is additive.
+##
+## Both replicas share the same Postgres (postgres-e2e) and Redis (redis-e2e)
+## from the base stack, and both wait on the same one-shot migrate-e2e job,
+## so this is the minimal change needed to prove the HA properties:
+##   - migrations run exactly once (both replicas start against an
+##     already-migrated schema; schema_migrations has each id exactly once)
+##   - rate limiting reflects ONE shared Redis-backed budget, not 2x
+##   - exactly one replica leads each background job
+##   - Keycloak bootstrap's advisory lock lets both start cleanly, realm
+##     provisioned once
+##
+## Bring up with:
+##   docker compose -f docker/docker-compose.e2e.yml -f docker/docker-compose.e2e-ha.yml up -d --build
+##   cd backend && go test -tags=e2e -v -run TestHA ./internal/e2e/... \
+##     -backend=http://localhost:8086   (the LB, not either replica directly)
+##   docker compose -f docker/docker-compose.e2e.yml -f docker/docker-compose.e2e-ha.yml down -v
+
+services:
+  # Second backend replica: identical config to backend-e2e (same DB, same
+  # Redis, same Keycloak realm/secret), proving both instances of the *same*
+  # image cooperate rather than needing replica-specific configuration.
+  backend-e2e-2:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    ports:
+      - "8087:8080"
+    environment:
+      DATABASE_URL: postgres://freecloud:freecloud@postgres-e2e:5432/freecloud_e2e?sslmode=disable
+      APP_ENV: test
+      PORT: "8080"
+      REDIS_URL: redis://redis-e2e:6379/0
+      KEYCLOAK_URL: http://keycloak-e2e:8080
+      KEYCLOAK_REALM: freecloud-e2e
+      KEYCLOAK_CLIENT_ID: freecloud-service
+      KEYCLOAK_CLIENT_SECRET: freecloud-secret
+      KC_BOOTSTRAP_ADMIN: admin
+      KC_BOOTSTRAP_PASSWORD: admin
+      FLEET_URL: http://fleetdm-e2e:8080
+      FLEET_API_TOKEN: e2e-fleet-token
+      FLEET_WEBHOOK_SECRET: e2e-webhook-secret
+      SCIM_BEARER_TOKEN: e2e-scim-token
+      ACCESS_EVAL_TOKEN: e2e-access-eval-token
+      CORS_ORIGIN: http://localhost:3000
+      LDAP_BIND_PASSWORD: adminpassword
+    depends_on:
+      postgres-e2e:
+        condition: service_healthy
+      redis-e2e:
+        condition: service_healthy
+      migrate-e2e:
+        condition: service_completed_successfully
+      keycloak-e2e:
+        condition: service_started
+      fleetdm-e2e:
+        condition: service_healthy
+      openldap-e2e:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/healthz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  # Round-robin load balancer in front of both replicas. Caddy (already used
+  # in docker-compose.prod.yml) over introducing a second reverse-proxy
+  # technology just for e2e.
+  lb-e2e:
+    image: caddy:2-alpine
+    ports:
+      - "8086:8080"
+    volumes:
+      - ./e2e-ha/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      backend-e2e:
+        condition: service_healthy
+      backend-e2e-2:
+        condition: service_healthy

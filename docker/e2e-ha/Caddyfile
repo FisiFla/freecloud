@@ -1,0 +1,9 @@
+# B4 (v1.7 HA) e2e load balancer: plain round-robin across both backend
+# replicas, no sticky sessions — the whole point is proving the backend is
+# safely stateless/shared-state across replicas, so nothing here should paper
+# over a replica behaving differently.
+:8080 {
+	reverse_proxy backend-e2e:8080 backend-e2e-2:8080 {
+		lb_policy round_robin
+	}
+}

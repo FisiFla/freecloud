@@ -96,3 +96,63 @@ jobs:
         if: always()
         run: |
           docker compose -f docker/docker-compose.e2e.yml down -v
+
+  # B4 (v1.7 HA): multi-instance proof. Runs the same base e2e stack PLUS the
+  # docker-compose.e2e-ha.yml overlay (second backend replica + LB), proving
+  # migrations-once / shared-rate-limit / single-leader / bootstrap-once
+  # across two replicas. Kept as a separate job (not folded into `e2e` above)
+  # so the single-replica path's runtime/flakiness is unaffected; dispatched
+  # the same way (workflow_dispatch + nightly schedule), not on PRs.
+  e2e-ha:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: build-kc-spi
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache-dependency-path: backend/go.sum
+
+      - name: Build HA e2e stack
+        run: |
+          docker compose -f docker/docker-compose.e2e.yml -f docker/docker-compose.e2e-ha.yml build
+
+      - name: Start HA e2e stack
+        run: |
+          docker compose -f docker/docker-compose.e2e.yml -f docker/docker-compose.e2e-ha.yml up -d
+
+      - name: Wait for both replicas to be ready
+        run: |
+          for url in http://localhost:8085 http://localhost:8087; do
+            echo "Waiting for $url/readyz..."
+            for i in $(seq 1 60); do
+              if curl -sf "$url/readyz" >/dev/null 2>&1; then
+                echo "  $url ready."
+                break
+              fi
+              echo "  attempt $i/60..."
+              sleep 5
+            done
+            curl -sf "$url/readyz" || (echo "$url not ready after 300s." && exit 1)
+          done
+
+      - name: Run HA e2e tests
+        env:
+          E2E_HA_LB_URL: http://localhost:8086
+          E2E_HA_REPLICA_A_URL: http://localhost:8085
+          E2E_HA_REPLICA_B_URL: http://localhost:8087
+        run: |
+          cd backend && go test -tags=e2e -v -timeout 5m -run TestHA ./internal/e2e/...
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          docker compose -f docker/docker-compose.e2e.yml -f docker/docker-compose.e2e-ha.yml logs --tail=150
+
+      - name: Tear down HA stack
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.e2e.yml -f docker/docker-compose.e2e-ha.yml down -v
