@@ -107,6 +107,9 @@ func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "valid user id is required")
 		return
 	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
+		return
+	}
 
 	var req AssignUserToGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -155,6 +158,9 @@ func (h *Handler) UnassignUserFromGroup(w http.ResponseWriter, r *http.Request) 
 	}
 	if groupID == "" {
 		respondError(w, http.StatusBadRequest, "groupId is required")
+		return
+	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
 		return
 	}
 
@@ -256,6 +262,9 @@ func (h *Handler) AssignRealmRoleToUser(w http.ResponseWriter, r *http.Request) 
 	userID := chi.URLParam(r, "id")
 	if userID == "" || !isValidUUID(userID) {
 		respondError(w, http.StatusBadRequest, "valid user id is required")
+		return
+	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
 		return
 	}
 

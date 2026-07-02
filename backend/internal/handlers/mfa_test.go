@@ -26,10 +26,11 @@ func TestGetMFAStatusOTP(t *testing.T) {
 			return []string{"otp"}, nil
 		},
 	}
-	h := newHandlerNoDB(kc)
+	h := newHandlerOrgScoped(kc)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/uid-1/mfa-status", nil)
 	req = withChiParam(req, "id", "uid-1")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.GetMFAStatus(rec, req)
 
@@ -52,9 +53,10 @@ func TestGetMFAStatusOTP(t *testing.T) {
 
 // TestGetMFAStatusNone: user has no credentials and no pending actions.
 func TestGetMFAStatusNone(t *testing.T) {
-	h := newHandlerNoDB(&fakeKeycloak{})
+	h := newHandlerOrgScoped(&fakeKeycloak{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/uid-2/mfa-status", nil)
 	req = withChiParam(req, "id", "uid-2")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.GetMFAStatus(rec, req)
 	if rec.Code != http.StatusOK {
@@ -69,9 +71,10 @@ func TestGetMFAStatusPendingTOTP(t *testing.T) {
 			return []string{"CONFIGURE_TOTP"}, nil
 		},
 	}
-	h := newHandlerNoDB(kc)
+	h := newHandlerOrgScoped(kc)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/uid-3/mfa-status", nil)
 	req = withChiParam(req, "id", "uid-3")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.GetMFAStatus(rec, req)
 	if rec.Code != http.StatusOK {
@@ -95,13 +98,14 @@ func TestRequireMFATOTP(t *testing.T) {
 			return nil
 		},
 	}
-	h := newHandlerNoDB(kc)
+	h := newHandlerOrgScoped(kc)
 
 	body := `{"type":"totp"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/uid-4/require-mfa",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withChiParam(req, "id", "uid-4")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.RequireMFA(rec, req)
 
@@ -116,12 +120,13 @@ func TestRequireMFATOTP(t *testing.T) {
 // TestRequireMFAWebAuthn: valid webauthn type → 200.
 func TestRequireMFAWebAuthn(t *testing.T) {
 	kc := &fakeKeycloak{}
-	h := newHandlerNoDB(kc)
+	h := newHandlerOrgScoped(kc)
 	body := `{"type":"webauthn"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/uid-5/require-mfa",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withChiParam(req, "id", "uid-5")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.RequireMFA(rec, req)
 	if rec.Code != http.StatusOK {
@@ -131,12 +136,13 @@ func TestRequireMFAWebAuthn(t *testing.T) {
 
 // TestRequireMFAInvalidType: unknown type → 400.
 func TestRequireMFAInvalidType(t *testing.T) {
-	h := newHandlerNoDB(&fakeKeycloak{})
+	h := newHandlerOrgScoped(&fakeKeycloak{})
 	body := `{"type":"sms"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/uid-6/require-mfa",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withChiParam(req, "id", "uid-6")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.RequireMFA(rec, req)
 	if rec.Code != http.StatusBadRequest {
@@ -161,4 +167,14 @@ func TestRequireMFAMissingID(t *testing.T) {
 // newHandlerNoDB creates a handler with no DB (nil) — sufficient for MFA tests.
 func newHandlerNoDB(kc *fakeKeycloak) *Handler {
 	return NewHandler(nil, kc, &fakeFleet{}, zap.NewNop())
+}
+
+// newHandlerOrgScoped creates a handler with a minimal fakeDB that answers
+// any org-ownership check (org_scope.go's requireUserInCallerOrg etc.) as
+// "found" -- MFA admin routes are org-scoped (Epic C), so they need a real
+// DB and org context to reach the behavior under test, unlike the plain
+// newHandlerNoDB used for the pre-Epic-C test fixtures above.
+func newHandlerOrgScoped(kc *fakeKeycloak) *Handler {
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	return NewHandler(db, kc, &fakeFleet{}, zap.NewNop())
 }

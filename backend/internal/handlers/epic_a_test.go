@@ -225,6 +225,7 @@ func TestCreateGroupValidation(t *testing.T) {
 
 func TestAssignUserToGroupValidation(t *testing.T) {
 	h := setupTestHandler(t)
+	h.db = &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
 	const validUserID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
 	tests := []struct {
@@ -247,6 +248,7 @@ func TestAssignUserToGroupValidation(t *testing.T) {
 				URLParams: chi.RouteParams{Keys: []string{"id"}, Values: []string{tt.userID}},
 			})
 			req = req.WithContext(chiCtx)
+			req = withOrgContext(req)
 			rec := httptest.NewRecorder()
 			h.AssignUserToGroup(rec, req)
 			if rec.Code != tt.wantStatus {
@@ -258,6 +260,7 @@ func TestAssignUserToGroupValidation(t *testing.T) {
 
 func TestAssignRealmRoleValidation(t *testing.T) {
 	h := setupTestHandler(t)
+	h.db = &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
 	const validUserID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
 	tests := []struct {
@@ -279,6 +282,7 @@ func TestAssignRealmRoleValidation(t *testing.T) {
 				URLParams: chi.RouteParams{Keys: []string{"id"}, Values: []string{validUserID}},
 			})
 			req = req.WithContext(chiCtx)
+			req = withOrgContext(req)
 			rec := httptest.NewRecorder()
 			h.AssignRealmRoleToUser(rec, req)
 			if rec.Code != tt.wantStatus {

@@ -162,6 +162,7 @@ func TestOnboardValidation(t *testing.T) {
 
 func TestOffboardEndpoint(t *testing.T) {
 	h := setupTestHandler(t)
+	h.db = &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
 
 	const testUserID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/"+testUserID, nil)
@@ -176,6 +177,7 @@ func TestOffboardEndpoint(t *testing.T) {
 		},
 	})
 	req = req.WithContext(chiCtx)
+	req = withOrgContext(req)
 
 	rec := httptest.NewRecorder()
 	h.Offboard(rec, req)
@@ -295,7 +297,8 @@ func TestOffboardDisableFailureReturns502(t *testing.T) {
 		},
 	}
 	fleet := &fakeFleet{}
-	h := NewHandler(nil, kc, fleet, logger)
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, kc, fleet, logger)
 	const testUserID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/"+testUserID, nil)
 	req.Header.Set("Content-Type", "application/json")
@@ -303,6 +306,7 @@ func TestOffboardDisableFailureReturns502(t *testing.T) {
 		URLParams: chi.RouteParams{Keys: []string{"userId"}, Values: []string{testUserID}},
 	})
 	req = req.WithContext(chiCtx)
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.Offboard(rec, req)
 	if rec.Code != http.StatusBadGateway {
