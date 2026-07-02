@@ -122,6 +122,7 @@ func TestCreateFederationSource_Success(t *testing.T) {
 		"bindDn": "cn=svc", "usersDn": "ou=users",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/federation/sources", bytes.NewReader(body))
+	req = withOrgContext(req)
 	rr := httptest.NewRecorder()
 	h.CreateFederationSource(rr, req)
 	if rr.Code != http.StatusCreated {
@@ -147,6 +148,7 @@ func TestListFederationSources_Empty(t *testing.T) {
 		},
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/federation/sources", nil)
+	req = withOrgContext(req)
 	rr := httptest.NewRecorder()
 	h.ListFederationSources(rr, req)
 	if rr.Code != http.StatusOK {
@@ -179,6 +181,7 @@ func TestGetFederationSource_NotFound(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/federation/sources/"+federationID, nil)
 	req = chiCtxWithID(req, "id", federationID)
+	req = withOrgContext(req)
 	rr := httptest.NewRecorder()
 	h.GetFederationSource(rr, req)
 	if rr.Code != http.StatusNotFound {
@@ -198,6 +201,7 @@ func TestGetFederationSource_Found(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/federation/sources/"+federationID, nil)
 	req = chiCtxWithID(req, "id", federationID)
+	req = withOrgContext(req)
 	rr := httptest.NewRecorder()
 	h.GetFederationSource(rr, req)
 	if rr.Code != http.StatusOK {
@@ -220,6 +224,7 @@ func TestDeleteFederationSource_NotFound(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/federation/sources/"+federationID, nil)
 	req = chiCtxWithID(req, "id", federationID)
+	req = withOrgContext(req)
 	rr := httptest.NewRecorder()
 	h.DeleteFederationSource(rr, req)
 	if rr.Code != http.StatusNotFound {
@@ -247,6 +252,7 @@ func TestDeleteFederationSource_Success(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/federation/sources/"+federationID, nil)
 	req = chiCtxWithID(req, "id", federationID)
+	req = withOrgContext(req)
 	rr := httptest.NewRecorder()
 	h.DeleteFederationSource(rr, req)
 	if rr.Code != http.StatusOK {
@@ -290,6 +296,7 @@ func TestTestFederationConnection_Success(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/federation/sources/"+federationID+"/test", nil)
 	req = chiCtxWithID(req, "id", federationID)
+	req = withOrgContext(req)
 	rr := httptest.NewRecorder()
 	h.TestFederationConnection(rr, req)
 	if rr.Code != http.StatusOK {
@@ -312,6 +319,7 @@ func TestTriggerFederationSync_NotFound(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/federation/sources/"+federationID+"/sync", nil)
 	req = chiCtxWithID(req, "id", federationID)
+	req = withOrgContext(req)
 	rr := httptest.NewRecorder()
 	h.TriggerFederationSync(rr, req)
 	if rr.Code != http.StatusNotFound {
@@ -339,6 +347,7 @@ func TestTriggerFederationSync_Success(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/federation/sources/"+federationID+"/sync", nil)
 	req = chiCtxWithID(req, "id", federationID)
+	req = withOrgContext(req)
 	rr := httptest.NewRecorder()
 	h.TriggerFederationSync(rr, req)
 	if rr.Code != http.StatusOK {

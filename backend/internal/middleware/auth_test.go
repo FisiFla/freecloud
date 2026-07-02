@@ -474,8 +474,9 @@ func (r fakeTokenRow) Scan(dest ...any) error {
 	*(dest[0].(*string)) = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	*(dest[1].(*string)) = r.role
 	*(dest[2].(*string)) = "ci"
-	*(dest[3].(**time.Time)) = nil
+	*(dest[3].(*string)) = DefaultOrgID
 	*(dest[4].(**time.Time)) = nil
+	*(dest[5].(**time.Time)) = nil
 	return nil
 }
 

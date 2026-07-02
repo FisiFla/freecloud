@@ -157,6 +157,11 @@ var migrations = []migration{
 		name:      "smtp_config",
 		statement: Migration042,
 	},
+	{
+		id:        43,
+		name:      "multi_tenant_organizations",
+		statement: Migration043,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -686,6 +691,208 @@ CREATE TABLE IF NOT EXISTS smtp_config (
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 INSERT INTO smtp_config (id) VALUES (1) ON CONFLICT DO NOTHING;
+`
+
+// Migration043 introduces multi-tenant foundations (Epic C / v1.7):
+// a shared Keycloak realm with org isolation living entirely in FreeCloud's
+// own data model. See docs/adr/0005-multi-tenant-shared-realm.md for the
+// shared-realm-now / realm-per-org-later rationale.
+//
+// Zero-downtime upgrade path for existing single-org installs:
+//  1. Create `organizations` and `org_memberships`.
+//  2. Insert a "Default Organization" row (fixed, well-known slug so the
+//     backend/config code can find it without a lookup at every request).
+//  3. Add `org_id UUID` (nullable at first) to every tenant-scoped table,
+//     backfill every existing row to the Default Organization, THEN add
+//     NOT NULL + FK. Doing it in that order means existing rows are never
+//     rejected mid-backfill and the table is never briefly unqueryable.
+//  4. Seed an org_membership (role='org-admin') for every existing user, so
+//     current users keep working with the org switcher on first login.
+//
+// Tables judged NOT tenant-scoped (excluded — global infra/config state):
+//   - schema_migrations, siem_cursor, audit_chain_anchors, fleet_config,
+//     smtp_config: singleton or migration-bookkeeping tables — one
+//     physical deployment, not per-tenant data.
+//   - api_tokens: judged tenant-scoped (added below) since a service
+//     account token acts on behalf of one org's data.
+//   - scim_resource_versions, enrollment_tokens, mfa_recovery_codes,
+//     mfa_coverage_cache, device_posture_cache, device_commands: keyed by
+//     user_id/host_id which already belong to an org-scoped user/device;
+//     org_id is added directly anyway so lookups don't require a join,
+//     matching the "helpers to read it" simplicity goal.
+//   - analytics_snapshots: org-scoped (added below) so multi-tenant
+//     dashboards don't mix orgs.
+//   - approval_requests, review_campaigns, review_items, access_requests,
+//     review_schedules, federation_sources, provisioning_state,
+//     app_provisioning_config, groups/roles (Keycloak-native, not a local
+//     table): org-scoped where the table is local to Postgres.
+const Migration043 = `
+-- 1. Core tenancy tables.
+CREATE TABLE IF NOT EXISTS organizations (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       TEXT NOT NULL,
+    slug       TEXT UNIQUE NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Fixed, well-known ID for the Default Organization so app code can
+-- reference it as a constant instead of querying by slug on every request.
+INSERT INTO organizations (id, name, slug)
+VALUES ('00000000-0000-0000-0000-000000000001', 'Default Organization', 'default')
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS org_memberships (
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id     UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    user_id    UUID NOT NULL REFERENCES users(keycloak_user_id) ON DELETE CASCADE,
+    role       TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('org-admin', 'member')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_org_memberships_user_id ON org_memberships(user_id);
+CREATE INDEX IF NOT EXISTS idx_org_memberships_org_id ON org_memberships(org_id);
+
+-- Seed a membership for every pre-existing user into the Default Organization
+-- so nothing breaks on upgrade. New multi-org installs simply won't have
+-- extra users at this point in their history, so this is a no-op for them.
+INSERT INTO org_memberships (org_id, user_id, role)
+SELECT '00000000-0000-0000-0000-000000000001', u.keycloak_user_id, 'org-admin'
+FROM users u
+ON CONFLICT (org_id, user_id) DO NOTHING;
+
+-- 2. Backfill org_id onto every tenant-scoped table. Pattern per table:
+--    add nullable -> backfill -> set default -> NOT NULL -> FK -> index.
+-- Using a DEFAULT of the Default Organization id means any row inserted by
+-- code that has not yet been updated to set org_id explicitly still lands
+-- safely in the Default Organization instead of failing NOT NULL, which
+-- keeps this a genuinely zero-downtime migration for a rolling deploy.
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE users SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE users ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE users ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE users DROP CONSTRAINT IF EXISTS fk_users_org;
+ALTER TABLE users ADD CONSTRAINT fk_users_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);
+
+ALTER TABLE devices ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE devices SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE devices ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE devices ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE devices DROP CONSTRAINT IF EXISTS fk_devices_org;
+ALTER TABLE devices ADD CONSTRAINT fk_devices_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_devices_org_id ON devices(org_id);
+
+ALTER TABLE connected_apps ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE connected_apps SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE connected_apps ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE connected_apps ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE connected_apps DROP CONSTRAINT IF EXISTS fk_connected_apps_org;
+ALTER TABLE connected_apps ADD CONSTRAINT fk_connected_apps_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_connected_apps_org_id ON connected_apps(org_id);
+
+ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE api_tokens SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE api_tokens ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE api_tokens ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE api_tokens DROP CONSTRAINT IF EXISTS fk_api_tokens_org;
+ALTER TABLE api_tokens ADD CONSTRAINT fk_api_tokens_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_org_id ON api_tokens(org_id);
+
+-- audit_logs keeps ONE global hash chain (see ADR): org_id is a filter
+-- column only, never used to fragment the chain itself.
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE audit_logs SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE audit_logs ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE audit_logs ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS fk_audit_logs_org;
+ALTER TABLE audit_logs ADD CONSTRAINT fk_audit_logs_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_org_id ON audit_logs(org_id);
+
+ALTER TABLE review_campaigns ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE review_campaigns SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE review_campaigns ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE review_campaigns ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE review_campaigns DROP CONSTRAINT IF EXISTS fk_review_campaigns_org;
+ALTER TABLE review_campaigns ADD CONSTRAINT fk_review_campaigns_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_review_campaigns_org_id ON review_campaigns(org_id);
+
+ALTER TABLE access_requests ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE access_requests SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE access_requests ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE access_requests ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE access_requests DROP CONSTRAINT IF EXISTS fk_access_requests_org;
+ALTER TABLE access_requests ADD CONSTRAINT fk_access_requests_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_access_requests_org_id ON access_requests(org_id);
+
+ALTER TABLE analytics_snapshots ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE analytics_snapshots SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE analytics_snapshots ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE analytics_snapshots ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE analytics_snapshots DROP CONSTRAINT IF EXISTS fk_analytics_snapshots_org;
+ALTER TABLE analytics_snapshots ADD CONSTRAINT fk_analytics_snapshots_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_analytics_snapshots_org_id ON analytics_snapshots(org_id);
+
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE approval_requests SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE approval_requests ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE approval_requests ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE approval_requests DROP CONSTRAINT IF EXISTS fk_approval_requests_org;
+ALTER TABLE approval_requests ADD CONSTRAINT fk_approval_requests_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_approval_requests_org_id ON approval_requests(org_id);
+
+ALTER TABLE device_commands ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE device_commands SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE device_commands ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE device_commands ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE device_commands DROP CONSTRAINT IF EXISTS fk_device_commands_org;
+ALTER TABLE device_commands ADD CONSTRAINT fk_device_commands_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_device_commands_org_id ON device_commands(org_id);
+
+ALTER TABLE provisioning_state ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE provisioning_state SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE provisioning_state ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE provisioning_state ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE provisioning_state DROP CONSTRAINT IF EXISTS fk_provisioning_state_org;
+ALTER TABLE provisioning_state ADD CONSTRAINT fk_provisioning_state_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_provisioning_state_org_id ON provisioning_state(org_id);
+
+ALTER TABLE app_provisioning_config ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE app_provisioning_config SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE app_provisioning_config ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE app_provisioning_config ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE app_provisioning_config DROP CONSTRAINT IF EXISTS fk_app_provisioning_config_org;
+ALTER TABLE app_provisioning_config ADD CONSTRAINT fk_app_provisioning_config_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_app_provisioning_config_org_id ON app_provisioning_config(org_id);
+
+ALTER TABLE federation_sources ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE federation_sources SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE federation_sources ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE federation_sources ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE federation_sources DROP CONSTRAINT IF EXISTS fk_federation_sources_org;
+ALTER TABLE federation_sources ADD CONSTRAINT fk_federation_sources_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_federation_sources_org_id ON federation_sources(org_id);
+
+ALTER TABLE review_schedules ADD COLUMN IF NOT EXISTS org_id UUID;
+UPDATE review_schedules SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+ALTER TABLE review_schedules ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE review_schedules ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE review_schedules DROP CONSTRAINT IF EXISTS fk_review_schedules_org;
+ALTER TABLE review_schedules ADD CONSTRAINT fk_review_schedules_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_review_schedules_org_id ON review_schedules(org_id);
+
+-- SCIM bearer tokens become per-org (C4). Legacy env SCIM_BEARER_TOKEN maps
+-- to the Default Organization (handled in application code, not SQL).
+CREATE TABLE IF NOT EXISTS scim_bearer_tokens (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id      UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    token_hash  TEXT UNIQUE NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    revoked_at  TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_scim_bearer_tokens_org_id ON scim_bearer_tokens(org_id);
+CREATE INDEX IF NOT EXISTS idx_scim_bearer_tokens_token_hash ON scim_bearer_tokens(token_hash);
 `
 
 // migrationLockID is the pg_advisory_lock key guarding RunMigrations. It is a

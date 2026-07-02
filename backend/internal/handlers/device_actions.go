@@ -20,12 +20,24 @@ type RemoteLockResponse struct {
 	Locked   bool   `json:"locked"`
 }
 
+// requireDeviceInCallerOrg verifies deviceID belongs to the caller's active
+// org before any device-scoped handler acts on it. Writes the response and
+// returns false on failure: no org context (403), lookup error (500), or
+// the device not existing/belonging to a different org (404 — the two are
+// deliberately indistinguishable, see resourceInOrg).
+func (h *Handler) requireDeviceInCallerOrg(w http.ResponseWriter, r *http.Request, deviceID string) bool {
+	return h.requireResourceInCallerOrg(w, r, "devices", "fleet_host_id", deviceID, "device not found")
+}
+
 // RemoteLock issues a remote-lock command to the given Fleet host.
 // Route: POST /api/v1/devices/{id}/lock (requires PermManageDevices).
 func (h *Handler) RemoteLock(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
 	if deviceID == "" {
 		respondError(w, http.StatusBadRequest, "device id is required")
+		return
+	}
+	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
 		return
 	}
 
@@ -77,6 +89,12 @@ type DeviceSoftwareResponse struct {
 	Devices []DeviceSoftwareHost `json:"devices"`
 }
 
+// requireUserInCallerOrg verifies userID belongs to the caller's active org
+// before any user-scoped handler acts on it. Mirrors requireDeviceInCallerOrg.
+func (h *Handler) requireUserInCallerOrg(w http.ResponseWriter, r *http.Request, userID string) bool {
+	return h.requireResourceInCallerOrg(w, r, "users", "keycloak_user_id", userID, "user not found")
+}
+
 // GetDeviceSoftware returns the software inventory for the devices mapped to a
 // user. Route: GET /api/v1/users/{id}/devices/software (requires PermReadCompliance).
 func (h *Handler) GetDeviceSoftware(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +105,9 @@ func (h *Handler) GetDeviceSoftware(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isValidUUID(userID) {
 		respondError(w, http.StatusBadRequest, "user id must be a valid UUID")
+		return
+	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
 		return
 	}
 
@@ -204,6 +225,9 @@ func (h *Handler) GetUserCompliance(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "user id must be a valid UUID")
 		return
 	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
+		return
+	}
 
 	ctx := r.Context()
 
@@ -253,10 +277,18 @@ func (h *Handler) GetOrgCompliance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	rows, err := h.db.Query(ctx,
 		`SELECT d.fleet_host_id, COALESCE(d.hostname, ''), COALESCE(d.os_version, '')
 		 FROM devices d
+		 WHERE d.org_id = $1
 		 ORDER BY d.hostname`,
+		oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("failed to query all devices", zap.Error(err))
@@ -442,6 +474,9 @@ func (h *Handler) RemoteRestart(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "device id is required")
 		return
 	}
+	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
+		return
+	}
 
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
@@ -470,6 +505,9 @@ func (h *Handler) RemoteLockWithMessage(w http.ResponseWriter, r *http.Request) 
 	deviceID := chi.URLParam(r, "id")
 	if deviceID == "" {
 		respondError(w, http.StatusBadRequest, "device id is required")
+		return
+	}
+	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
 		return
 	}
 
@@ -515,6 +553,9 @@ func (h *Handler) RemoteClearPasscode(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "device id is required")
 		return
 	}
+	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
+		return
+	}
 
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
@@ -558,10 +599,16 @@ func persistDeviceCommand(ctx context.Context, h *Handler, hostID, commandType, 
 	if h.db == nil {
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		h.logger.Warn("failed to persist device command: no org context",
+			zap.String("host_id", hostID), zap.String("command_type", commandType))
+		return
+	}
 	_, err := h.db.Exec(ctx,
-		`INSERT INTO device_commands (host_id, command_type, status, requested_by)
-		 VALUES ($1, $2, 'sent', $3)`,
-		hostID, commandType, requestedBy,
+		`INSERT INTO device_commands (host_id, command_type, status, requested_by, org_id)
+		 VALUES ($1, $2, 'sent', $3, $4)`,
+		hostID, commandType, requestedBy, oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Warn("failed to persist device command",
@@ -580,21 +627,26 @@ func (h *Handler) GetDeviceCommandHistory(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusBadRequest, "device id is required")
 		return
 	}
+	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
+		return
+	}
 
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 
+	oc := middleware.GetOrgContext(r.Context())
+
 	rows, err := h.db.Query(r.Context(),
 		`SELECT id, host_id, command_type, status, requested_by,
 		        requested_at, updated_at,
 		        COALESCE(fleet_command_uuid, ''), COALESCE(result, '')
 		 FROM device_commands
-		 WHERE host_id = $1
+		 WHERE host_id = $1 AND org_id = $2
 		 ORDER BY requested_at DESC
 		 LIMIT 50`,
-		deviceID,
+		deviceID, oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("failed to query device commands", zap.String("device_id", deviceID), zap.Error(err))

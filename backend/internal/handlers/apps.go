@@ -168,6 +168,12 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	// Create client in Keycloak
 	keycloakClientID, err := h.keycloak.CreateClient(ctx, req.Name, req.Protocol, req.RedirectURIs, req.BaseURL, toKeycloakSAMLOptions(req.SAMLOptions))
 	if err != nil {
@@ -198,10 +204,10 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 	// Store in local database
 	var appID string
 	err = h.db.QueryRow(ctx,
-		`INSERT INTO connected_apps (keycloak_client_id, name, protocol, base_url)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO connected_apps (keycloak_client_id, name, protocol, base_url, org_id)
+		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
-		keycloakClientID, req.Name, req.Protocol, req.BaseURL,
+		keycloakClientID, req.Name, req.Protocol, req.BaseURL, oc.OrgID,
 	).Scan(&appID)
 	if err != nil {
 		h.logger.Error("failed to store connected app", zap.Error(err))
@@ -265,6 +271,12 @@ func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isValidUUID(req.UserID) {
 		respondError(w, http.StatusBadRequest, "userId must be a valid UUID")
+		return
+	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
+		return
+	}
+	if !h.requireUserInCallerOrg(w, r, req.UserID) {
 		return
 	}
 
@@ -361,10 +373,19 @@ func (h *Handler) ListApps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// C2: org-scoped read. Fail closed — no org context means no rows.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	rows, err := h.db.Query(ctx,
 		`SELECT id, keycloak_client_id, name, protocol, COALESCE(base_url, ''), enabled, created_at
 		 FROM connected_apps
+		 WHERE org_id = $1
 		 ORDER BY created_at DESC`,
+		oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("failed to query connected apps", zap.Error(err))
@@ -444,10 +465,19 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// C5: org-scoped read. audit_logs keeps ONE global hash chain (see the
+	// multi-tenant ADR) — org_id here is a filter column only, never a chain
+	// boundary. Fail closed: no org context means no rows, not "all orgs".
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	query := `SELECT id, actor_id, action, COALESCE(target_type, ''), COALESCE(target_id, ''), details, created_at
-		 FROM audit_logs WHERE 1=1`
-	args := []interface{}{}
-	argIdx := 1
+		 FROM audit_logs WHERE org_id = $1`
+	args := []interface{}{oc.OrgID}
+	argIdx := 2
 
 	if actorFilter != "" {
 		query += ` AND actor_id = $` + strconv.Itoa(argIdx)
@@ -533,6 +563,9 @@ func (h *Handler) GetSAMLIdPInitiatedURL(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
+		return
+	}
 	ctx := r.Context()
 
 	var keycloakClientID, protocol string
@@ -574,6 +607,9 @@ func (h *Handler) GetSAMLMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
 		return
 	}
 	ctx := r.Context()

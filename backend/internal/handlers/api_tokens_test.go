@@ -95,7 +95,9 @@ func TestCreateAPITokenAuditsCreation(t *testing.T) {
 	b, _ := json.Marshal(map[string]interface{}{"name": "tok", "role": "auditor", "serviceIdentity": "ci"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/api-tokens", bytes.NewReader(b))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin-user"))
+	ctx := context.WithValue(req.Context(), middleware.ActorIDKey, "admin-user")
+	ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin})
+	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	h.CreateAPIToken(rec, req)
@@ -148,7 +150,9 @@ func TestRevokeAPITokenAuditsRevocation(t *testing.T) {
 	chiCtx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
 		URLParams: chi.RouteParams{Keys: []string{"id"}, Values: []string{tokenID}},
 	})
-	req = req.WithContext(context.WithValue(chiCtx, middleware.ActorIDKey, "admin-user"))
+	ctx := context.WithValue(chiCtx, middleware.ActorIDKey, "admin-user")
+	ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin})
+	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 
 	h.RevokeAPIToken(rec, req)

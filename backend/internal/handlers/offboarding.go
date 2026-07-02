@@ -33,6 +33,12 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "userId must be a valid UUID")
 		return
 	}
+	// C2: verify the target belongs to the caller's org BEFORE any destructive
+	// action (disable, session termination, device wipe) — this is the most
+	// consequential handler in the whole sweep to get wrong.
+	if !h.requireUserInCallerOrg(w, r, userID) {
+		return
+	}
 
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()

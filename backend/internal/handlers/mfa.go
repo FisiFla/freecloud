@@ -33,6 +33,9 @@ func (h *Handler) GetMFAStatus(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "id is required")
 		return
 	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
+		return
+	}
 
 	creds, err := h.keycloak.GetUserCredentials(r.Context(), userID)
 	if err != nil {
@@ -73,6 +76,9 @@ func (h *Handler) RequireMFA(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
 	if userID == "" {
 		respondError(w, http.StatusBadRequest, "id is required")
+		return
+	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
 		return
 	}
 

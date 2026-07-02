@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 // ExportAuditLogs streams audit log entries as CSV or JSON, honouring the same
@@ -55,10 +57,17 @@ func (h *Handler) ExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// C5: org-scoped export — see ListAuditLogs for the fail-closed rationale.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	query := `SELECT id, actor_id, action, COALESCE(target_type, ''), COALESCE(target_id, ''), details, created_at
-		 FROM audit_logs WHERE 1=1`
-	args := []interface{}{}
-	argIdx := 1
+		 FROM audit_logs WHERE org_id = $1`
+	args := []interface{}{oc.OrgID}
+	argIdx := 2
 
 	if actorFilter != "" {
 		query += ` AND actor_id = $` + strconv.Itoa(argIdx)

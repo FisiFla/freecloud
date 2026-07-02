@@ -123,6 +123,10 @@ func TestEnrollmentLoopEndToEnd(t *testing.T) {
 		URLParams: chi.RouteParams{Keys: []string{"userId"}, Values: []string{userID}},
 	})
 	offReq = offReq.WithContext(chiCtx)
+	// The user row above was inserted directly via SQL with no org_id, so it
+	// took Migration043's Default Organization default -- resolve the same
+	// org here so Offboard's org-ownership guard (Epic C) doesn't 403 it.
+	offReq = withOrgContext(offReq)
 	offRec := httptest.NewRecorder()
 	h.Offboard(offRec, offReq)
 	if offRec.Code != http.StatusOK {

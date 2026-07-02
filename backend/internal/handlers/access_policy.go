@@ -49,6 +49,9 @@ func (h *Handler) GetAppAccessPolicy(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
+		return
+	}
 
 	ctx := r.Context()
 
@@ -126,19 +129,8 @@ func (h *Handler) UpsertAppAccessPolicy(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 
-	// Verify the app exists.
-	var exists string
-	err := h.db.QueryRow(ctx,
-		`SELECT id FROM connected_apps WHERE id = $1`,
-		appID,
-	).Scan(&exists)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			respondError(w, http.StatusNotFound, "app not found")
-			return
-		}
-		h.logger.Error("failed to verify app existence", zap.String("app_id", appID), zap.Error(err))
-		respondError(w, http.StatusInternalServerError, "internal error")
+	// Verify the app exists AND belongs to the caller's org.
+	if !h.requireAppInCallerOrg(w, r, appID) {
 		return
 	}
 
@@ -154,7 +146,7 @@ func (h *Handler) UpsertAppAccessPolicy(w http.ResponseWriter, r *http.Request) 
 
 	// Upsert the policy.
 	var updatedAt time.Time
-	err = h.db.QueryRow(ctx,
+	err := h.db.QueryRow(ctx,
 		`INSERT INTO app_access_policies
 		     (app_id, require_enrolled, require_disk_encrypted, require_no_critical_vulns,
 		      max_os_age_days, allowed_time_start, allowed_time_end,

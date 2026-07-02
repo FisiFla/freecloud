@@ -13,14 +13,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
-// withAppID injects a chi appId URL param into a request context.
+// withAppID injects a chi appId URL param plus a resolved OrgContext (Epic C
+// multi-tenant) into a request context, so app-scoped handlers' org-ownership
+// guard doesn't fail closed before ever reaching the behavior under test.
 func withAppID(req *http.Request, appID string) *http.Request {
-	chiCtx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
 		URLParams: chi.RouteParams{Keys: []string{"appId"}, Values: []string{appID}},
 	})
-	return req.WithContext(chiCtx)
+	ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{
+		OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin,
+	})
+	return req.WithContext(ctx)
 }
 
 func TestGetAppPolicyNilDB(t *testing.T) {
@@ -35,9 +42,9 @@ func TestGetAppPolicyNilDB(t *testing.T) {
 
 func TestGetAppPolicyNotFound(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(ctx context.Context, sql string, args ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
-		},
+		}),
 	}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 	req := withAppID(httptest.NewRequest(http.MethodGet, "/api/v1/apps/app-1/policy", nil), "app-1")

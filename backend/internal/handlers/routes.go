@@ -57,6 +57,9 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 	// SCIM 2.0 provisioning — bearer-token authenticated, outside the user-JWT group.
 	// SCIMBearerToken is injected by SetupSCIM (called from main after config load).
+	// This is the LEGACY path: it authenticates on behalf of the Default
+	// Organization for backward compatibility with existing Okta/Entra
+	// integrations (see docs/adr/0005). Do not break it.
 	r.Group(func(r chi.Router) {
 		r.Use(h.scimBearerMW)
 		r.Get("/scim/v2/Users", h.SCIMListUsers)
@@ -70,6 +73,27 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Get("/scim/v2/Groups/{id}", h.SCIMGetGroup)
 		r.Patch("/scim/v2/Groups/{id}", h.SCIMPatchGroup)
 		r.Delete("/scim/v2/Groups/{id}", h.SCIMDeleteGroup)
+	})
+
+	// C4: org-scoped SCIM base path. Each org gets its own bearer token
+	// (scim_bearer_tokens, Migration043) instead of sharing the legacy
+	// SCIM_BEARER_TOKEN. {orgID} in the path must match the token's own org —
+	// enforced by SCIMOrgBearerMiddleware, not by the handlers (which just
+	// read the already-resolved OrgContext, same as every other org-scoped
+	// route). Reuses the exact same handlers as the legacy path since they
+	// are now org-context-aware.
+	r.Route("/scim/v2/orgs/{orgID}", func(r chi.Router) {
+		r.Use(h.SCIMOrgBearerMiddleware(h.db))
+		r.Get("/Users", h.SCIMListUsers)
+		r.Post("/Users", h.SCIMCreateUser)
+		r.Get("/Users/{id}", h.SCIMGetUser)
+		r.Patch("/Users/{id}", h.SCIMPatchUser)
+		r.Delete("/Users/{id}", h.SCIMDeleteUser)
+		r.Get("/Groups", h.SCIMListGroups)
+		r.Post("/Groups", h.SCIMCreateGroup)
+		r.Get("/Groups/{id}", h.SCIMGetGroup)
+		r.Patch("/Groups/{id}", h.SCIMPatchGroup)
+		r.Delete("/Groups/{id}", h.SCIMDeleteGroup)
 	})
 
 	// A1: access evaluation — bearer-token authenticated, outside the user-JWT group.
@@ -102,6 +126,27 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	r.Group(func(r chi.Router) {
 		r.Use(authMW)
 		r.Use(middleware.ActorIDMiddleware)
+		// C1: resolve the active organization for every authenticated request.
+		// Fails closed (403) when no org context can be resolved — see
+		// middleware.OrgContextMiddleware for the resolution order.
+		r.Use(middleware.OrgContextMiddleware(h.db))
+
+		// C2: org + membership management (system-admin creates orgs; org-admin
+		// manages their own org's members).
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequirePermission(middleware.PermManageOrgs))
+			r.Post("/api/v1/orgs", h.CreateOrg)
+			r.Get("/api/v1/orgs", h.ListOrgs)
+		})
+		r.With(middleware.RequirePermission(middleware.PermSelfService)).Get("/api/v1/me", h.Me)
+		r.Group(func(r chi.Router) {
+			// Org-scoped: system-admin (any org) or org-admin (their own org,
+			// enforced inside the handlers against the resolved OrgContext).
+			r.Use(middleware.RequireOrgAdminOrSystemAdmin)
+			r.Get("/api/v1/orgs/{orgId}/members", h.ListOrgMembers)
+			r.Post("/api/v1/orgs/{orgId}/members", h.AddOrgMember)
+			r.Delete("/api/v1/orgs/{orgId}/members/{userId}", h.RemoveOrgMember)
+		})
 
 		// Sensitive write endpoints get the stricter rate limit.
 		r.Group(func(r chi.Router) {
@@ -294,6 +339,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Group(func(r chi.Router) {
 			r.Use(h.scimBearerMW)
 			r.Post("/api/v1/e2e/enrollment-token", h.E2ECreateEnrollmentToken)
+			// C5: org+admin-token seeding for the cross-org isolation e2e suite.
+			r.Post("/api/v1/e2e/seed-org", h.E2ESeedOrgWithAdminToken)
 		})
 	}
 }

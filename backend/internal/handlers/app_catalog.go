@@ -207,6 +207,12 @@ func (h *Handler) CreateAppFromTemplate(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	// Create client in Keycloak. Template-created apps use default SAML options.
 	keycloakClientID, err := h.keycloak.CreateClient(ctx, name, tmpl.Protocol, redirectURIs, baseURL, nil)
 	if err != nil {
@@ -234,10 +240,10 @@ func (h *Handler) CreateAppFromTemplate(w http.ResponseWriter, r *http.Request) 
 	// Persist to connected_apps.
 	var appID string
 	err = h.db.QueryRow(ctx,
-		`INSERT INTO connected_apps (keycloak_client_id, name, protocol, base_url)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO connected_apps (keycloak_client_id, name, protocol, base_url, org_id)
+		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
-		keycloakClientID, name, tmpl.Protocol, baseURL,
+		keycloakClientID, name, tmpl.Protocol, baseURL, oc.OrgID,
 	).Scan(&appID)
 	if err != nil {
 		h.logger.Error("failed to store connected app from template", zap.Error(err))

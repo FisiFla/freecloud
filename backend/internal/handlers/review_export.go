@@ -50,6 +50,9 @@ func (h *Handler) ExportCampaign(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	if !h.requireCampaignInCallerOrg(w, r, campaignID) {
+		return
+	}
 
 	rows, err := h.db.Query(r.Context(),
 		`SELECT ri.id::TEXT, ri.campaign_id::TEXT,

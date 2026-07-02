@@ -72,7 +72,7 @@ func TestSubmitApprovalHelpdeskDoesNotCallKeycloak(t *testing.T) {
 	body := `{"actionType":"onboard","payload":{"firstName":"Jo","lastName":"Doe","email":"jo@example.com","department":"Eng","role":"user"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/approval-requests", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(setActorCtx(req.Context(), "helpdesk-user"))
+	req = req.WithContext(setOrgCtx(setActorCtx(req.Context(), "helpdesk-user")))
 	rec := httptest.NewRecorder()
 
 	h.SubmitApproval(rec, req)
@@ -153,7 +153,7 @@ func TestDecideApprovalRejectAudited(t *testing.T) {
 	body := `{"decision":"rejected"}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/approval-requests/"+approvalID, bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(setActorCtx(req.Context(), "admin-user"))
+	req = req.WithContext(setOrgCtx(setActorCtx(req.Context(), "admin-user")))
 	req = withApprovalChiParam(req, "id", approvalID)
 	rec := httptest.NewRecorder()
 
@@ -202,7 +202,7 @@ func TestDecideApprovalAlreadyDecidedConflict(t *testing.T) {
 	body := `{"decision":"approved"}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/approval-requests/"+approvalID, bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(setActorCtx(req.Context(), "admin-user"))
+	req = req.WithContext(setOrgCtx(setActorCtx(req.Context(), "admin-user")))
 	req = withApprovalChiParam(req, "id", approvalID)
 	rec := httptest.NewRecorder()
 
@@ -263,7 +263,7 @@ func TestDecideApprovalExecutionFailureResetsPending(t *testing.T) {
 	body := `{"decision":"approved"}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/approval-requests/"+approvalID, bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(setActorCtx(req.Context(), "admin-user"))
+	req = req.WithContext(setOrgCtx(setActorCtx(req.Context(), "admin-user")))
 	req = withApprovalChiParam(req, "id", approvalID)
 	rec := httptest.NewRecorder()
 
@@ -325,7 +325,7 @@ func TestDecideApprovalSelfApprovalForbidden(t *testing.T) {
 	body := `{"decision":"approved"}`
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/approval-requests/"+approvalID, bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(setActorCtx(req.Context(), actorID))
+	req = req.WithContext(setOrgCtx(setActorCtx(req.Context(), actorID)))
 	req = withApprovalChiParam(req, "id", approvalID)
 	rec := httptest.NewRecorder()
 
@@ -333,6 +333,9 @@ func TestDecideApprovalSelfApprovalForbidden(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "own request") {
+		t.Fatalf("expected self-approval-specific 403, got: %s", rec.Body.String())
 	}
 	if executeCalled {
 		t.Fatal("execution must not be triggered when self-approval is blocked")
@@ -342,6 +345,14 @@ func TestDecideApprovalSelfApprovalForbidden(t *testing.T) {
 // setActorCtx injects an actor ID into the context.
 func setActorCtx(ctx context.Context, actorID string) context.Context {
 	return context.WithValue(ctx, middleware.ActorIDKey, actorID)
+}
+
+// setOrgCtx injects a resolved OrgContext (Epic C multi-tenant), as
+// OrgContextMiddleware would have set it.
+func setOrgCtx(ctx context.Context) context.Context {
+	return middleware.SetOrgContext(ctx, &middleware.OrgContext{
+		OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin,
+	})
 }
 
 // withApprovalChiParam injects a chi URL parameter into the request context.

@@ -169,6 +169,12 @@ func (h *Handler) BulkOnboard(w http.ResponseWriter, r *http.Request) {
 // as the single Onboard handler but for a single row without writing an HTTP
 // response.  Returns a descriptive error on failure; success returns nil.
 func (h *Handler) onboardOne(ctx context.Context, req OnboardRequest, actorID string) error {
+	// C2: bulk-onboarded users are org-scoped to the caller's active org.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		return fmt.Errorf("no organization context for bulk onboard")
+	}
+
 	// Step 1: Keycloak user.
 	result, err := h.keycloak.CreateUser(ctx, req.FirstName, req.LastName, req.Email, req.Department)
 	if err != nil {
@@ -214,7 +220,7 @@ func (h *Handler) onboardOne(ctx context.Context, req OnboardRequest, actorID st
 		}
 		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, auditDetails, enrollmentToken); persistErr != nil {
+		if persistErr := h.persistOnboard(persistCtx, kcUserID, req, actorID, auditDetails, enrollmentToken, oc.OrgID); persistErr != nil {
 			return fmt.Errorf("persist: %w", persistErr)
 		}
 	}

@@ -71,6 +71,9 @@ func (h *Handler) GetProvisioningConfig(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
+		return
+	}
 
 	var (
 		enabled           bool
@@ -128,6 +131,9 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
+		return
+	}
 
 	var req ProvisioningConfigRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -174,11 +180,16 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 
 	ctx := r.Context()
 	actorID := middleware.GetActorID(ctx)
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	_, err := h.db.Exec(ctx,
 		`INSERT INTO app_provisioning_config
-		   (app_id, enabled, connector_type, endpoint_url, bearer_token_hash, bearer_token_enc, attribute_map)
-		 VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7)
+		   (app_id, enabled, connector_type, endpoint_url, bearer_token_hash, bearer_token_enc, attribute_map, org_id)
+		 VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8)
 		 ON CONFLICT (app_id) DO UPDATE
 		   SET enabled         = EXCLUDED.enabled,
 		       connector_type  = EXCLUDED.connector_type,
@@ -187,7 +198,7 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		       bearer_token_enc  = COALESCE(EXCLUDED.bearer_token_enc,  app_provisioning_config.bearer_token_enc),
 		       attribute_map   = EXCLUDED.attribute_map,
 		       updated_at      = NOW()`,
-		appID, req.Enabled, req.ConnectorType, req.EndpointURL, tokenHash, tokenEnc, string(attrMapJSON),
+		appID, req.Enabled, req.ConnectorType, req.EndpointURL, tokenHash, tokenEnc, string(attrMapJSON), oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("upsert provisioning config: exec failed", zap.Error(err))
@@ -240,6 +251,9 @@ func (h *Handler) ListProvisioningState(w http.ResponseWriter, r *http.Request) 
 	}
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
 		return
 	}
 
@@ -300,6 +314,12 @@ func (h *Handler) ResyncUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
+		return
+	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
 		return
 	}
 	if h.provisionEngine == nil {
@@ -379,6 +399,9 @@ func (h *Handler) DryRunProvisioning(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
+		return
+	}
 
 	var req DryRunProvisioningRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -387,6 +410,9 @@ func (h *Handler) DryRunProvisioning(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isValidUUID(req.UserID) {
 		respondError(w, http.StatusBadRequest, "invalid userId")
+		return
+	}
+	if !h.requireUserInCallerOrg(w, r, req.UserID) {
 		return
 	}
 
@@ -466,6 +492,9 @@ func (h *Handler) ReconcileAllHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
 		return
 	}
 	if h.provisionEngine == nil {

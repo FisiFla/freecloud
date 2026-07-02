@@ -50,6 +50,9 @@ func (h *Handler) PreviewAppPolicy(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
+		return
+	}
 
 	var req PolicyPreviewRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

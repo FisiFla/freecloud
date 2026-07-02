@@ -28,6 +28,14 @@ const (
 	RoleEndUser    Role = "end-user"
 )
 
+// OrgMembershipRoleAdmin is the org_memberships.role value that grants
+// org-scoped admin rights within one organization (C2 / Epic C multi-tenant).
+// This is orthogonal to the global Role above: RoleSuperAdmin is a SYSTEM
+// admin with cross-org reach resolved from the JWT's realm roles, while
+// "org-admin" is a per-membership row in Postgres scoped to one org and
+// resolved by OrgContextMiddleware into the request's OrgContext.Role.
+const OrgMembershipRoleAdmin = "org-admin"
+
 // Permission is a capability checked at the handler level.
 type Permission string
 
@@ -52,6 +60,16 @@ const (
 	PermApproveRequests Permission = "approve:requests"
 	PermSubmitApprovals    Permission = "submit:approvals"
 	PermManageAccountPolicy Permission = "manage:account-policy"
+	// PermManageOrgs is system-admin only: create/list organizations (tenants).
+	PermManageOrgs Permission = "manage:orgs"
+	// PermManageOrgMembers gates org-membership management. Unlike every other
+	// permission here it is NOT decided purely from the JWT's global RBAC role
+	// (RoleSuperAdmin, ...): an "org-admin" is an org-scoped role recorded per
+	// membership in Postgres (org_memberships.role), orthogonal to the global
+	// role. RequireOrgAdminOrSystemAdmin (below) is the actual gate used on
+	// routes protected by this permission; it is listed here only so the
+	// route-coverage guard test's allowlist stays honest about intent.
+	PermManageOrgMembers Permission = "manage:org-members"
 )
 
 // permissionMatrix maps each permission to the roles that hold it.
@@ -76,6 +94,12 @@ var permissionMatrix = map[Permission][]Role{
 	PermApproveRequests: {RoleSuperAdmin},
 	PermSubmitApprovals:    {RoleSuperAdmin, RoleHelpdesk},
 	PermManageAccountPolicy: {RoleSuperAdmin},
+	PermManageOrgs:          {RoleSuperAdmin},
+	// PermManageOrgMembers is NOT checked via this matrix — see
+	// RequireOrgAdminOrSystemAdmin. Left unmapped (RoleSuperAdmin only) so any
+	// accidental direct use of RequirePermission(PermManageOrgMembers) still
+	// fails closed to system-admin rather than opening to everyone.
+	PermManageOrgMembers: {RoleSuperAdmin},
 }
 
 // roleHasPermission checks whether a role holds a permission.
@@ -208,12 +232,13 @@ func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Reque
 	var id string
 	var role string
 	var serviceIdentity string
+	var orgID string
 	var revokedAt *time.Time
 	var expiresAt *time.Time
 	err := a.db.QueryRow(r.Context(),
-		`SELECT id::TEXT, role, service_identity, revoked_at, expires_at FROM api_tokens WHERE token_hash = $1`,
+		`SELECT id::TEXT, role, service_identity, org_id::TEXT, revoked_at, expires_at FROM api_tokens WHERE token_hash = $1`,
 		hash,
-	).Scan(&id, &role, &serviceIdentity, &revokedAt, &expiresAt)
+	).Scan(&id, &role, &serviceIdentity, &orgID, &revokedAt, &expiresAt)
 	if err != nil {
 		writeAuthError(w, http.StatusUnauthorized, "unauthorized: invalid API token")
 		return
@@ -239,6 +264,15 @@ func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Reque
 		Role:              resolved,
 	}
 	ctx := context.WithValue(r.Context(), claimsKey, claims)
+	// C2/C5 (Epic C multi-tenant): an API token is scoped to the org it was
+	// created in (api_tokens.org_id, Migration043) — NOT resolved via
+	// org_memberships like a human JWT, since a token has no membership row.
+	// Setting OrgContext directly here means OrgContextMiddleware's own
+	// "already set" short-circuit takes over (see middleware/org.go), so a
+	// super-admin-role token is correctly confined to its OWN org rather
+	// than hitting the system-admin cross-org fallback that would otherwise
+	// apply to any super-admin JWT with zero memberships.
+	ctx = SetOrgContext(ctx, &OrgContext{OrgID: orgID, Role: OrgMembershipRoleAdmin})
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 

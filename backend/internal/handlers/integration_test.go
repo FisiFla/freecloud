@@ -147,7 +147,7 @@ func TestOnboardValidation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			b, _ := json.Marshal(tt.body)
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+			req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b)))
 			req.Header.Set("Content-Type", "application/json")
 			rec := httptest.NewRecorder()
 
@@ -162,6 +162,7 @@ func TestOnboardValidation(t *testing.T) {
 
 func TestOffboardEndpoint(t *testing.T) {
 	h := setupTestHandler(t)
+	h.db = &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
 
 	const testUserID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/"+testUserID, nil)
@@ -176,6 +177,7 @@ func TestOffboardEndpoint(t *testing.T) {
 		},
 	})
 	req = req.WithContext(chiCtx)
+	req = withOrgContext(req)
 
 	rec := httptest.NewRecorder()
 	h.Offboard(rec, req)
@@ -217,7 +219,7 @@ func TestOnboardKeycloakFailure(t *testing.T) {
 	h := NewHandler(nil, kc, fleet, logger)
 	body := map[string]string{"firstName": "Test", "lastName": "User", "email": "test@test.com", "department": "Engineering", "role": "Dev"}
 	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Onboard(rec, req)
@@ -237,7 +239,7 @@ func TestOnboardEmailFailure(t *testing.T) {
 	h := NewHandler(nil, kc, fleet, logger)
 	body := map[string]string{"firstName": "Test", "lastName": "User", "email": "test@test.com", "department": "Engineering", "role": "Dev"}
 	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Onboard(rec, req)
@@ -259,7 +261,7 @@ func TestOnboardFleetWarning(t *testing.T) {
 	h := NewHandler(nil, kc, fleet, logger)
 	body := map[string]string{"firstName": "Test", "lastName": "User", "email": "test@test.com", "department": "Engineering", "role": "Dev"}
 	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Onboard(rec, req)
@@ -295,7 +297,8 @@ func TestOffboardDisableFailureReturns502(t *testing.T) {
 		},
 	}
 	fleet := &fakeFleet{}
-	h := NewHandler(nil, kc, fleet, logger)
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, kc, fleet, logger)
 	const testUserID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/offboard/"+testUserID, nil)
 	req.Header.Set("Content-Type", "application/json")
@@ -303,6 +306,7 @@ func TestOffboardDisableFailureReturns502(t *testing.T) {
 		URLParams: chi.RouteParams{Keys: []string{"userId"}, Values: []string{testUserID}},
 	})
 	req = req.WithContext(chiCtx)
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.Offboard(rec, req)
 	if rec.Code != http.StatusBadGateway {
@@ -330,7 +334,7 @@ func TestOnboardValidationWhitespaceEmailNormalized(t *testing.T) {
 		"department": "Engineering", "role": "Dev",
 	}
 	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Onboard(rec, req)
@@ -346,7 +350,7 @@ func TestOnboardValidationWhitespaceOnly(t *testing.T) {
 		"department": "Engineering", "role": "Dev",
 	}
 	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Onboard(rec, req)
@@ -366,7 +370,7 @@ func TestOnboardEmailWarningResponse(t *testing.T) {
 	h := NewHandler(nil, kc, fleet, logger)
 	body := map[string]string{"firstName": "Test", "lastName": "User", "email": "test@test.com", "department": "Engineering", "role": "Dev"}
 	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Onboard(rec, req)
@@ -408,7 +412,7 @@ func TestOnboardDuplicateEmailConflict(t *testing.T) {
 	h := NewHandler(db, kc, &fakeFleet{}, logger)
 	body := map[string]string{"firstName": "T", "lastName": "U", "email": "dup@test.com", "department": "Engineering", "role": "Dev"}
 	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Onboard(rec, req)
@@ -433,7 +437,7 @@ func TestOnboardRollbackOnPersistFailure(t *testing.T) {
 	h := NewHandler(&fakeDB{}, kc, &fakeFleet{}, logger)
 	body := map[string]string{"firstName": "T", "lastName": "U", "email": "new@test.com", "department": "Engineering", "role": "Dev"}
 	b, _ := json.Marshal(body)
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b))
+	req := withDefaultOrg(httptest.NewRequest(http.MethodPost, "/api/v1/onboard", bytes.NewReader(b)))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.Onboard(rec, req)
