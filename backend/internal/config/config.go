@@ -89,6 +89,21 @@ type Config struct {
 	// KC_BOOTSTRAP_ADMIN / KC_BOOTSTRAP_PASSWORD (master-realm admin, dev default admin/admin).
 	BootstrapAdminUser     string
 	BootstrapAdminPassword string
+
+	// B1 (v1.7 HA) — Redis-backed rate limiter. When set, the rate limiter
+	// shares counters across all backend replicas via Redis instead of each
+	// replica keeping its own in-memory counters. Required in production
+	// (Validate() rejects an empty value outside dev/test) so a multi-replica
+	// prod deployment can never silently fall back to per-replica counters,
+	// which would let a client multiply its effective rate limit by the
+	// replica count.
+	RedisURL string
+
+	// B2 (v1.7 HA) — how long server startup waits for a schema migration
+	// that another instance/the migrate job is already applying, polling
+	// until schema_migrations reflects the current version before serving.
+	// 0 disables waiting: startup fails immediately if the schema is behind.
+	WaitForSchemaTimeout time.Duration
 }
 
 // Load reads configuration from environment variables with sensible defaults.
@@ -148,6 +163,11 @@ func Load() *Config {
 		// Bootstrap credentials
 		BootstrapAdminUser:     getEnv("KC_BOOTSTRAP_ADMIN", "admin"),
 		BootstrapAdminPassword: resolveSecret("KC_BOOTSTRAP_PASSWORD", "admin"),
+
+		// B1 — Redis-backed rate limiter (empty = in-memory fallback in dev/test).
+		RedisURL: resolveSecret("REDIS_URL", ""),
+		// B2 — schema-wait polling; 0 = fail immediately if schema is behind.
+		WaitForSchemaTimeout: parseDuration(getEnv("WAIT_FOR_SCHEMA_TIMEOUT", "0")),
 	}
 }
 
@@ -224,6 +244,12 @@ func (c *Config) Validate() error {
 	// silently allowed from the localhost default.
 	if os.Getenv("CORS_ORIGIN") == "" {
 		add("CORS_ORIGIN must be set")
+	}
+	// REDIS_URL must be set in production: without it, the rate limiter falls
+	// back to per-replica in-memory counters, which is silently unsafe on any
+	// deployment running more than one backend instance (ADR 0004).
+	if c.RedisURL == "" {
+		add("REDIS_URL must be set (the rate limiter requires shared state across replicas in production)")
 	}
 
 	if len(problems) > 0 {

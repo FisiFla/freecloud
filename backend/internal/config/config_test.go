@@ -21,6 +21,7 @@ func setSecureProdEnv(t *testing.T) {
 	t.Setenv("CORS_ORIGIN", "https://dashboard.example.com")
 	t.Setenv("SCIM_BEARER_TOKEN", "scim-secret-token")
 	t.Setenv("ACCESS_EVAL_TOKEN", "access-eval-secret")
+	t.Setenv("REDIS_URL", "redis://redis:6379/0")
 }
 
 func TestValidateDevelopmentExplicit(t *testing.T) {
@@ -164,5 +165,17 @@ func TestValidateProductionMissingAccessEvalToken(t *testing.T) {
 	cfg := Load()
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error for missing ACCESS_EVAL_TOKEN in production, got nil")
+	}
+}
+
+// B1 (v1.7 HA): REDIS_URL must be required in production so a multi-replica
+// deployment can never silently fall back to per-replica in-memory rate
+// limiting (see docs/adr/0004-multi-instance-ha.md).
+func TestValidateProductionMissingRedisURL(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("REDIS_URL", "")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for missing REDIS_URL in production, got nil")
 	}
 }
