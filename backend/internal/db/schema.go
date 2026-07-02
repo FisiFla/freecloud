@@ -2,8 +2,11 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
@@ -685,10 +688,113 @@ CREATE TABLE IF NOT EXISTS smtp_config (
 INSERT INTO smtp_config (id) VALUES (1) ON CONFLICT DO NOTHING;
 `
 
+// migrationLockID is the pg_advisory_lock key guarding RunMigrations. It is a
+// fixed, arbitrary value distinct from the Keycloak bootstrap lock
+// (7919876543, see cmd/server/main.go) so the two locks never collide.
+// Held for the duration of RunMigrations so two callers (e.g. two `server
+// migrate` one-shot jobs racing during a rolling deploy) serialize instead of
+// both seeing the same migration as pending (ADR 0003's original single-
+// instance-migration hazard).
+const migrationLockID = 8241093571
+
+// LatestMigrationID returns the highest migration id known to this binary.
+// Used by WaitForSchema / server startup to decide whether the schema in the
+// database is current.
+func LatestMigrationID() int {
+	max := 0
+	for _, m := range migrations {
+		if m.id > max {
+			max = m.id
+		}
+	}
+	return max
+}
+
+// AppliedSchemaVersion returns the highest migration id recorded in
+// schema_migrations, or 0 if the table doesn't exist yet (fresh database).
+func AppliedSchemaVersion(ctx context.Context, pool *pgxpool.Pool) (int, error) {
+	var version int
+	err := pool.QueryRow(ctx, `SELECT COALESCE(MAX(id), 0) FROM schema_migrations`).Scan(&version)
+	if err != nil {
+		// A fresh database has no schema_migrations table yet — that's "version 0",
+		// not an error, since RunMigrations creates the table itself.
+		if isUndefinedTable(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("query schema version: %w", err)
+	}
+	return version, nil
+}
+
+// isUndefinedTable reports whether err is Postgres error 42P01
+// (undefined_table), i.e. schema_migrations does not exist yet.
+func isUndefinedTable(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "42P01"
+	}
+	return false
+}
+
+// WaitForSchema polls AppliedSchemaVersion until it reaches at least
+// LatestMigrationID(), or timeout elapses. It exists so server startup can
+// tolerate a `migrate` job that is still in flight during compose/orchestrator
+// startup (B2 / v1.7 HA) instead of racing it. timeout <= 0 disables waiting:
+// the caller checks the version once and fails immediately if behind.
+func WaitForSchema(ctx context.Context, pool *pgxpool.Pool, timeout time.Duration) error {
+	target := LatestMigrationID()
+	if timeout <= 0 {
+		version, err := AppliedSchemaVersion(ctx, pool)
+		if err != nil {
+			return err
+		}
+		if version < target {
+			return fmt.Errorf("schema version %d is behind the required version %d; run `server migrate`", version, target)
+		}
+		return nil
+	}
+
+	deadline := time.Now().Add(timeout)
+	var lastVersion int
+	for {
+		version, err := AppliedSchemaVersion(ctx, pool)
+		if err != nil {
+			return err
+		}
+		lastVersion = version
+		if version >= target {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out after %s waiting for schema version %d (currently %d); run `server migrate`", timeout, target, lastVersion)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 // RunMigrations applies any pending migrations in order, recording each in
-// the schema_migrations table so it runs exactly once per database.
+// the schema_migrations table so it runs exactly once per database. It holds
+// a pg_advisory_lock for the duration of the run so concurrent callers (e.g.
+// two `migrate` jobs racing during a rolling deploy) serialize rather than
+// both seeing — and racing to apply — the same pending migration.
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	logger := zap.L()
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire connection for migration lock: %w", err)
+	}
+	defer conn.Release()
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, int64(migrationLockID)); err != nil {
+		return fmt.Errorf("acquire migration advisory lock: %w", err)
+	}
+	defer func() {
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, int64(migrationLockID))
+	}()
 
 	// Ensure the migrations bookkeeping table exists.
 	if _, err := pool.Exec(ctx, `
