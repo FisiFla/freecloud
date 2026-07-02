@@ -61,12 +61,10 @@ services:
         condition: service_healthy
       openldap-e2e:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/healthz || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
+    # No healthcheck: the backend image is distroless (no shell, no wget —
+    # see backend/Dockerfile), so a CMD-SHELL check can never succeed here.
+    # Readiness is polled externally (CI curls /readyz) instead of gated via
+    # depends_on: condition: service_healthy.
 
   # Round-robin load balancer in front of both replicas. Caddy (already used
   # in docker-compose.prod.yml) over introducing a second reverse-proxy
@@ -78,7 +76,12 @@ services:
     volumes:
       - ./e2e-ha/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
+      # Neither backend has a working healthcheck (distroless, see above), so
+      # this only waits for the containers to start — not for them to be
+      # ready. Caddy's reverse_proxy retries against unready upstreams, and
+      # the CI job separately curl-waits both replicas' /readyz before
+      # exercising the LB, so this is sufficient ordering, not full readiness.
       backend-e2e:
-        condition: service_healthy
+        condition: service_started
       backend-e2e-2:
-        condition: service_healthy
+        condition: service_started

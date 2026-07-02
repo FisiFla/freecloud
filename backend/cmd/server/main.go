@@ -141,19 +141,31 @@ func runServer() {
 	// Self-bootstrap Keycloak idempotently under a pg advisory lock so only one
 	// replica runs provisioning at a time. Returns the active service-account secret.
 	kcSecret, err := func() (string, error) {
-		conn, err := pool.Acquire(ctx)
+		// Acquiring the lock can legitimately block for as long as another
+		// replica's bootstrap run takes (Keycloak cold start + full realm
+		// provisioning, up to the 4-minute budget below) — use a dedicated,
+		// generous context here instead of the 10s DB-connect ctx above, which
+		// would otherwise time out a waiting replica while the leader is still
+		// mid-bootstrap (observed in the B4 HA e2e: a second replica failed
+		// with "acquire bootstrap advisory lock: timeout" after only 10s).
+		lockCtx, lockCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer lockCancel()
+
+		conn, err := pool.Acquire(lockCtx)
 		if err != nil {
 			return "", fmt.Errorf("acquire conn for bootstrap lock: %w", err)
 		}
 		defer conn.Release()
-		if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock(7919876543)"); err != nil {
+		if _, err := conn.Exec(lockCtx, "SELECT pg_advisory_lock(7919876543)"); err != nil {
 			return "", fmt.Errorf("acquire bootstrap advisory lock: %w", err)
 		}
 		defer func() { _, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(7919876543)") }()
 
 		// Keycloak bootstrap can take minutes on a cold start (Keycloak boot +
-		// realm provisioning), well beyond the 10s DB context above — give it its
-		// own generous deadline.
+		// realm provisioning). bootstrap.Run is idempotent (safe to call on
+		// every startup — see its doc comment), so a replica that waited out
+		// another replica's bootstrap under the lock above simply re-verifies
+		// everything is already in place instead of skipping the call.
 		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer bootstrapCancel()
 		result, err := bootstrap.Run(bootstrapCtx, bootstrap.Config{

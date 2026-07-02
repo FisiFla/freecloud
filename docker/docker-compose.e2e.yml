@@ -155,11 +155,9 @@ services:
         condition: service_healthy
       openldap-e2e:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/healthz || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
+    # No healthcheck: the backend image is distroless (no shell, no wget —
+    # see backend/Dockerfile), so a CMD-SHELL check can never succeed here.
+    # Readiness is polled externally (CI curls /readyz) instead of gated via
+    # depends_on: condition: service_healthy.
 
 volumes: {}
