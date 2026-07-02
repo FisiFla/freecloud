@@ -13,9 +13,18 @@ type SlackConnector struct {
 
 const slackSCIMBaseURL = "https://api.slack.com/scim/v2"
 
-// NewSlackConnector creates a Slack provisioning connector.
+// NewSlackConnector creates a Slack provisioning connector targeting Slack's
+// real SCIM API.
 func NewSlackConnector(bearerToken string) *SlackConnector {
-	return &SlackConnector{scim: NewSCIMConnector(slackSCIMBaseURL, bearerToken)}
+	return NewSlackConnectorWithBaseURL(bearerToken, slackSCIMBaseURL)
+}
+
+// NewSlackConnectorWithBaseURL creates a Slack provisioning connector
+// targeting a specific SCIM base URL — used by A4's live-verification tool
+// (cmd/verify-provisioning) and by contract tests to point at an
+// httptest.Server instead of the real Slack API.
+func NewSlackConnectorWithBaseURL(bearerToken, baseURL string) *SlackConnector {
+	return &SlackConnector{scim: NewSCIMConnector(baseURL, bearerToken)}
 }
 
 func (s *SlackConnector) Name() string { return "slack" }

@@ -10,3 +10,7 @@ frontend/.env
 frontend/tsconfig.tsbuildinfo
 # C1: auto-generated secrets — never commit
 .secrets/
+
+# A2: generated e2e-only GeoIP fixture mmdb (go run ./cmd/genfixturemmdb) —
+# never a real MaxMind database, never committed.
+backend/.e2e-fixtures/

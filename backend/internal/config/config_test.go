@@ -179,3 +179,26 @@ func TestValidateProductionMissingRedisURL(t *testing.T) {
 		t.Error("expected error for missing REDIS_URL in production, got nil")
 	}
 }
+
+// TestIsDevOrE2E_FailsClosed proves the A1 e2e-admin gate (config.IsDevOrE2E)
+// only opens for development/test and treats everything else — including an
+// unset APP_ENV — as production. bootstrap.Config.SeedE2EAdmin is only ever
+// meant to be honoured behind this check.
+func TestIsDevOrE2E_FailsClosed(t *testing.T) {
+	cases := []struct {
+		appEnv string
+		want   bool
+	}{
+		{"development", true},
+		{"test", true},
+		{"production", false},
+		{"staging", false},
+		{"", false},
+	}
+	for _, c := range cases {
+		t.Setenv("APP_ENV", c.appEnv)
+		if got := IsDevOrE2E(); got != c.want {
+			t.Errorf("IsDevOrE2E() with APP_ENV=%q: got %v, want %v", c.appEnv, got, c.want)
+		}
+	}
+}

@@ -696,8 +696,18 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 		return "", err
 	}
 
-	// Lower-case protocol name as required by Keycloak.
+	// Map to Keycloak's actual protocol identifiers. Keycloak's OIDC provider
+	// is registered as "openid-connect", not "oidc" — sending "oidc" (e.g.
+	// strings.ToLower("OIDC")) makes Keycloak's ClientManager look up a
+	// LoginProtocolFactory that doesn't exist, which NPEs server-side
+	// (KeycloakErrorHandler: "providerFactory is null") instead of returning
+	// a clean 4xx. This previously went uncaught because no unit test exercises
+	// a real Keycloak (they all use a fake client), and no e2e test drove an
+	// authenticated CreateApp call until Epic A's admin-JWT round-trips.
 	kcProtocol := strings.ToLower(protocol)
+	if kcProtocol == "oidc" {
+		kcProtocol = "openid-connect"
+	}
 
 	client := gocloak.Client{
 		ClientID:                  &name,

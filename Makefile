@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db prod-build prod-up prod-down localhost-up localhost-down prod-secrets-init
+.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db prod-build prod-up prod-down localhost-up localhost-down prod-secrets-init verify-provisioning-live
 
 dev-up:
 	docker compose -f docker/docker-compose.yml up -d
@@ -21,6 +21,16 @@ kc-build:
 
 test-integration:
 	cd backend && go test ./internal/handlers/ -v -run Integration
+
+# A4 — OPTIONAL live verification of outbound provisioning connectors against
+# a real GitHub org / Slack workspace. Skips each target entirely when its
+# credentials are absent (safe to run unattended). See
+# backend/cmd/verify-provisioning/main.go for the required env vars
+# (GITHUB_SCIM_TOKEN + GITHUB_SCIM_ORG + GITHUB_SCIM_TEST_USERNAME;
+# SLACK_SCIM_TOKEN + SLACK_SCIM_TEST_EMAIL — Slack stays parked, needs a paid
+# plan with SCIM enabled).
+verify-provisioning-live:
+	cd backend && go run ./cmd/verify-provisioning
 
 build-backend:
 	cd backend && go build -o ../bin/freecloud-server ./cmd/server

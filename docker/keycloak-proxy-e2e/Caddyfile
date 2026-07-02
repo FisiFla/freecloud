@@ -1,0 +1,16 @@
+# A3 e2e: minimal reverse proxy in front of Keycloak.
+#
+# Caddy's reverse_proxy directive sets X-Forwarded-For by APPENDING the
+# connecting client's address to any existing header value (never replacing
+# it) — the same convention as nginx's $proxy_add_x_forwarded_for. This is
+# exactly the "rightmost hop is the only trusted one" semantics
+# ClientIPResolver relies on: a client that sends its own forged
+# X-Forwarded-For directly to this proxy ends up with that forged value on
+# the LEFT and Caddy's own observed peer address on the RIGHT.
+{
+	admin off
+}
+
+:8080 {
+	reverse_proxy keycloak-e2e:8080
+}

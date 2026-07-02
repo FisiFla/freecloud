@@ -184,9 +184,48 @@ PROVISIONING_MASTER_KEY=<output of the command above>
 In development / test mode only, a missing key falls back to base64 storage.
 Production startup fails closed when the key is missing or malformed.
 
-> **Note:** Slack and GitHub live sync still need tenant-level manual
-> verification with real API credentials. The fast verification suite covers
-> wiring and unit behavior only.
+### Connector Verification
+
+Every connector's exact request/response contract (methods, paths, headers,
+bodies — including the offboard-deactivation path) is pinned by recorded-
+fixture tests that run in the normal test suite:
+`backend/internal/provisioning/{github,slack}_connector_contract_test.go`.
+These assert against real GitHub REST API and Slack SCIM API shapes without
+requiring any live credentials, and run in CI on every change.
+
+**GitHub Org** is FreeCloud's own naming — it manages GitHub Organization
+*membership* via GitHub's REST API
+(`PUT`/`DELETE /orgs/{org}/memberships|members/{username}`), not GitHub's
+separate Enterprise SCIM v2 API. This is intentional (org membership covers
+the common "grant/revoke access to the org" use case without requiring a
+GitHub Enterprise plan) — see the contract test file's header for details if
+you're expecting SCIM semantics here.
+
+**Optional live-tenant verification.** The recorded-fixture tests above prove
+the connector code is correct against the documented API contract, but
+they've never run against a real GitHub org or Slack workspace. To do that:
+
+```bash
+# GitHub — requires a PAT/App token with org:write + admin:org, and an
+# existing GitHub account you control in the target org (membership invites
+# an existing user; it can't create a GitHub account).
+GITHUB_SCIM_TOKEN=ghp_xxx \
+GITHUB_SCIM_ORG=my-test-org \
+GITHUB_SCIM_TEST_USERNAME=my-disposable-test-account \
+make verify-provisioning-live
+```
+
+Each target is skipped entirely (exit 0) when its env vars are absent, so
+`make verify-provisioning-live` is safe to leave in CI with no credentials
+configured — it just reports "SKIPPED" for both. `GITHUB_SCIM_BASE_URL`
+overrides the API root for GitHub Enterprise Server (on-prem).
+
+**Slack live verification stays parked.** It requires a paid Slack plan with
+SCIM provisioning enabled — see
+[Slack's SCIM API docs](https://docs.slack.dev/admins/scim-api/). If/when a
+suitable workspace is available, set `SLACK_SCIM_TOKEN` +
+`SLACK_SCIM_TEST_EMAIL` and the same `make verify-provisioning-live` target
+exercises create → update → deactivate against it and cleans up.
 
 ## Reports
 
@@ -225,6 +264,92 @@ POST /api/v1/apps/{appId}/policy/preview
 The request body is the same JSON as `PUT .../policy`. The response returns
 `{"allow": true/false, "reasons": [...]}` for a synthetic evaluation, without
 modifying the stored policy.
+
+### GeoIP (MaxMind GeoLite2)
+
+The `Geography` condition above is **fail-closed by default**: FreeCloud ships
+with a no-op GeoIP lookup that always reports "unknown", so any policy with a
+non-empty `geoCountryAllowlist` denies every request until you supply a real
+GeoIP database.
+
+To enable live geo resolution:
+
+1. **Get a GeoLite2 database.** Create a free MaxMind account and generate a
+   license key at <https://www.maxmind.com/en/geolite2/signup>, then download
+   `GeoLite2-Country.mmdb` (or `GeoLite2-City.mmdb` — both work; City is
+   larger and includes extra fields FreeCloud doesn't use) via MaxMind's
+   `geoipupdate` tool or the direct download link in your account console.
+   FreeCloud does **not** auto-download this for you — MaxMind's license
+   terms require you to accept them and use your own credentials.
+2. **Place the file** on a volume the backend container can read, e.g.
+   `/etc/freecloud/GeoLite2-Country.mmdb`.
+3. **Set `GEOIP_MMDB_PATH`** to that path in `.env.prod` (or the container's
+   environment) and mount the directory into the `backend` service in
+   `docker-compose.prod.yml`.
+4. Restart the backend. On startup it loads the file and wires it in; if the
+   path is set but the file is missing, unreadable, or not a valid MaxMind DB,
+   **the backend refuses to start** (fail closed) rather than boot with a geo
+   gate that silently denies everyone.
+5. **Keep it updated.** GeoLite2 databases are rebuilt roughly weekly; stale
+   data degrades accuracy but never becomes unsafe (the lookup either
+   resolves correctly or falls back to unknown/deny). Re-download
+   periodically (MaxMind's `geoipupdate` can automate this) and restart the
+   backend, or bind-mount a path that a host-side cron job refreshes in place.
+
+If `GEOIP_MMDB_PATH` is unset, geography conditions keep failing closed and
+every other condition type (time window, network/IP) is unaffected.
+
+### Reverse Proxy Requirements (SPI Client-IP Forwarding)
+
+The Keycloak authenticator SPI (`keycloak-authenticator/`) forwards the
+resolved client IP to `access/evaluate` for the Network and Geography
+conditions above. By default it uses the direct TCP peer address of whoever
+connects to Keycloak. If Keycloak sits behind a reverse proxy or load
+balancer (the normal production topology — Caddy, nginx, an ALB, etc.), that
+peer address is always the proxy's own address, not the real end-user IP, so
+network/geo conditions would evaluate against the wrong IP.
+
+To fix this, set `TRUST_PROXY=true` on the Keycloak container/pod. When
+enabled, the SPI reads `X-Forwarded-For` and uses the **rightmost** entry —
+not the leftmost. Reverse proxies conventionally *append* the connecting
+peer's address to any existing `X-Forwarded-For` value rather than replacing
+it (nginx's `$proxy_add_x_forwarded_for`, Caddy's default `reverse_proxy`
+behavior, and equivalents on managed load balancers all do this). That means:
+
+```
+X-Forwarded-For: <anything-the-client-sent>, <your-proxy's-real-peer-address>
+```
+
+Only the rightmost hop is guaranteed to have been set by infrastructure you
+control — everything to its left is attacker-controlled input carried
+through unmodified. Taking the leftmost entry (a common mistake) lets anyone
+who can reach the proxy directly forge an arbitrary "client IP" and bypass
+network/geo conditions.
+
+**This only works if there is exactly one reverse-proxy hop and it is the
+only path to Keycloak.** `TRUST_PROXY=true` is a blanket setting — it doesn't
+distinguish "this request came through my proxy" from "this request hit
+Keycloak directly." If Keycloak's port is *also* reachable directly (bypassing
+the proxy) while `TRUST_PROXY=true` is set, an attacker with direct access can
+send a single forged `X-Forwarded-For` value that becomes the (only, hence
+rightmost) hop and is trusted outright. **You must firewall/network-isolate
+Keycloak so the reverse proxy is the only thing that can reach it** — never
+expose Keycloak's port directly to the same network the proxy is meant to
+gate access from.
+
+Configuration checklist:
+
+1. Deploy exactly one reverse proxy in front of Keycloak.
+2. Ensure Keycloak is not reachable on any network path that bypasses that proxy.
+3. Set `TRUST_PROXY=true` in the Keycloak container's environment.
+4. Confirm your proxy is configured to forward (append to) `X-Forwarded-For`
+   — this is the default for Caddy's `reverse_proxy` and nginx's
+   `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`.
+
+If `TRUST_PROXY` is unset or `false` (the default), `X-Forwarded-For` is
+never read at all, and network/geo conditions evaluate the direct connection
+IP — safe by default, but requires no proxy in front of Keycloak for those
+conditions to see the real client IP.
 
 ## Provisioning Dry-Run and Reconcile
 
