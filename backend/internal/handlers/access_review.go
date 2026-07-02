@@ -63,6 +63,11 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
@@ -84,8 +89,8 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 	var campaignID string
 	var createdAt time.Time
 	err = tx.QueryRow(ctx,
-		`INSERT INTO review_campaigns (name, created_by, due_date) VALUES ($1, $2, $3) RETURNING id, created_at`,
-		req.Name, actorID, dueDatePtr,
+		`INSERT INTO review_campaigns (name, created_by, due_date, org_id) VALUES ($1, $2, $3, $4) RETURNING id, created_at`,
+		req.Name, actorID, dueDatePtr, oc.OrgID,
 	).Scan(&campaignID, &createdAt)
 	if err != nil {
 		h.logger.Error("failed to create campaign", zap.Error(err))
@@ -93,13 +98,16 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Snapshot current app assignments into review items.
+	// Snapshot current app assignments into review items, scoped to this
+	// org's connected apps only — an org-B campaign must never capture
+	// org-A's app assignments.
 	_, snapErr := tx.Exec(ctx,
 		`INSERT INTO review_items (campaign_id, user_id, resource_type, resource_id, resource_name)
 		 SELECT $1, aa.user_id, 'app', aa.app_id::text, ca.name
 		 FROM app_assignments aa
-		 JOIN connected_apps ca ON ca.id = aa.app_id`,
-		campaignID,
+		 JOIN connected_apps ca ON ca.id = aa.app_id
+		 WHERE ca.org_id = $2`,
+		campaignID, oc.OrgID,
 	)
 	if snapErr != nil {
 		h.logger.Error("campaign snapshot failed", zap.Error(snapErr))
@@ -133,9 +141,15 @@ func (h *Handler) ListCampaigns(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 	rows, err := h.db.Query(r.Context(),
 		`SELECT id, name, status, created_by, created_at, closed_at, due_date
-		 FROM review_campaigns ORDER BY created_at DESC LIMIT 100`,
+		 FROM review_campaigns WHERE org_id = $1 ORDER BY created_at DESC LIMIT 100`,
+		oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("failed to list campaigns", zap.Error(err))
@@ -185,11 +199,22 @@ func (h *Handler) ListCampaignItems(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+	if !h.requireCampaignInCallerOrg(w, r, campaignID) {
+		return
+	}
 	rows, err := h.db.Query(r.Context(),
-		`SELECT id, campaign_id, user_id, resource_type, resource_id, resource_name,
-		        decision, decided_by, decided_at, created_at
-		 FROM review_items WHERE campaign_id = $1 ORDER BY created_at`,
-		campaignID,
+		`SELECT ri.id, ri.campaign_id, ri.user_id, ri.resource_type, ri.resource_id, ri.resource_name,
+		        ri.decision, ri.decided_by, ri.decided_at, ri.created_at
+		 FROM review_items ri
+		 JOIN review_campaigns rc ON rc.id = ri.campaign_id
+		 WHERE ri.campaign_id = $1 AND rc.org_id = $2
+		 ORDER BY ri.created_at`,
+		campaignID, oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("failed to list campaign items", zap.Error(err))
@@ -248,6 +273,9 @@ func (h *Handler) DecideCampaignItem(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	if !h.requireCampaignInCallerOrg(w, r, campaignID) {
+		return
+	}
 	actorID := middleware.GetActorID(r.Context())
 	tag, err := h.db.Exec(r.Context(),
 		`UPDATE review_items SET decision = $1, decided_by = $2, decided_at = NOW()
@@ -276,6 +304,9 @@ func (h *Handler) CompleteCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if !h.requireCampaignInCallerOrg(w, r, campaignID) {
 		return
 	}
 	ctx := r.Context()

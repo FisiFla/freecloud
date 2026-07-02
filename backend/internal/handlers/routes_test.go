@@ -388,7 +388,7 @@ func authOnlyMW(role middleware.Role) func(http.Handler) http.Handler {
 func TestEveryTenantScopedRouteResolvesOrgContext(t *testing.T) {
 	h := NewHandler(zeroMembershipDB{}, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 	r := chi.NewRouter()
-	SetupRoutes(r, h, authOnlyMW(middleware.RoleSuperAdmin))
+	SetupRoutes(r, h, authOnlyMW(middleware.RoleSuperAdmin), testLimiterFactory)
 
 	// Routes intentionally outside the org-scoped authenticated group: public
 	// probes, dedicated-bearer service surfaces (own auth, no X-Org-Id

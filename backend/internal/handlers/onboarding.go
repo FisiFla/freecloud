@@ -97,7 +97,7 @@ func (h *Handler) Onboard(w http.ResponseWriter, r *http.Request) {
 
 	// Idempotency: if this email already maps to a Keycloak user locally, do not
 	// create a second Keycloak user — report the existing mapping as a conflict.
-	// Email is unique realm-wide (see docs/adr/0004), so this check is
+	// Email is unique realm-wide (see docs/adr/0005), so this check is
 	// intentionally NOT org-scoped: a duplicate email across orgs is always a
 	// conflict, matching the accepted shared-realm limitation.
 	if h.db != nil {

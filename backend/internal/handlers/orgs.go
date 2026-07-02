@@ -4,7 +4,7 @@ package handlers
 //
 // One shared Keycloak realm; org isolation lives entirely in FreeCloud's own
 // data model (organizations + org_memberships, see backend/internal/db/schema.go
-// Migration043 and docs/adr/0004-multi-tenant-shared-realm.md).
+// Migration043 and docs/adr/0005-multi-tenant-shared-realm.md).
 //
 // Two admin tiers:
 //   - system-admin (RoleSuperAdmin, global JWT role): creates orgs, may act on

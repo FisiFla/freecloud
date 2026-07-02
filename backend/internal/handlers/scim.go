@@ -148,7 +148,7 @@ func scimUserFromRow(id, email, firstName, lastName string, disabled bool, creat
 //
 // C4 (Epic C multi-tenant): the legacy token authenticates on behalf of the
 // Default Organization for backward compatibility with existing Okta/Entra
-// integrations that predate multi-org support — see docs/adr/0004. It sets
+// integrations that predate multi-org support — see docs/adr/0005. It sets
 // an OrgContext so every SCIM handler downstream can org-scope its query the
 // same way whether the caller used the legacy path or a per-org token.
 func SCIMBearerMiddleware(token string) func(http.Handler) http.Handler {
@@ -444,7 +444,7 @@ func (h *Handler) SCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Idempotency: check for existing user. Email is unique realm-wide (see
-	// docs/adr/0004), so this check is intentionally NOT org-scoped: a
+	// docs/adr/0005), so this check is intentionally NOT org-scoped: a
 	// duplicate email across orgs is always a conflict.
 	var existingID string
 	if err := h.db.QueryRow(ctx,

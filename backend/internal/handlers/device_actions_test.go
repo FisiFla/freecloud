@@ -31,11 +31,41 @@ func withAdminClaims(r *http.Request) *http.Request {
 	return r.WithContext(middleware.SetClaims(r.Context(), claims))
 }
 
+// withOrgContext injects a resolved OrgContext (Epic C multi-tenant), as
+// OrgContextMiddleware would have set it, so device/user-scoped handlers'
+// org-ownership guard doesn't fail closed on "no organization context"
+// before ever reaching the behavior under test.
+func withOrgContext(r *http.Request) *http.Request {
+	oc := &middleware.OrgContext{OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin}
+	return r.WithContext(middleware.SetOrgContext(r.Context(), oc))
+}
+
+// ownershipFoundQueryRowFn returns a queryRowFn that answers any
+// `SELECT 1 FROM <table> WHERE ... AND org_id = $N` ownership check with
+// "found" (scans 1 into dest[0]), so tests can focus on the handler's own
+// behavior rather than re-proving org ownership on every call. Isolation
+// itself is covered separately (see org_isolation_test.go).
+func ownershipFoundQueryRowFn(next func(ctx context.Context, sql string, args ...any) pgx.Row) func(context.Context, string, ...any) pgx.Row {
+	return func(ctx context.Context, sql string, args ...any) pgx.Row {
+		if strings.Contains(sql, "SELECT 1 FROM") && strings.Contains(sql, "org_id") {
+			return fakeRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*int)) = 1
+				return nil
+			}}
+		}
+		if next != nil {
+			return next(ctx, sql, args...)
+		}
+		return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+	}
+}
+
 // ----- B1: Remote Lock -----
 
 func TestRemoteLock_HappyPath(t *testing.T) {
 	lockCalled := false
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
 		issueRemoteLockFn: func(_ context.Context, hostID string) error {
 			lockCalled = true
 			if hostID != "host-001" {
@@ -48,6 +78,7 @@ func TestRemoteLock_HappyPath(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/lock", nil)
 	req = chiCtxWithID(req, "id", "host-001")
 	req = withAdminClaims(req)
+	req = withOrgContext(req)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
 	rec := httptest.NewRecorder()
 
@@ -85,7 +116,8 @@ func TestRemoteLock_MissingDeviceID(t *testing.T) {
 }
 
 func TestRemoteLock_FleetError(t *testing.T) {
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
 		issueRemoteLockFn: func(_ context.Context, hostID string) error {
 			return errors.New("fleet unreachable")
 		},
@@ -94,6 +126,7 @@ func TestRemoteLock_FleetError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/lock", nil)
 	req = chiCtxWithID(req, "id", "host-001")
 	req = withAdminClaims(req)
+	req = withOrgContext(req)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
 	rec := httptest.NewRecorder()
 
@@ -107,6 +140,7 @@ func TestRemoteLock_FleetError(t *testing.T) {
 func TestRemoteLock_AuditWritten(t *testing.T) {
 	auditWritten := false
 	db := &fakeDB{
+		queryRowFn: ownershipFoundQueryRowFn(nil),
 		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 			if len(args) >= 2 {
 				if action, ok := args[1].(string); ok && action == "device_lock" {
@@ -129,6 +163,7 @@ func TestRemoteLock_AuditWritten(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/lock", nil)
 	req = chiCtxWithID(req, "id", "host-001")
 	req = withAdminClaims(req)
+	req = withOrgContext(req)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
 	rec := httptest.NewRecorder()
 
@@ -150,12 +185,13 @@ func TestGetDeviceSoftware_NilDB(t *testing.T) {
 	const uid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/"+uid+"/devices/software", nil)
 	req = chiCtxWithID(req, "id", uid)
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetDeviceSoftware(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 (nil DB), got %d", rec.Code)
+		t.Errorf("expected 500 (nil DB), got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -184,6 +220,7 @@ func TestGetDeviceSoftware_FleetErrorReturnsEmpty(t *testing.T) {
 		},
 	}
 	db := &fakeDB{
+		queryRowFn: ownershipFoundQueryRowFn(nil),
 		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 			return fakeRows, nil
 		},
@@ -197,6 +234,7 @@ func TestGetDeviceSoftware_FleetErrorReturnsEmpty(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/"+uid+"/devices/software", nil)
 	req = chiCtxWithID(req, "id", uid)
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetDeviceSoftware(rec, req)
@@ -222,12 +260,13 @@ func TestGetUserCompliance_NilDB(t *testing.T) {
 	const uid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/"+uid+"/devices/compliance", nil)
 	req = chiCtxWithID(req, "id", uid)
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetUserCompliance(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 (nil DB), got %d", rec.Code)
+		t.Errorf("expected 500 (nil DB), got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -274,6 +313,7 @@ func TestGetOrgCompliance_WithDevices(t *testing.T) {
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/compliance", nil)
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetOrgCompliance(rec, req)
@@ -417,7 +457,8 @@ func TestListPolicies_FleetError(t *testing.T) {
 
 func TestRemoteRestart_HappyPath(t *testing.T) {
 	restartCalled := false
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
 		issueRestartFn: func(_ context.Context, hostID string) error {
 			restartCalled = true
 			if hostID != "host-001" {
@@ -430,6 +471,7 @@ func TestRemoteRestart_HappyPath(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/restart", nil)
 	req = chiCtxWithID(req, "id", "host-001")
 	req = withAdminClaims(req)
+	req = withOrgContext(req)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
 	rec := httptest.NewRecorder()
 
@@ -463,7 +505,8 @@ func TestRemoteRestart_MissingDeviceID(t *testing.T) {
 }
 
 func TestRemoteRestart_FleetError(t *testing.T) {
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
 		issueRestartFn: func(_ context.Context, hostID string) error {
 			return errors.New("fleet unreachable")
 		},
@@ -472,6 +515,7 @@ func TestRemoteRestart_FleetError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/restart", nil)
 	req = chiCtxWithID(req, "id", "host-001")
 	req = withAdminClaims(req)
+	req = withOrgContext(req)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
 	rec := httptest.NewRecorder()
 
@@ -486,7 +530,8 @@ func TestRemoteRestart_FleetError(t *testing.T) {
 
 func TestRemoteLockWithMessage_HappyPath(t *testing.T) {
 	var gotMessage string
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
 		issueLockWithMessageFn: func(_ context.Context, hostID string, message string) error {
 			gotMessage = message
 			return nil
@@ -499,6 +544,7 @@ func TestRemoteLockWithMessage_HappyPath(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req = chiCtxWithID(req, "id", "host-001")
 	req = withAdminClaims(req)
+	req = withOrgContext(req)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
 	rec := httptest.NewRecorder()
 
@@ -526,7 +572,8 @@ func TestRemoteLockWithMessage_MissingDeviceID(t *testing.T) {
 }
 
 func TestRemoteLockWithMessage_FleetError(t *testing.T) {
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
 		issueLockWithMessageFn: func(_ context.Context, _ string, _ string) error {
 			return errors.New("fleet down")
 		},
@@ -537,6 +584,7 @@ func TestRemoteLockWithMessage_FleetError(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req = chiCtxWithID(req, "id", "host-001")
 	req = withAdminClaims(req)
+	req = withOrgContext(req)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
 	rec := httptest.NewRecorder()
 
@@ -551,7 +599,8 @@ func TestRemoteLockWithMessage_FleetError(t *testing.T) {
 
 func TestRemoteClearPasscode_HappyPath(t *testing.T) {
 	clearCalled := false
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
 		issueClearPasscodeFn: func(_ context.Context, hostID string) error {
 			clearCalled = true
 			return nil
@@ -561,6 +610,7 @@ func TestRemoteClearPasscode_HappyPath(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/clear-passcode", nil)
 	req = chiCtxWithID(req, "id", "host-001")
 	req = withAdminClaims(req)
+	req = withOrgContext(req)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
 	rec := httptest.NewRecorder()
 
@@ -586,7 +636,8 @@ func TestRemoteClearPasscode_MissingDeviceID(t *testing.T) {
 }
 
 func TestRemoteClearPasscode_FleetError(t *testing.T) {
-	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
 		issueClearPasscodeFn: func(_ context.Context, hostID string) error {
 			return errors.New("fleet down")
 		},
@@ -595,6 +646,7 @@ func TestRemoteClearPasscode_FleetError(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-001/clear-passcode", nil)
 	req = chiCtxWithID(req, "id", "host-001")
 	req = withAdminClaims(req)
+	req = withOrgContext(req)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "admin"))
 	rec := httptest.NewRecorder()
 
@@ -612,12 +664,13 @@ func TestGetDeviceCommandHistory_NilDB(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/host-001/commands", nil)
 	req = chiCtxWithID(req, "id", "host-001")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetDeviceCommandHistory(rec, req)
 
 	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("expected 500 (nil DB), got %d", rec.Code)
+		t.Errorf("expected 500 (nil DB), got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -632,6 +685,7 @@ func TestGetDeviceCommandHistory_HappyPath(t *testing.T) {
 		},
 	}
 	db := &fakeDB{
+		queryRowFn: ownershipFoundQueryRowFn(nil),
 		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 			return fakeRows, nil
 		},
@@ -640,6 +694,7 @@ func TestGetDeviceCommandHistory_HappyPath(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/host-001/commands", nil)
 	req = chiCtxWithID(req, "id", "host-001")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 
 	h.GetDeviceCommandHistory(rec, req)

@@ -1,4 +1,4 @@
-# ADR 0004: Multi-tenant foundations — shared Keycloak realm, org isolation in FreeCloud's data model
+# ADR 0005: Multi-tenant foundations — shared Keycloak realm, org isolation in FreeCloud's data model
 
 ## Status
 

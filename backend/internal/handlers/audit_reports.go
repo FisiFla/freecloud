@@ -116,10 +116,17 @@ func (h *Handler) downloadComplianceReport(
 ) {
 	ctx := r.Context()
 
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	// Reuse existing device query — compliance posture is computed in memory via Fleet.
 	rows, err := h.db.Query(ctx,
 		`SELECT d.fleet_host_id, COALESCE(d.hostname, ''), COALESCE(d.os_version, '')
-		 FROM devices d ORDER BY d.hostname`,
+		 FROM devices d WHERE d.org_id = $1 ORDER BY d.hostname`,
+		oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("compliance report: failed to query devices", zap.Error(err))
@@ -179,6 +186,12 @@ func (h *Handler) downloadAccessReviewReport(
 ) {
 	ctx := r.Context()
 
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	query := `SELECT
 		rc.id, rc.name, rc.status, rc.created_at, rc.closed_at,
 		COUNT(ri.id) AS total,
@@ -187,10 +200,10 @@ func (h *Handler) downloadAccessReviewReport(
 		COUNT(ri.id) FILTER (WHERE ri.decision IS NULL) AS pending
 	FROM review_campaigns rc
 	LEFT JOIN review_items ri ON ri.campaign_id = rc.id
-	WHERE 1=1`
+	WHERE rc.org_id = $1`
 
-	args := []interface{}{}
-	argIdx := 1
+	args := []interface{}{oc.OrgID}
+	argIdx := 2
 
 	if !fromTime.IsZero() {
 		query += fmt.Sprintf(` AND rc.created_at >= $%d`, argIdx)

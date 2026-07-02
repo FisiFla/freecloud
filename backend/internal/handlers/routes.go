@@ -59,7 +59,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	// SCIMBearerToken is injected by SetupSCIM (called from main after config load).
 	// This is the LEGACY path: it authenticates on behalf of the Default
 	// Organization for backward compatibility with existing Okta/Entra
-	// integrations (see docs/adr/0004). Do not break it.
+	// integrations (see docs/adr/0005). Do not break it.
 	r.Group(func(r chi.Router) {
 		r.Use(h.scimBearerMW)
 		r.Get("/scim/v2/Users", h.SCIMListUsers)
