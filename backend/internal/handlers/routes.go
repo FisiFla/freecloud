@@ -339,6 +339,8 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Group(func(r chi.Router) {
 			r.Use(h.scimBearerMW)
 			r.Post("/api/v1/e2e/enrollment-token", h.E2ECreateEnrollmentToken)
+			// C5: org+admin-token seeding for the cross-org isolation e2e suite.
+			r.Post("/api/v1/e2e/seed-org", h.E2ESeedOrgWithAdminToken)
 		})
 	}
 }

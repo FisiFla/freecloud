@@ -232,12 +232,13 @@ func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Reque
 	var id string
 	var role string
 	var serviceIdentity string
+	var orgID string
 	var revokedAt *time.Time
 	var expiresAt *time.Time
 	err := a.db.QueryRow(r.Context(),
-		`SELECT id::TEXT, role, service_identity, revoked_at, expires_at FROM api_tokens WHERE token_hash = $1`,
+		`SELECT id::TEXT, role, service_identity, org_id::TEXT, revoked_at, expires_at FROM api_tokens WHERE token_hash = $1`,
 		hash,
-	).Scan(&id, &role, &serviceIdentity, &revokedAt, &expiresAt)
+	).Scan(&id, &role, &serviceIdentity, &orgID, &revokedAt, &expiresAt)
 	if err != nil {
 		writeAuthError(w, http.StatusUnauthorized, "unauthorized: invalid API token")
 		return
@@ -263,6 +264,15 @@ func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Reque
 		Role:              resolved,
 	}
 	ctx := context.WithValue(r.Context(), claimsKey, claims)
+	// C2/C5 (Epic C multi-tenant): an API token is scoped to the org it was
+	// created in (api_tokens.org_id, Migration043) — NOT resolved via
+	// org_memberships like a human JWT, since a token has no membership row.
+	// Setting OrgContext directly here means OrgContextMiddleware's own
+	// "already set" short-circuit takes over (see middleware/org.go), so a
+	// super-admin-role token is correctly confined to its OWN org rather
+	// than hitting the system-admin cross-org fallback that would otherwise
+	// apply to any super-admin JWT with zero memberships.
+	ctx = SetOrgContext(ctx, &OrgContext{OrgID: orgID, Role: OrgMembershipRoleAdmin})
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
