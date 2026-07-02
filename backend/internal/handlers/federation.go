@@ -69,6 +69,12 @@ func (h *Handler) CreateFederationSource(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
 	componentID, err := h.keycloak.CreateFederationComponent(ctx, req.Name, req.ConnectionURL, req.BindDN, bindPassword, req.UsersDN, req.Vendor)
 	if err != nil {
 		h.logger.Error("failed to create keycloak ldap component", zap.Error(err))
@@ -87,10 +93,10 @@ func (h *Handler) CreateFederationSource(w http.ResponseWriter, r *http.Request)
 		var configStr string
 		var createdAt, updatedAt time.Time
 		err = h.db.QueryRow(ctx,
-			`INSERT INTO federation_sources (name, provider_type, vendor, config, keycloak_component_id)
-			 VALUES ($1, 'ldap', $2, $3, $4)
+			`INSERT INTO federation_sources (name, provider_type, vendor, config, keycloak_component_id, org_id)
+			 VALUES ($1, 'ldap', $2, $3, $4, $5)
 			 RETURNING id, name, provider_type, vendor, config::text, keycloak_component_id, created_at, updated_at`,
-			req.Name, req.Vendor, string(configJSON), componentID,
+			req.Name, req.Vendor, string(configJSON), componentID, oc.OrgID,
 		).Scan(&fs.ID, &fs.Name, &fs.ProviderType, &fs.Vendor, &configStr, &fs.KeycloakComponentID, &createdAt, &updatedAt)
 		if err != nil {
 			h.logger.Error("failed to persist federation source", zap.Error(err))
@@ -123,13 +129,19 @@ func (h *Handler) ListFederationSources(w http.ResponseWriter, r *http.Request) 
 		respondJSON(w, http.StatusOK, []FederationSource{})
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 	rows, err := h.db.Query(ctx,
 		`SELECT id, name, provider_type, vendor, config::text,
 		        COALESCE(keycloak_component_id, ''),
 		        COALESCE(last_sync_at::TEXT, ''),
 		        COALESCE(last_sync_status, ''),
 		        created_at, updated_at
-		 FROM federation_sources ORDER BY created_at DESC`)
+		 FROM federation_sources WHERE org_id = $1 ORDER BY created_at DESC`,
+		oc.OrgID)
 	if err != nil {
 		h.logger.Error("failed to list federation sources", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "internal error")
@@ -164,6 +176,11 @@ func (h *Handler) GetFederationSource(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "federation source not found")
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 	var fs FederationSource
 	var configStr string
 	var createdAt, updatedAt time.Time
@@ -173,7 +190,7 @@ func (h *Handler) GetFederationSource(w http.ResponseWriter, r *http.Request) {
 		        COALESCE(last_sync_at::TEXT, ''),
 		        COALESCE(last_sync_status, ''),
 		        created_at, updated_at
-		 FROM federation_sources WHERE id = $1`, id,
+		 FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID,
 	).Scan(&fs.ID, &fs.Name, &fs.ProviderType, &fs.Vendor, &configStr,
 		&fs.KeycloakComponentID, &fs.LastSyncAt, &fs.LastSyncStatus, &createdAt, &updatedAt)
 	if err != nil {
@@ -202,6 +219,11 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	var cur FederationSource
 	var configStr string
@@ -212,7 +234,7 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 		        COALESCE(last_sync_at::TEXT, ''),
 		        COALESCE(last_sync_status, ''),
 		        created_at, updated_at
-		 FROM federation_sources WHERE id = $1`, id,
+		 FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID,
 	).Scan(&cur.ID, &cur.Name, &cur.ProviderType, &cur.Vendor, &configStr,
 		&cur.KeycloakComponentID, &cur.LastSyncAt, &cur.LastSyncStatus, &createdAt, &updatedAt)
 	if err != nil {
@@ -278,10 +300,15 @@ func (h *Handler) DeleteFederationSource(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	var componentID string
 	err := h.db.QueryRow(ctx,
-		`SELECT COALESCE(keycloak_component_id, '') FROM federation_sources WHERE id = $1`, id,
+		`SELECT COALESCE(keycloak_component_id, '') FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID,
 	).Scan(&componentID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "federation source not found")
@@ -315,11 +342,16 @@ func (h *Handler) TestFederationConnection(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	var fs FederationSource
 	var configStr string
 	err := h.db.QueryRow(ctx,
-		`SELECT id, COALESCE(keycloak_component_id, ''), config::text FROM federation_sources WHERE id = $1`, id,
+		`SELECT id, COALESCE(keycloak_component_id, ''), config::text FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID,
 	).Scan(&fs.ID, &fs.KeycloakComponentID, &configStr)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "federation source not found")
@@ -358,9 +390,14 @@ func (h *Handler) TriggerFederationSync(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	var componentID string
-	err := h.db.QueryRow(ctx, `SELECT COALESCE(keycloak_component_id, '') FROM federation_sources WHERE id = $1`, id).Scan(&componentID)
+	err := h.db.QueryRow(ctx, `SELECT COALESCE(keycloak_component_id, '') FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID).Scan(&componentID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "federation source not found")
 		return

@@ -75,3 +75,9 @@ func (h *Handler) requireResourceInCallerOrg(w http.ResponseWriter, r *http.Requ
 func (h *Handler) requireCampaignInCallerOrg(w http.ResponseWriter, r *http.Request, campaignID string) bool {
 	return h.requireResourceInCallerOrg(w, r, "review_campaigns", "id", campaignID, "campaign not found")
 }
+
+// requireFederationSourceInCallerOrg verifies a federation_sources id belongs
+// to the caller's active org.
+func (h *Handler) requireFederationSourceInCallerOrg(w http.ResponseWriter, r *http.Request, sourceID string) bool {
+	return h.requireResourceInCallerOrg(w, r, "federation_sources", "id", sourceID, "federation source not found")
+}
