@@ -57,6 +57,9 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 	// SCIM 2.0 provisioning — bearer-token authenticated, outside the user-JWT group.
 	// SCIMBearerToken is injected by SetupSCIM (called from main after config load).
+	// This is the LEGACY path: it authenticates on behalf of the Default
+	// Organization for backward compatibility with existing Okta/Entra
+	// integrations (see docs/adr/0004). Do not break it.
 	r.Group(func(r chi.Router) {
 		r.Use(h.scimBearerMW)
 		r.Get("/scim/v2/Users", h.SCIMListUsers)
@@ -70,6 +73,27 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 		r.Get("/scim/v2/Groups/{id}", h.SCIMGetGroup)
 		r.Patch("/scim/v2/Groups/{id}", h.SCIMPatchGroup)
 		r.Delete("/scim/v2/Groups/{id}", h.SCIMDeleteGroup)
+	})
+
+	// C4: org-scoped SCIM base path. Each org gets its own bearer token
+	// (scim_bearer_tokens, Migration043) instead of sharing the legacy
+	// SCIM_BEARER_TOKEN. {orgID} in the path must match the token's own org —
+	// enforced by SCIMOrgBearerMiddleware, not by the handlers (which just
+	// read the already-resolved OrgContext, same as every other org-scoped
+	// route). Reuses the exact same handlers as the legacy path since they
+	// are now org-context-aware.
+	r.Route("/scim/v2/orgs/{orgID}", func(r chi.Router) {
+		r.Use(h.SCIMOrgBearerMiddleware(h.db))
+		r.Get("/Users", h.SCIMListUsers)
+		r.Post("/Users", h.SCIMCreateUser)
+		r.Get("/Users/{id}", h.SCIMGetUser)
+		r.Patch("/Users/{id}", h.SCIMPatchUser)
+		r.Delete("/Users/{id}", h.SCIMDeleteUser)
+		r.Get("/Groups", h.SCIMListGroups)
+		r.Post("/Groups", h.SCIMCreateGroup)
+		r.Get("/Groups/{id}", h.SCIMGetGroup)
+		r.Patch("/Groups/{id}", h.SCIMPatchGroup)
+		r.Delete("/Groups/{id}", h.SCIMDeleteGroup)
 	})
 
 	// A1: access evaluation — bearer-token authenticated, outside the user-JWT group.

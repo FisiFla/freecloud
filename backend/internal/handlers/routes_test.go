@@ -242,6 +242,18 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		"GET /scim/v2/Groups/{id}":    true,
 		"PATCH /scim/v2/Groups/{id}":  true,
 		"DELETE /scim/v2/Groups/{id}": true,
+		// C4: org-scoped SCIM surface — dedicated per-org bearer token
+		// (SCIMOrgBearerMiddleware), same auth class as the legacy path above.
+		"GET /scim/v2/orgs/{orgID}/Users":          true,
+		"POST /scim/v2/orgs/{orgID}/Users":         true,
+		"GET /scim/v2/orgs/{orgID}/Users/{id}":     true,
+		"PATCH /scim/v2/orgs/{orgID}/Users/{id}":   true,
+		"DELETE /scim/v2/orgs/{orgID}/Users/{id}":  true,
+		"GET /scim/v2/orgs/{orgID}/Groups":         true,
+		"POST /scim/v2/orgs/{orgID}/Groups":        true,
+		"GET /scim/v2/orgs/{orgID}/Groups/{id}":    true,
+		"PATCH /scim/v2/orgs/{orgID}/Groups/{id}":  true,
+		"DELETE /scim/v2/orgs/{orgID}/Groups/{id}": true,
 		// Test-only enrollment-token helper — SCIM-bearer-authenticated (APP_ENV=test only).
 		"POST /api/v1/e2e/enrollment-token": true,
 		// Self-service — gated by PermSelfService, which end-user holds.
@@ -401,6 +413,16 @@ func TestEveryTenantScopedRouteResolvesOrgContext(t *testing.T) {
 		"POST /api/v1/e2e/enrollment-token": true,
 		"GET /api/v1/setup/status":          true,
 		"POST /api/v1/setup":                true,
+		// C4: org-scoped SCIM surface authenticates via SCIMOrgBearerMiddleware
+		// against the {orgID} path param directly (not X-Org-Id / claims-based
+		// OrgContextMiddleware resolution) — a malformed X-Org-Id header is
+		// inert here by design; the middleware validates {orgID} instead
+		// (fail-closed 404 for a non-UUID org segment, proven by
+		// TestSCIMOrgBearerMiddleware in scim_test.go).
+		"GET /scim/v2/orgs/{orgID}/Users": true, "POST /scim/v2/orgs/{orgID}/Users": true,
+		"GET /scim/v2/orgs/{orgID}/Users/{id}": true, "PATCH /scim/v2/orgs/{orgID}/Users/{id}": true, "DELETE /scim/v2/orgs/{orgID}/Users/{id}": true,
+		"GET /scim/v2/orgs/{orgID}/Groups": true, "POST /scim/v2/orgs/{orgID}/Groups": true,
+		"GET /scim/v2/orgs/{orgID}/Groups/{id}": true, "PATCH /scim/v2/orgs/{orgID}/Groups/{id}": true, "DELETE /scim/v2/orgs/{orgID}/Groups/{id}": true,
 	}
 
 	paramRe := regexp.MustCompile(`\{[^}]*\}`)

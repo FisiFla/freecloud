@@ -11,6 +11,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -140,8 +142,15 @@ func scimUserFromRow(id, email, firstName, lastName string, disabled bool, creat
 	}
 }
 
-// SCIMBearerMiddleware returns middleware that enforces the SCIM bearer token.
-// It is fail-closed: an empty token rejects ALL requests.
+// SCIMBearerMiddleware returns middleware that enforces the legacy static SCIM
+// bearer token (config.SCIMBearerToken). It is fail-closed: an empty token
+// rejects ALL requests.
+//
+// C4 (Epic C multi-tenant): the legacy token authenticates on behalf of the
+// Default Organization for backward compatibility with existing Okta/Entra
+// integrations that predate multi-org support — see docs/adr/0004. It sets
+// an OrgContext so every SCIM handler downstream can org-scope its query the
+// same way whether the caller used the legacy path or a per-org token.
 func SCIMBearerMiddleware(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -158,7 +167,60 @@ func SCIMBearerMiddleware(token string) func(http.Handler) http.Handler {
 				scimRespondError(w, http.StatusUnauthorized, "Invalid bearer token", "")
 				return
 			}
-			next.ServeHTTP(w, r)
+			ctx := middleware.SetOrgContext(r.Context(), &middleware.OrgContext{
+				OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin,
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// scimOrgTokenDB is the minimal interface the org-scoped SCIM bearer
+// middleware needs to look up a per-org token.
+type scimOrgTokenDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// SCIMOrgBearerMiddleware authenticates the org-scoped SCIM base path
+// (/scim/v2/orgs/{orgID}/...) against the scim_bearer_tokens table (C4,
+// Migration043). The path's {orgID} must match the token's own org — a valid
+// token for org A can never authenticate requests claiming to be for org B,
+// which is exactly the cross-org SCIM-provisioning path this epic must not
+// leave open.
+func (h *Handler) SCIMOrgBearerMiddleware(db scimOrgTokenDB) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			pathOrgID := chi.URLParam(r, "orgID")
+			if !isValidUUID(pathOrgID) {
+				scimRespondError(w, http.StatusNotFound, "unknown organization", "")
+				return
+			}
+			auth := r.Header.Get("Authorization")
+			if !strings.HasPrefix(auth, "Bearer ") {
+				scimRespondError(w, http.StatusUnauthorized, "Bearer token required", "")
+				return
+			}
+			tokenStr := strings.TrimPrefix(auth, "Bearer ")
+			if db == nil {
+				scimRespondError(w, http.StatusServiceUnavailable, "SCIM provisioning is not configured", "")
+				return
+			}
+			hash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenStr)))
+			var tokenOrgID string
+			err := db.QueryRow(r.Context(),
+				`SELECT org_id::TEXT FROM scim_bearer_tokens WHERE token_hash = $1 AND revoked_at IS NULL`,
+				hash,
+			).Scan(&tokenOrgID)
+			if err != nil || tokenOrgID != pathOrgID {
+				// Same 401 whether the token is unknown, revoked, or valid for a
+				// DIFFERENT org — never leak which case it was to the caller.
+				scimRespondError(w, http.StatusUnauthorized, "Invalid bearer token", "")
+				return
+			}
+			ctx := middleware.SetOrgContext(r.Context(), &middleware.OrgContext{
+				OrgID: tokenOrgID, Role: middleware.OrgMembershipRoleAdmin,
+			})
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
@@ -182,6 +244,13 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+
+	// C4/C5: org-scoped read. Fail closed — no org context means no rows.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
 
 	startIndex := 1
 	if v := r.URL.Query().Get("startIndex"); v != "" {
@@ -212,20 +281,21 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 	                  COALESCE(u.disabled, false), u.created_at, u.updated_at,
 	                  COALESCE(v.version, 1)
 	           FROM users u
-	           LEFT JOIN scim_resource_versions v ON v.user_id = u.keycloak_user_id`
-	args := []interface{}{}
-	argIdx := 1
+	           LEFT JOIN scim_resource_versions v ON v.user_id = u.keycloak_user_id
+	           WHERE u.org_id = $1`
+	args := []interface{}{oc.OrgID}
+	argIdx := 2
 	switch filterOp {
 	case "eq":
-		query += ` WHERE u.email = $` + strconv.Itoa(argIdx)
+		query += ` AND u.email = $` + strconv.Itoa(argIdx)
 		args = append(args, filterVal)
 		argIdx++
 	case "co":
-		query += ` WHERE u.email ILIKE $` + strconv.Itoa(argIdx)
+		query += ` AND u.email ILIKE $` + strconv.Itoa(argIdx)
 		args = append(args, "%"+filterVal+"%")
 		argIdx++
 	case "sw":
-		query += ` WHERE u.email ILIKE $` + strconv.Itoa(argIdx)
+		query += ` AND u.email ILIKE $` + strconv.Itoa(argIdx)
 		args = append(args, filterVal+"%")
 		argIdx++
 	}
@@ -289,6 +359,14 @@ func (h *Handler) SCIMGetUser(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
+	// C4/C5: org-scoped read. Fail closed — no org context means "not found",
+	// never an implicit cross-org lookup.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
+
 	var (
 		id, email, firstName, lastName string
 		disabled                       bool
@@ -301,8 +379,8 @@ func (h *Handler) SCIMGetUser(w http.ResponseWriter, r *http.Request) {
 		        COALESCE(v.version, 1)
 		 FROM users u
 		 LEFT JOIN scim_resource_versions v ON v.user_id = u.keycloak_user_id
-		 WHERE u.keycloak_user_id = $1`,
-		userID,
+		 WHERE u.keycloak_user_id = $1 AND u.org_id = $2`,
+		userID, oc.OrgID,
 	).Scan(&id, &email, &firstName, &lastName, &disabled, &createdAt, &updatedAt, &version)
 	if err != nil {
 		if isNotFound(err) {
@@ -356,7 +434,18 @@ func (h *Handler) SCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Idempotency: check for existing user
+	// C4: the calling token's org (legacy bearer -> Default Org, per-org
+	// bearer -> its own org — both are resolved into OrgContext by the
+	// respective middleware in routes.go). Fail closed rather than guessing.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
+
+	// Idempotency: check for existing user. Email is unique realm-wide (see
+	// docs/adr/0004), so this check is intentionally NOT org-scoped: a
+	// duplicate email across orgs is always a conflict.
 	var existingID string
 	if err := h.db.QueryRow(ctx,
 		`SELECT keycloak_user_id FROM users WHERE email = $1`, email,
@@ -402,14 +491,9 @@ func (h *Handler) SCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	// C4 (scoped down): SCIM bearer tokens are not yet per-org (see
-	// docs/adr/0004 / Migration043's scim_bearer_tokens table, added but not
-	// yet wired to a lookup here). The legacy SCIM_BEARER_TOKEN authenticates
-	// on behalf of the Default Organization until per-org SCIM tokens are
-	// wired up.
 	if err := h.persistOnboard(persistCtx, kcUserID, onboardReq, "scim-provisioner", map[string]interface{}{
 		"source": "scim",
-	}, "", middleware.DefaultOrgID); err != nil {
+	}, "", oc.OrgID); err != nil {
 		h.logger.Error("scim create: persist failed", zap.String("kc_user_id", kcUserID), zap.Error(err))
 		scimRespondError(w, http.StatusInternalServerError, "failed to persist user", "")
 		return
@@ -467,6 +551,14 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// C4/C5: org-scoped write. Fail closed — no org context means "not found",
+	// never an implicit cross-org lookup/mutation.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
+
 	// Load current user
 	var (
 		email, firstName, lastName string
@@ -480,7 +572,7 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 		        COALESCE(v.version, 1)
 		 FROM users u
 		 LEFT JOIN scim_resource_versions v ON v.user_id = u.keycloak_user_id
-		 WHERE u.keycloak_user_id = $1`, userID,
+		 WHERE u.keycloak_user_id = $1 AND u.org_id = $2`, userID, oc.OrgID,
 	).Scan(&email, &firstName, &lastName, &disabled, &createdAt, &updatedAt, &version)
 	if err != nil {
 		if isNotFound(err) {
@@ -651,10 +743,18 @@ func (h *Handler) SCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
+	// C4/C5: org-scoped write. Fail closed — no org context means "not found",
+	// never an implicit cross-org lookup/mutation.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
+
 	// Verify existence
 	var email string
 	if err := h.db.QueryRow(ctx,
-		`SELECT email FROM users WHERE keycloak_user_id = $1`, userID,
+		`SELECT email FROM users WHERE keycloak_user_id = $1 AND org_id = $2`, userID, oc.OrgID,
 	).Scan(&email); err != nil {
 		if isNotFound(err) {
 			scimRespondError(w, http.StatusNotFound, "user not found", "")
