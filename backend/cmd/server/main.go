@@ -24,6 +24,7 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/db"
 	"github.com/FisiFla/freecloud/backend/internal/handlers"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
+	"github.com/FisiFla/freecloud/backend/internal/leader"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 	"github.com/FisiFla/freecloud/backend/internal/notify"
 	"github.com/FisiFla/freecloud/backend/internal/provisioning"
@@ -32,7 +33,54 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/snapshot"
 )
 
+// main dispatches to the migrate subcommand ("server migrate") or the normal
+// HTTP server (bare "server"). See runMigrate / runServer (B2, v1.7 HA):
+// migrations are decoupled from server startup so a rolling multi-replica
+// deploy can run exactly one migrate job before any replica serves traffic,
+// instead of every replica racing to migrate on boot.
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		runMigrate()
+		return
+	}
+	runServer()
+}
+
+// runMigrate connects to the database, applies any pending migrations under
+// the schema.RunMigrations advisory lock, and exits. Intended to be run as a
+// one-shot job (e.g. docker compose `migrate` service with
+// `depends_on: service_completed_successfully`) before the server starts.
+func runMigrate() {
+	logger, err := zap.NewProduction()
+	if err != nil {
+		panic("failed to initialize logger: " + err.Error())
+	}
+	defer func() { _ = logger.Sync() }()
+	zap.ReplaceGlobals(logger)
+
+	cfg := config.Load()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	if err != nil {
+		logger.Fatal("migrate: failed to create database pool", zap.Error(err))
+	}
+	defer pool.Close()
+
+	if err := pool.Ping(ctx); err != nil {
+		logger.Fatal("migrate: failed to ping database", zap.Error(err))
+	}
+
+	if err := db.RunMigrations(ctx, pool); err != nil {
+		logger.Fatal("migrate: failed to run migrations", zap.Error(err))
+	}
+
+	logger.Info("migrate: complete", zap.Int("schema_version", db.LatestMigrationID()))
+}
+
+func runServer() {
 	// Initialize logger
 	logger, err := zap.NewProduction()
 	if err != nil {
@@ -81,10 +129,14 @@ func main() {
 	}
 	logger.Info("database connection established")
 
-	// Run migrations
-	if err := db.RunMigrations(ctx, pool); err != nil {
-		logger.Fatal("failed to run migrations", zap.Error(err))
+	// B2 (v1.7 HA): migrations are no longer run here. Verify the schema is
+	// current instead — if a `migrate` job hasn't completed yet, wait for it
+	// (WAIT_FOR_SCHEMA_TIMEOUT, useful when compose starts the server and the
+	// migrate job concurrently) or fail with a clear operator message.
+	if err := db.WaitForSchema(ctx, pool, cfg.WaitForSchemaTimeout); err != nil {
+		logger.Fatal("schema check failed", zap.Error(err))
 	}
+	logger.Info("database schema is current", zap.Int("schema_version", db.LatestMigrationID()))
 
 	// Self-bootstrap Keycloak idempotently under a pg advisory lock so only one
 	// replica runs provisioning at a time. Returns the active service-account secret.
@@ -176,16 +228,30 @@ func main() {
 		eventNotifier = notify.NewMultiNotifier(toggles, logger, notifiers...)
 	}
 
+	// B3 (v1.7 HA): leader election for background jobs that must run on
+	// exactly one instance. Each job gets its own advisory lock id (distinct
+	// from the bootstrap lock 7919876543 and the migration lock 8241093571 in
+	// internal/db/schema.go) and its own Elector, so one job's instance
+	// failing over doesn't affect another job's leadership.
+	reconcileLeader := leader.New(leader.PoolAdapter{Pool: pool}, "reconcile", 8241093601, logger)
+	snapshotLeader := leader.New(leader.PoolAdapter{Pool: pool}, "snapshot", 8241093602, logger)
+	auditRetentionLeader := leader.New(leader.PoolAdapter{Pool: pool}, "audit_retention", 8241093603, logger)
+	reconcileLeader.Start(lifecycleCtx)
+	snapshotLeader.Start(lifecycleCtx)
+	auditRetentionLeader.Start(lifecycleCtx)
+
 	// Start the Keycloak↔DB reconciliation job (FCEXP-21).
 	// RECONCILE_INTERVAL=0 disables it; the default is 15m.
 	rec := reconcile.New(kcClient, pool, logger)
 	if eventNotifier != nil {
 		rec.SetNotifier(eventNotifier)
 	}
+	rec.SetLeaderGate(reconcileLeader.IsLeader)
 	rec.Start(lifecycleCtx, cfg.ReconcileInterval)
 
 	// D2 — Analytics snapshot job.
 	snap := snapshot.New(pool, logger)
+	snap.SetLeaderGate(snapshotLeader.IsLeader)
 	snap.Start(lifecycleCtx, cfg.SnapshotInterval)
 
 	// D3 — SIEM streamer.
@@ -195,6 +261,7 @@ func main() {
 
 	// C2 (FCEX3-14) — Audit retention/pruning.
 	auditPruner := audit.NewPruner(pool, logger)
+	auditPruner.SetLeaderGate(auditRetentionLeader.IsLeader)
 	auditPruner.Start(lifecycleCtx, cfg.AuditPruneInterval, cfg.AuditRetainFor)
 
 	provisionEngine := provisioning.NewEngine(pool, logger)
@@ -276,8 +343,18 @@ func main() {
 	// at the reverse proxy / network layer if the API is publicly exposed.
 	r.Handle("/metrics", promhttp.Handler())
 
+	// B1 (v1.7 HA): rate limiter factory — Redis-backed (shared across
+	// replicas) when REDIS_URL is set, in-memory otherwise. config.Validate()
+	// already refused to start in production without REDIS_URL, so this only
+	// falls back to in-memory in dev/test.
+	newLimiter, closeLimiterFactory, err := middleware.NewLimiterFactory(cfg.RedisURL, logger)
+	if err != nil {
+		logger.Fatal("failed to initialize rate limiter", zap.Error(err))
+	}
+	defer closeLimiterFactory()
+
 	// Register routes (auth + actor middleware applied inside)
-	handlers.SetupRoutes(r, handler, authMW.Middleware)
+	handlers.SetupRoutes(r, handler, authMW.Middleware, newLimiter)
 
 	// Create HTTP server
 	srv := &http.Server{

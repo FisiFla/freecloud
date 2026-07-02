@@ -17,11 +17,21 @@ import (
 type Pruner struct {
 	pool   DBPool
 	logger *zap.Logger
+	// isLeader gates the ticker-driven prune (B3, v1.7 HA): nil means "always
+	// run" (single-instance / no leader election wired up), matching prior
+	// behavior exactly.
+	isLeader func() bool
 }
 
 // NewPruner creates a Pruner.
 func NewPruner(pool DBPool, logger *zap.Logger) *Pruner {
 	return &Pruner{pool: pool, logger: logger}
+}
+
+// SetLeaderGate wires a leader-election check (B3, v1.7 HA) so the ticker in
+// Start only prunes on the instance that currently holds leadership.
+func (p *Pruner) SetLeaderGate(isLeader func() bool) {
+	p.isLeader = isLeader
 }
 
 // Prune deletes rows whose created_at is older than retainFor and returns the
@@ -132,6 +142,9 @@ func (p *Pruner) Start(ctx context.Context, interval, retainFor time.Duration) {
 				p.logger.Info("audit retention job stopped")
 				return
 			case <-ticker.C:
+				if p.isLeader != nil && !p.isLeader() {
+					continue
+				}
 				if _, err := p.Prune(ctx, retainFor); err != nil {
 					p.logger.Warn("audit prune failed", zap.Error(err))
 				}
