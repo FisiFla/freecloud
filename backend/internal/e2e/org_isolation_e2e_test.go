@@ -93,6 +93,18 @@ func TestE2E_CrossOrgIsolation(t *testing.T) {
 		{"apps", http.MethodGet, "/api/v1/apps"},
 		{"api-tokens", http.MethodGet, "/api/v1/api-tokens"},
 		{"audit-logs", http.MethodGet, "/api/v1/audit-logs"},
+		// Coordinator-flagged classes (org-scoping sweep completion): devices,
+		// review campaigns/schedules, access/approval requests, federation
+		// sources, and analytics all gained org_id filtering this round —
+		// round-trip each read path through both orgs' tokens so a
+		// regression that drops a WHERE org_id clause fails this suite.
+		{"compliance", http.MethodGet, "/api/v1/compliance"},
+		{"campaigns", http.MethodGet, "/api/v1/campaigns"},
+		{"review-schedules", http.MethodGet, "/api/v1/review-schedules"},
+		{"portal-access-requests", http.MethodGet, "/api/v1/portal/access-requests"},
+		{"approval-requests", http.MethodGet, "/api/v1/approval-requests"},
+		{"federation-sources", http.MethodGet, "/api/v1/federation/sources"},
+		{"analytics-snapshots", http.MethodGet, "/api/v1/analytics/snapshots"},
 	}
 
 	for _, rc := range resourceClasses {

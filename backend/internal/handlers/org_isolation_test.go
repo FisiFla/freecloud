@@ -30,6 +30,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/FisiFla/freecloud/backend/internal/snapshot"
 )
 
 const (
@@ -340,6 +341,447 @@ func TestCrossOrgIsolation_SCIM(t *testing.T) {
 	h.SCIMGetUser(recB, reqB)
 	if recB.Code != http.StatusNotFound {
 		t.Fatalf("org B: SCIMGetUser on org A's user: expected 404, got %d: %s", recB.Code, recB.Body.String())
+	}
+}
+
+// newChiRequestWithOrgBody builds a request with TWO chi URL params, a JSON
+// body, AND a resolved OrgContext — the composite fixture needed by
+// decide-style handlers ({id}/{itemId} or {id} plus a decision body).
+func newChiRequestWithOrgBody(method, target string, paramKeys, paramVals []string, orgID, body string) *http.Request {
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	ctx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
+		URLParams: chi.RouteParams{Keys: paramKeys, Values: paramVals},
+	})
+	ctx = middleware.SetClaims(ctx, &middleware.JWTClaims{Sub: "test-caller", Role: middleware.RoleSuperAdmin})
+	ctx = context.WithValue(ctx, middleware.ActorIDKey, "test-caller")
+	ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{OrgID: orgID, Role: middleware.OrgMembershipRoleAdmin})
+	return req.WithContext(ctx)
+}
+
+// TestCrossOrgIsolation_Devices proves device-scoped write actions
+// (RemoteLock) 404 when the target device belongs to a different org, and
+// that org-scoped reads (GetOrgCompliance) only ever see the caller's own
+// org's devices. This is the most severe class in the coordinator's review:
+// pre-fix, org-B could lock/wipe/restart an org-A device by host ID alone.
+func TestCrossOrgIsolation_Devices(t *testing.T) {
+	const orgADevice = "host-org-a"
+
+	// requireDeviceInCallerOrg's ownership check: device only "found" for org A.
+	ownershipDB := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if len(args) < 2 {
+				t.Fatalf("device ownership check missing org_id argument: %v", args)
+			}
+			deviceID, _ := args[0].(string)
+			orgID, _ := args[1].(string)
+			if deviceID == orgADevice && orgID == testIsoOrgA {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*int)) = 1
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	h := newIsolationHandler(ownershipDB)
+	fleetCalled := false
+	h.fleet = &fakeFleet{issueRemoteLockFn: func(_ context.Context, hostID string) error {
+		fleetCalled = true
+		return nil
+	}}
+
+	// Org A locking its OWN device succeeds.
+	reqA := newChiRequestWithOrg(http.MethodPost, "/api/v1/devices/"+orgADevice+"/lock", "id", orgADevice, testIsoOrgA)
+	recA := httptest.NewRecorder()
+	h.RemoteLock(recA, reqA)
+	if recA.Code != http.StatusOK {
+		t.Fatalf("org A locking its own device: expected 200, got %d: %s", recA.Code, recA.Body.String())
+	}
+	if !fleetCalled {
+		t.Fatal("expected Fleet lock to be issued for org A's own device")
+	}
+
+	// Org B locking org A's device must 404 — never reach Fleet.
+	fleetCalled = false
+	reqB := newChiRequestWithOrg(http.MethodPost, "/api/v1/devices/"+orgADevice+"/lock", "id", orgADevice, testIsoOrgB)
+	recB := httptest.NewRecorder()
+	h.RemoteLock(recB, reqB)
+	if recB.Code != http.StatusNotFound {
+		t.Fatalf("org B locking org A's device: expected 404, got %d: %s", recB.Code, recB.Body.String())
+	}
+	if fleetCalled {
+		t.Fatal("org B's lock attempt on org A's device must NEVER reach Fleet")
+	}
+
+	// GetOrgCompliance: each org's compliance dashboard only sees its own devices.
+	complianceDB := &fakeDB{
+		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+			orgID, _ := args[0].(string)
+			return &fakeQueryRows{rows: [][]interface{}{
+				{orgID + "-host", orgID + "-hostname", "macOS 15"},
+			}}, nil
+		},
+	}
+	hCompliance := newIsolationHandler(complianceDB)
+	for _, orgID := range []string{testIsoOrgA, testIsoOrgB} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/compliance", nil).WithContext(orgCtx(orgID))
+		rec := httptest.NewRecorder()
+		hCompliance.GetOrgCompliance(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("org %s: GetOrgCompliance expected 200, got %d: %s", orgID, rec.Code, rec.Body.String())
+		}
+		if !containsAll(rec.Body.String(), orgID+"-host") {
+			t.Errorf("org %s: GetOrgCompliance missing its own device: %s", orgID, rec.Body.String())
+		}
+	}
+}
+
+// TestCrossOrgIsolation_Campaigns proves review campaigns are org-scoped:
+// ListCampaigns only returns the caller's org's campaigns, and
+// DecideCampaignItem 404s when the campaign belongs to a different org.
+func TestCrossOrgIsolation_Campaigns(t *testing.T) {
+	db := &fakeDB{
+		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+			orgID, _ := args[0].(string)
+			return &fakeQueryRows{rows: [][]interface{}{
+				{orgID + "-campaign-id", orgID + "-campaign-name", "open", "", "", nil, nil},
+			}}, nil
+		},
+	}
+	h := newIsolationHandler(db)
+	for _, orgID := range []string{testIsoOrgA, testIsoOrgB} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/campaigns", nil).WithContext(orgCtx(orgID))
+		rec := httptest.NewRecorder()
+		h.ListCampaigns(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("org %s: ListCampaigns expected 200, got %d: %s", orgID, rec.Code, rec.Body.String())
+		}
+		if !containsAll(rec.Body.String(), orgID+"-campaign-name") {
+			t.Errorf("org %s: ListCampaigns missing its own campaign: %s", orgID, rec.Body.String())
+		}
+	}
+
+	// DecideCampaignItem: a campaign that exists but belongs to org A must
+	// 404 for org B (requireCampaignInCallerOrg).
+	const orgACampaign = "aaaaaaaa-0000-0000-0000-00000000000c"
+	const itemID = "aaaaaaaa-0000-0000-0000-000000000001"
+	ownershipDB := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			campaignID, _ := args[0].(string)
+			orgID, _ := args[1].(string)
+			if campaignID == orgACampaign && orgID == testIsoOrgA {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*int)) = 1
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	hDecide := newIsolationHandler(ownershipDB)
+	req := newChiRequestWithOrgBody(http.MethodPost,
+		"/api/v1/campaigns/"+orgACampaign+"/items/"+itemID+"/decide",
+		[]string{"id", "itemId"}, []string{orgACampaign, itemID},
+		testIsoOrgB, `{"decision":"confirm"}`)
+	rec := httptest.NewRecorder()
+	hDecide.DecideCampaignItem(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("org B deciding org A's campaign item: expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCrossOrgIsolation_ReviewSchedules proves recurring review schedules are
+// org-scoped: ListReviewSchedules filters by org, and
+// UpdateReviewSchedule/DeleteReviewSchedule 404 on a foreign-org schedule id.
+func TestCrossOrgIsolation_ReviewSchedules(t *testing.T) {
+	db := &fakeDB{
+		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+			orgID, _ := args[0].(string)
+			return &fakeQueryRows{rows: [][]interface{}{
+				{orgID + "-sched-id", orgID + "-sched-name", "weekly", 0, "", nil, true, "", ""},
+			}}, nil
+		},
+	}
+	h := newIsolationHandler(db)
+	for _, orgID := range []string{testIsoOrgA, testIsoOrgB} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/review-schedules", nil).WithContext(orgCtx(orgID))
+		rec := httptest.NewRecorder()
+		h.ListReviewSchedules(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("org %s: ListReviewSchedules expected 200, got %d: %s", orgID, rec.Code, rec.Body.String())
+		}
+		if !containsAll(rec.Body.String(), orgID+"-sched-name") {
+			t.Errorf("org %s: ListReviewSchedules missing its own schedule: %s", orgID, rec.Body.String())
+		}
+	}
+
+	const orgASchedule = "aaaaaaaa-0000-0000-0000-00000000000d"
+	ownershipDB := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			schedID, _ := args[0].(string)
+			orgID, _ := args[1].(string)
+			if schedID == orgASchedule && orgID == testIsoOrgA {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*int)) = 1
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	hDelete := newIsolationHandler(ownershipDB)
+	req := newChiRequestWithOrg(http.MethodDelete, "/api/v1/review-schedules/"+orgASchedule, "id", orgASchedule, testIsoOrgB)
+	rec := httptest.NewRecorder()
+	hDelete.DeleteReviewSchedule(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("org B deleting org A's review schedule: expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCrossOrgIsolation_AccessRequests proves self-service access requests
+// are org-scoped: AdminListAccessRequests filters by org, and
+// AdminDecideAccessRequest 404s on a foreign-org request id.
+func TestCrossOrgIsolation_AccessRequests(t *testing.T) {
+	db := &fakeDB{
+		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+			orgID, _ := args[0].(string)
+			return &fakeQueryRows{rows: [][]interface{}{
+				{orgID + "-req-id", orgID + "-requester", "app-1", "pending", "", "", ""},
+			}}, nil
+		},
+	}
+	h := newIsolationHandler(db)
+	for _, orgID := range []string{testIsoOrgA, testIsoOrgB} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/portal/access-requests", nil).WithContext(orgCtx(orgID))
+		rec := httptest.NewRecorder()
+		h.AdminListAccessRequests(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("org %s: AdminListAccessRequests expected 200, got %d: %s", orgID, rec.Code, rec.Body.String())
+		}
+		if !containsAll(rec.Body.String(), orgID+"-requester") {
+			t.Errorf("org %s: AdminListAccessRequests missing its own request: %s", orgID, rec.Body.String())
+		}
+	}
+
+	const orgARequest = "aaaaaaaa-0000-0000-0000-00000000000e"
+	decideDB := &fakeDB{
+		beginFn: func(_ context.Context) (pgx.Tx, error) {
+			return &fakeTx{
+				queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+					// UPDATE access_requests ... WHERE id=$3 AND status='pending' AND org_id=$4
+					if len(args) < 4 {
+						return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+					}
+					id, _ := args[2].(string)
+					orgID, _ := args[3].(string)
+					if id == orgARequest && orgID == testIsoOrgA {
+						return fakeRow{scanFn: func(dest ...any) error {
+							*(dest[0].(*string)) = "requester-a"
+							*(dest[1].(*string)) = "app-1"
+							return nil
+						}}
+					}
+					return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+				},
+			}, nil
+		},
+	}
+	hDecide := newIsolationHandler(decideDB)
+	req := newChiRequestWithOrgBody(http.MethodPatch, "/api/v1/portal/access-requests/"+orgARequest,
+		[]string{"id"}, []string{orgARequest}, testIsoOrgB, `{"decision":"rejected"}`)
+	rec := httptest.NewRecorder()
+	hDecide.AdminDecideAccessRequest(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("org B deciding org A's access request: expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCrossOrgIsolation_ApprovalRequests proves the approval queue is
+// org-scoped: ListApprovalRequests filters by org, and DecideApproval 404s on
+// a foreign-org approval request id.
+func TestCrossOrgIsolation_ApprovalRequests(t *testing.T) {
+	db := &fakeDB{
+		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+			// ListApprovalRequests binds org_id as arg[0] then status as arg[1].
+			orgID, _ := args[0].(string)
+			return &fakeQueryRows{rows: [][]interface{}{
+				{orgID + "-approval-id", "onboard", orgID + "-requester", []byte("{}"), "pending", "", "", ""},
+			}}, nil
+		},
+	}
+	h := newIsolationHandler(db)
+	for _, orgID := range []string{testIsoOrgA, testIsoOrgB} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/approval-requests", nil).WithContext(orgCtx(orgID))
+		rec := httptest.NewRecorder()
+		h.ListApprovalRequests(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("org %s: ListApprovalRequests expected 200, got %d: %s", orgID, rec.Code, rec.Body.String())
+		}
+		if !containsAll(rec.Body.String(), orgID+"-requester") {
+			t.Errorf("org %s: ListApprovalRequests missing its own request: %s", orgID, rec.Body.String())
+		}
+	}
+
+	const orgAApproval = "aaaaaaaa-0000-0000-0000-00000000000f"
+	decideDB := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			// SELECT ... FROM approval_requests WHERE id = $1 AND org_id = $2
+			if len(args) < 2 {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+			id, _ := args[0].(string)
+			orgID, _ := args[1].(string)
+			if id == orgAApproval && orgID == testIsoOrgA {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = "onboard"
+					*(dest[1].(*string)) = "pending"
+					*(dest[2].(*[]byte)) = []byte(`{"email":"a@example.com"}`)
+					*(dest[3].(*string)) = "some-other-requester"
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	hDecide := newIsolationHandler(decideDB)
+	req := newChiRequestWithOrgBody(http.MethodPatch, "/api/v1/approval-requests/"+orgAApproval,
+		[]string{"id"}, []string{orgAApproval}, testIsoOrgB, `{"decision":"rejected"}`)
+	rec := httptest.NewRecorder()
+	hDecide.DecideApproval(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("org B deciding org A's approval request: expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCrossOrgIsolation_FederationSources proves LDAP/AD federation sources
+// are org-scoped: ListFederationSources filters by org, and
+// GetFederationSource 404s on a foreign-org source id.
+func TestCrossOrgIsolation_FederationSources(t *testing.T) {
+	db := &fakeDB{
+		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+			orgID, _ := args[0].(string)
+			return &fakeQueryRows{rows: [][]interface{}{
+				{orgID + "-fed-id", orgID + "-fed-name", "ldap", "other", "{}", "", "", "", "", ""},
+			}}, nil
+		},
+	}
+	h := newIsolationHandler(db)
+	for _, orgID := range []string{testIsoOrgA, testIsoOrgB} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/federation/sources", nil).WithContext(orgCtx(orgID))
+		rec := httptest.NewRecorder()
+		h.ListFederationSources(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("org %s: ListFederationSources expected 200, got %d: %s", orgID, rec.Code, rec.Body.String())
+		}
+		if !containsAll(rec.Body.String(), orgID+"-fed-name") {
+			t.Errorf("org %s: ListFederationSources missing its own source: %s", orgID, rec.Body.String())
+		}
+	}
+
+	const orgASource = "fed-org-a"
+	getDB := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if len(args) < 2 {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+			id, _ := args[0].(string)
+			orgID, _ := args[1].(string)
+			if id == orgASource && orgID == testIsoOrgA {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = orgASource
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	hGet := newIsolationHandler(getDB)
+	req := newChiRequestWithOrg(http.MethodGet, "/api/v1/federation/sources/"+orgASource, "id", orgASource, testIsoOrgB)
+	rec := httptest.NewRecorder()
+	hGet.GetFederationSource(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("org B reading org A's federation source: expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCrossOrgIsolation_Provisioning proves outbound provisioning config and
+// state are org-scoped: an org-B admin gets 404 reading org A's app's
+// provisioning config, and 404 listing org A's app's provisioning state.
+func TestCrossOrgIsolation_Provisioning(t *testing.T) {
+	const orgAApp = "aaaaaaaa-0000-0000-0000-000000000010"
+
+	// requireAppInCallerOrg's ownership check: app only "found" for org A.
+	appOwnershipDB := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if len(args) < 2 {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+			appID, _ := args[0].(string)
+			orgID, _ := args[1].(string)
+			if appID == orgAApp && orgID == testIsoOrgA {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*int)) = 1
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	h := newIsolationHandler(appOwnershipDB)
+
+	// Org B reading org A's app's provisioning config must 404.
+	reqConfig := newChiRequestWithOrg(http.MethodGet, "/api/v1/apps/"+orgAApp+"/provisioning", "appId", orgAApp, testIsoOrgB)
+	recConfig := httptest.NewRecorder()
+	h.GetProvisioningConfig(recConfig, reqConfig)
+	if recConfig.Code != http.StatusNotFound {
+		t.Fatalf("org B reading org A's provisioning config: expected 404, got %d: %s", recConfig.Code, recConfig.Body.String())
+	}
+
+	// Org B listing org A's app's provisioning state must 404.
+	reqState := newChiRequestWithOrg(http.MethodGet, "/api/v1/apps/"+orgAApp+"/provisioning/state", "appId", orgAApp, testIsoOrgB)
+	recState := httptest.NewRecorder()
+	h.ListProvisioningState(recState, reqState)
+	if recState.Code != http.StatusNotFound {
+		t.Fatalf("org B listing org A's provisioning state: expected 404, got %d: %s", recState.Code, recState.Body.String())
+	}
+
+	// Org A reading its OWN app's provisioning config succeeds (positive control).
+	reqOwn := newChiRequestWithOrg(http.MethodGet, "/api/v1/apps/"+orgAApp+"/provisioning", "appId", orgAApp, testIsoOrgA)
+	recOwn := httptest.NewRecorder()
+	h.GetProvisioningConfig(recOwn, reqOwn)
+	if recOwn.Code != http.StatusOK {
+		t.Fatalf("org A reading its own provisioning config: expected 200, got %d: %s", recOwn.Code, recOwn.Body.String())
+	}
+}
+
+// TestCrossOrgIsolation_Analytics proves analytics snapshots (dashboards) are
+// org-scoped: GetAnalyticsSnapshots only returns the caller's org's series.
+func TestCrossOrgIsolation_Analytics(t *testing.T) {
+	seenOrgIDs := []string{}
+	db := &fakeDB{
+		queryFn: func(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+			if orgID, ok := args[0].(string); ok {
+				seenOrgIDs = append(seenOrgIDs, orgID)
+			}
+			return &fakeQueryRows{rows: [][]interface{}{
+				{int64(1), "2026-01-01T00:00:00Z", 0.9, 5, 80.0, 3, 1, 0},
+			}}, nil
+		},
+	}
+	h := newIsolationHandler(db)
+	h.SetSnapshotter(snapshot.New(db, zap.NewNop()))
+
+	for _, orgID := range []string{testIsoOrgA, testIsoOrgB} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/analytics/snapshots", nil).WithContext(orgCtx(orgID))
+		rec := httptest.NewRecorder()
+		h.GetAnalyticsSnapshots(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("org %s: GetAnalyticsSnapshots expected 200, got %d: %s", orgID, rec.Code, rec.Body.String())
+		}
+	}
+	if len(seenOrgIDs) != 2 || seenOrgIDs[0] != testIsoOrgA || seenOrgIDs[1] != testIsoOrgB {
+		t.Errorf("expected GetSeries to be called with [orgA, orgB] in order, got %v", seenOrgIDs)
 	}
 }
 
