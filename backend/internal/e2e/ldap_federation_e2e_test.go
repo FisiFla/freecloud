@@ -2,12 +2,13 @@
 
 // Package e2e — LDAP/AD federation route smoke tests (F2).
 //
-// Epic C's federation endpoints are JWT-gated (RequirePermission). As this
-// harness has no admin-JWT path (see scim_out_e2e_test.go), we verify the
-// federation routes are wired into the live stack and correctly auth-gated,
-// consistent with the rest of the suite. The openldap-e2e container is brought
-// up as a healthy stack dependency; a fully authenticated federation CRUD +
-// live LDAP sync against it is deferred — see docs/PARITY.md.
+// Epic C's federation endpoints are JWT-gated (RequirePermission). This file
+// verifies the routes are wired into the live stack and correctly reject
+// unauthenticated requests (defense-in-depth alongside the RBAC unit tests).
+// A1 (admin_auth.go) added a real admin-JWT path, so the authenticated CRUD +
+// live connection-test + live sync round-trip against the openldap-e2e
+// container is now exercised in admin_authenticated_e2e_test.go
+// (TestE2E_Admin_FederationSource_CRUD) rather than deferred.
 package e2e
 
 import (

@@ -7,6 +7,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.keycloak.authentication.AuthenticationFlowContext;
 import org.keycloak.authentication.AuthenticationFlowError;
+import org.keycloak.common.ClientConnection;
 import org.keycloak.forms.login.LoginFormsProvider;
 import org.keycloak.models.ClientModel;
 import org.keycloak.models.UserModel;
@@ -36,6 +37,7 @@ class PostureCheckAuthenticatorTest {
     @Mock HttpHeaders httpHeaders;
     @Mock AuthenticationSessionModel authSession;
     @Mock ClientModel client;
+    @Mock ClientConnection connection;
 
     @BeforeEach
     void setUp() {
@@ -47,6 +49,8 @@ class PostureCheckAuthenticatorTest {
         lenient().when(context.form()).thenReturn(forms);
         lenient().when(forms.setAttribute(any(), any())).thenReturn(forms);
         lenient().when(forms.createForm(any())).thenReturn(response);
+        lenient().when(context.getConnection()).thenReturn(connection);
+        lenient().when(connection.getRemoteAddr()).thenReturn("10.0.0.5");
     }
 
     @Test
@@ -143,5 +147,67 @@ class PostureCheckAuthenticatorTest {
         auth.authenticate(context);
         verify(context).failure(AuthenticationFlowError.ACCESS_DENIED);
         verify(context, never()).success();
+    }
+
+    // ---- A3: client-IP forwarding ----
+
+    @Test
+    void testClientIp_TrustProxyOff_UsesDirectPeerAddress_IgnoresSpoofedXFF() {
+        when(httpHeaders.getHeaderString("X-Forwarded-For")).thenReturn("6.6.6.6");
+        AtomicReference<String> capturedBody = new AtomicReference<>("");
+
+        PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
+            "http://localhost:9999/no-server", "token", true, false,
+            (url, token, body) -> {
+                capturedBody.set(body);
+                return new BackendResponse(200, "{\"success\":true,\"data\":{\"allow\":true}}");
+            }
+        );
+        auth.authenticate(context);
+
+        verify(context).success();
+        // TRUST_PROXY=false: the spoofed XFF header must be completely ignored,
+        // even though it was present — only the direct peer address is sent.
+        assertTrue(capturedBody.get().contains("\"clientIp\":\"10.0.0.5\""));
+        assertTrue(!capturedBody.get().contains("6.6.6.6"));
+    }
+
+    @Test
+    void testClientIp_TrustProxyOn_UsesRightmostForwardedForHop() {
+        // Attacker-forged leftmost entry + the real trusted-proxy-appended
+        // rightmost entry — only the rightmost must be used.
+        when(httpHeaders.getHeaderString("X-Forwarded-For")).thenReturn("6.6.6.6, 203.0.113.9");
+        AtomicReference<String> capturedBody = new AtomicReference<>("");
+
+        PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
+            "http://localhost:9999/no-server", "token", true, true,
+            (url, token, body) -> {
+                capturedBody.set(body);
+                return new BackendResponse(200, "{\"success\":true,\"data\":{\"allow\":true}}");
+            }
+        );
+        auth.authenticate(context);
+
+        verify(context).success();
+        assertTrue(capturedBody.get().contains("\"clientIp\":\"203.0.113.9\""));
+        assertTrue(!capturedBody.get().contains("6.6.6.6"));
+    }
+
+    @Test
+    void testClientIp_TrustProxyOn_NoHeaderFallsBackToDirectPeer() {
+        when(httpHeaders.getHeaderString("X-Forwarded-For")).thenReturn(null);
+        AtomicReference<String> capturedBody = new AtomicReference<>("");
+
+        PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
+            "http://localhost:9999/no-server", "token", true, true,
+            (url, token, body) -> {
+                capturedBody.set(body);
+                return new BackendResponse(200, "{\"success\":true,\"data\":{\"allow\":true}}");
+            }
+        );
+        auth.authenticate(context);
+
+        verify(context).success();
+        assertTrue(capturedBody.get().contains("\"clientIp\":\"10.0.0.5\""));
     }
 }

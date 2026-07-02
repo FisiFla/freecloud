@@ -22,6 +22,7 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/bootstrap"
 	"github.com/FisiFla/freecloud/backend/internal/config"
 	"github.com/FisiFla/freecloud/backend/internal/db"
+	"github.com/FisiFla/freecloud/backend/internal/geoip"
 	"github.com/FisiFla/freecloud/backend/internal/handlers"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/leader"
@@ -139,8 +140,9 @@ func runServer() {
 	logger.Info("database schema is current", zap.Int("schema_version", db.LatestMigrationID()))
 
 	// Self-bootstrap Keycloak idempotently under a pg advisory lock so only one
-	// replica runs provisioning at a time. Returns the active service-account secret.
-	kcSecret, err := func() (string, error) {
+	// replica runs provisioning at a time. Returns the active service-account
+	// secret and (e2e-only) the seeded admin's Keycloak user ID.
+	kcSecret, e2eAdminUserID, err := func() (string, string, error) {
 		// Acquiring the lock can legitimately take as long as another
 		// replica's bootstrap run does (Keycloak cold start + full realm
 		// provisioning, up to the 4-minute budget below) — use a dedicated,
@@ -161,13 +163,13 @@ func runServer() {
 
 		conn, err := pool.Acquire(lockCtx)
 		if err != nil {
-			return "", fmt.Errorf("acquire conn for bootstrap lock: %w", err)
+			return "", "", fmt.Errorf("acquire conn for bootstrap lock: %w", err)
 		}
 		defer conn.Release()
 		if err := db.AcquireAdvisoryLock(lockCtx, conn, 7919876543, 5*time.Minute, func() {
 			logger.Info("bootstrap: waiting for another replica to finish bootstrapping")
 		}); err != nil {
-			return "", fmt.Errorf("acquire bootstrap advisory lock: %w", err)
+			return "", "", fmt.Errorf("acquire bootstrap advisory lock: %w", err)
 		}
 		defer func() { _, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(7919876543)") }()
 
@@ -178,6 +180,13 @@ func runServer() {
 		// everything is already in place instead of skipping the call.
 		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 4*time.Minute)
 		defer bootstrapCancel()
+		// E2E_SEED_ADMIN seeds a known admin user + enables direct-access-grant on
+		// the dashboard client so the e2e harness can mint a real admin JWT
+		// directly from Keycloak's token endpoint. FAIL-CLOSED: only honoured
+		// when APP_ENV is development/test (config.IsDevOrE2E) — the flag itself
+		// is ignored in any other environment, so a stray env var can never
+		// enable this in production.
+		seedE2EAdmin := config.IsDevOrE2E() && os.Getenv("E2E_SEED_ADMIN") == "true"
 		result, err := bootstrap.Run(bootstrapCtx, bootstrap.Config{
 			KeycloakURL:                  cfg.KeycloakURL,
 			AdminUsername:                cfg.BootstrapAdminUser,
@@ -185,16 +194,47 @@ func runServer() {
 			TargetRealm:                  cfg.KeycloakRealm,
 			ServiceAccountSecretOverride: cfg.KeycloakClientSecret,
 			CreateDemoUser:               os.Getenv("CREATE_DEMO_USER") == "true",
+			SeedE2EAdmin:                 seedE2EAdmin,
+			E2EAdminUsername:             os.Getenv("E2E_ADMIN_USERNAME"),
+			E2EAdminPassword:             os.Getenv("E2E_ADMIN_PASSWORD"),
 		})
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		return result.ServiceAccountSecret, nil
+		return result.ServiceAccountSecret, result.E2EAdminUserID, nil
 	}()
 	if err != nil {
 		logger.Fatal("keycloak bootstrap failed", zap.Error(err))
 	}
 	logger.Info("keycloak bootstrap complete")
+
+	// bootstrap only talks to Keycloak (no DB handle), but the seeded e2e
+	// admin needs a matching `users` row to pass access-eval's local-user
+	// lookup — otherwise it can authenticate but every posture/access
+	// decision denies with "user not found or disabled". Best-effort: this
+	// only ever runs when E2EAdminUserID is non-empty (i.e. only under the
+	// same dev/e2e gate as SeedE2EAdmin itself). The email must match what
+	// bootstrap.ensureE2EAdmin actually used (its own default when the env
+	// var is unset), or this row's email won't match the Keycloak account.
+	if e2eAdminUserID != "" {
+		e2eAdminUsername := os.Getenv("E2E_ADMIN_USERNAME")
+		if e2eAdminUsername == "" {
+			e2eAdminUsername = "e2e-admin"
+		}
+		// Fresh context: the outer `ctx` above was scoped to the initial DB
+		// connect (10s) and is long expired by the time bootstrap (up to 4m)
+		// completes.
+		upsertCtx, upsertCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer upsertCancel()
+		if _, err := pool.Exec(upsertCtx,
+			`INSERT INTO users (keycloak_user_id, email, first_name, last_name, role)
+			 VALUES ($1, $2, 'E2E', 'Admin', 'admin')
+			 ON CONFLICT (keycloak_user_id) DO NOTHING`,
+			e2eAdminUserID, e2eAdminUsername+"@freecloud.local",
+		); err != nil {
+			logger.Warn("failed to upsert local users row for seeded e2e admin", zap.Error(err))
+		}
+	}
 
 	// Initialize Keycloak client
 	kcClient := keycloak.NewClient(
@@ -305,6 +345,21 @@ func runServer() {
 	handler.SetSnapshotter(snap)
 	handler.SetProvisionEngine(provisionEngine)
 	handler.SetLDAPBindPassword(cfg.LDAPBindPassword)
+
+	// A2 — Live GeoIP (optional). GEOIP_MMDB_PATH unset keeps the handlers
+	// package's no-op default (fails closed: unknown country whenever a
+	// policy sets a geo allowlist). When set, a bad/corrupt/unreadable mmdb
+	// must refuse to start rather than silently keep every geo-gated login
+	// denied — Open() itself is fail-closed, so any error here is fatal.
+	if cfg.GeoIPMMDBPath != "" {
+		geoResolver, err := geoip.Open(cfg.GeoIPMMDBPath)
+		if err != nil {
+			logger.Fatal("geoip: failed to load GEOIP_MMDB_PATH", zap.Error(err))
+		}
+		defer geoResolver.Close()
+		handler.SetGeoIPLookup(geoResolver)
+		logger.Info("geoip: live GeoIP resolver loaded", zap.String("path", cfg.GeoIPMMDBPath))
+	}
 
 	// Initialize JWT auth middleware, wrapping it with API token support (C2).
 	baseAuth := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)

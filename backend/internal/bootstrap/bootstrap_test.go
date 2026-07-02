@@ -21,6 +21,17 @@ type fakeKC struct {
 	realmCreateCalls  int32
 	groupCreateCalls  int32
 	clientCreateCalls int32
+
+	// A1: e2e-admin seeding.
+	e2eAdminExists           bool
+	e2eAdminUserCreateCalls  int32
+	e2eAdminPasswordSetCalls int32
+	e2eAdminHasRole          bool
+	dashboardDirectGrants    bool
+	dashboardUpdateCalls     int32
+
+	// A3: posture-flow execution ordering.
+	lowerPriorityCalls int32
 }
 
 func newFakeKC(t *testing.T) *fakeKC {
@@ -116,7 +127,10 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 					_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
 				}
 			case "freecloud-dashboard":
-				_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "dash-uuid", "clientId": "freecloud-dashboard"}})
+				_ = json.NewEncoder(w).Encode([]map[string]interface{}{{
+					"id": "dash-uuid", "clientId": "freecloud-dashboard",
+					"directAccessGrantsEnabled": f.dashboardDirectGrants,
+				}})
 			case "realm-management":
 				_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "rm-uuid", "clientId": "realm-management"}})
 			default:
@@ -160,22 +174,71 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// GET /admin/realms/freecloud/users (service account lookup + demo user check)
+	// GET /admin/realms/freecloud/users (service account / demo / e2e-admin lookup)
 	if (p == "/admin/realms/freecloud/users" || p == "/admin/realms/freecloud/users/") && m == http.MethodGet {
 		username := r.URL.Query().Get("username")
 		w.Header().Set("Content-Type", "application/json")
-		if strings.HasPrefix(username, "service-account-") {
+		switch {
+		case strings.HasPrefix(username, "service-account-"):
 			_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "sa-user-uuid", "username": username}})
-		} else {
+		case username == "e2e-admin" && f.e2eAdminExists:
+			_ = json.NewEncoder(w).Encode([]map[string]string{{"id": "e2e-admin-uuid", "username": username}})
+		default:
 			_ = json.NewEncoder(w).Encode([]map[string]string{})
 		}
 		return
 	}
 
-	// POST /admin/realms/freecloud/users (demo user create)
+	// POST /admin/realms/freecloud/users (demo user / e2e-admin create)
 	if (p == "/admin/realms/freecloud/users" || p == "/admin/realms/freecloud/users/") && m == http.MethodPost {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if username, ok := body["username"].(string); ok && username == "e2e-admin" {
+			f.e2eAdminExists = true
+			atomic.AddInt32(&f.e2eAdminUserCreateCalls, 1)
+			w.Header().Set("Location", f.srv.URL+"/admin/realms/freecloud/users/e2e-admin-uuid")
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
 		w.Header().Set("Location", f.srv.URL+"/admin/realms/freecloud/users/demo-uuid")
 		w.WriteHeader(http.StatusCreated)
+		return
+	}
+
+	// PUT /admin/realms/freecloud/users/e2e-admin-uuid/reset-password
+	if p == "/admin/realms/freecloud/users/e2e-admin-uuid/reset-password" && m == http.MethodPut {
+		atomic.AddInt32(&f.e2eAdminPasswordSetCalls, 1)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	// GET/POST /admin/realms/freecloud/users/e2e-admin-uuid/role-mappings/realm
+	if p == "/admin/realms/freecloud/users/e2e-admin-uuid/role-mappings/realm" {
+		if m == http.MethodGet {
+			w.Header().Set("Content-Type", "application/json")
+			if f.e2eAdminHasRole {
+				_, _ = w.Write([]byte(`[{"id":"role-admin-id","name":"admin"}]`))
+			} else {
+				_, _ = w.Write([]byte(`[]`))
+			}
+			return
+		}
+		if m == http.MethodPost {
+			f.e2eAdminHasRole = true
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
+	// PUT /admin/realms/freecloud/clients/dash-uuid (enable direct access grants)
+	if p == "/admin/realms/freecloud/clients/dash-uuid" && m == http.MethodPut {
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if dag, ok := body["directAccessGrantsEnabled"].(bool); ok {
+			f.dashboardDirectGrants = dag
+		}
+		atomic.AddInt32(&f.dashboardUpdateCalls, 1)
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
@@ -215,23 +278,40 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// POST add posture execution
+	// POST add posture execution (into the "forms" sub-flow — see
+	// ensurePostureFlow's formsFlowAlias).
 	if strings.HasSuffix(p, "/executions/execution") && m == http.MethodPost {
 		w.WriteHeader(http.StatusCreated)
 		return
 	}
 
-	// GET/PUT executions for posture flow
-	if strings.HasSuffix(p, "/browser-with-posture/executions") {
+	// GET/PUT executions for the "forms" sub-flow (URL-encoded space in the
+	// alias "browser-with-posture forms" — accept either encoding).
+	if strings.HasSuffix(p, "/browser-with-posture%20forms/executions") || strings.HasSuffix(p, "/browser-with-posture forms/executions") {
 		if m == http.MethodGet {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`[{"id":"exec-1","providerId":"freecloud-posture-check","requirement":"DISABLED"}]`))
+			// Two siblings at level 0 (Username Password Form + our posture
+			// check) plus one nested at level 1 (inside a Conditional OTP
+			// sub-flow), matching the real shape closely enough to exercise
+			// the same-level counting logic in ensurePostureFlow.
+			_, _ = w.Write([]byte(`[
+				{"id":"exec-pwd","providerId":"auth-username-password-form","requirement":"REQUIRED","level":0},
+				{"id":"exec-otp-nested","providerId":"auth-otp-form","requirement":"REQUIRED","level":1},
+				{"id":"exec-1","providerId":"freecloud-posture-check","requirement":"DISABLED","level":0}
+			]`))
 			return
 		}
 		if m == http.MethodPut {
 			w.WriteHeader(http.StatusAccepted)
 			return
 		}
+	}
+
+	// POST lower-priority for the posture execution.
+	if strings.HasSuffix(p, "/executions/exec-1/lower-priority") && m == http.MethodPost {
+		atomic.AddInt32(&f.lowerPriorityCalls, 1)
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 
 	// Demo user password reset
@@ -355,6 +435,136 @@ func TestBootstrap_SecretReturnedOnSecondRun(t *testing.T) {
 	}
 	if result.ServiceAccountSecret == "old-secret" {
 		t.Error("expected secret to be regenerated, but got the old secret")
+	}
+}
+
+// TestBootstrap_PostureFlow_ReordersExecutionPastSiblings verifies the A3 fix:
+// the posture-check execution is added inside the "forms" sub-flow and moved
+// below its one REQUIRED sibling at the same level (Username Password Form)
+// via lower-priority, so it never runs before a user is authenticated.
+// Regression guard for the real bug this caught: a REQUIRED authenticator
+// with requiresUser()==true placed before/alongside the credential form
+// causes Keycloak to throw "requires user to be set... but user is not set
+// yet" on every login attempt when POSTURE_CHECK_ENABLED=true.
+func TestBootstrap_PostureFlow_ReordersExecutionPastSiblings(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	_, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	// The fake's execution list has exactly one REQUIRED sibling at the same
+	// level as the posture check (Username Password Form) plus one nested
+	// execution at a deeper level that must NOT be counted — so exactly one
+	// lower-priority call is expected, not two.
+	if f.lowerPriorityCalls != 1 {
+		t.Errorf("expected exactly 1 lower-priority call (past the one same-level sibling), got %d", f.lowerPriorityCalls)
+	}
+}
+
+// TestBootstrap_SeedE2EAdmin_CreatesUserAndEnablesDirectGrant verifies the A1
+// e2e-admin seam: when SeedE2EAdmin is set, bootstrap creates the admin user,
+// grants the "admin" realm role, sets its password, and enables direct access
+// grants on the dashboard client.
+func TestBootstrap_SeedE2EAdmin_CreatesUserAndEnablesDirectGrant(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	f.clientExists = true
+	f.clientSecret = "svc-secret"
+
+	_, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+		SeedE2EAdmin:  true,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if f.e2eAdminUserCreateCalls != 1 {
+		t.Errorf("expected 1 e2e-admin user create call, got %d", f.e2eAdminUserCreateCalls)
+	}
+	if f.e2eAdminPasswordSetCalls != 1 {
+		t.Errorf("expected 1 e2e-admin password set call, got %d", f.e2eAdminPasswordSetCalls)
+	}
+	if !f.e2eAdminHasRole {
+		t.Error("expected e2e-admin to be granted the admin realm role")
+	}
+	if !f.dashboardDirectGrants {
+		t.Error("expected direct access grants to be enabled on the dashboard client")
+	}
+}
+
+// TestBootstrap_SeedE2EAdmin_Idempotent verifies a second run does not
+// re-create the user or re-grant the role, but does re-sync the password.
+func TestBootstrap_SeedE2EAdmin_Idempotent(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	f.clientExists = true
+	f.clientSecret = "svc-secret"
+	f.e2eAdminExists = true
+	f.e2eAdminHasRole = true
+	f.dashboardDirectGrants = true
+
+	_, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+		SeedE2EAdmin:  true,
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if f.e2eAdminUserCreateCalls != 0 {
+		t.Errorf("expected e2e-admin user not to be re-created, got %d create calls", f.e2eAdminUserCreateCalls)
+	}
+	if f.e2eAdminPasswordSetCalls != 1 {
+		t.Errorf("expected password to be (re-)synced exactly once, got %d calls", f.e2eAdminPasswordSetCalls)
+	}
+	if f.dashboardUpdateCalls != 0 {
+		t.Errorf("expected dashboard client not to be updated when direct grants already enabled, got %d calls", f.dashboardUpdateCalls)
+	}
+}
+
+// TestBootstrap_SeedE2EAdminDisabled_NoAdminUserCreated is the fail-closed
+// regression guard: when SeedE2EAdmin is false (the default), bootstrap must
+// never create the e2e-admin user or touch the dashboard client's grant flags.
+func TestBootstrap_SeedE2EAdminDisabled_NoAdminUserCreated(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	f.clientExists = true
+	f.clientSecret = "svc-secret"
+
+	_, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+		// SeedE2EAdmin intentionally omitted (false).
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if f.e2eAdminUserCreateCalls != 0 {
+		t.Errorf("SeedE2EAdmin=false must never create the e2e-admin user, got %d create calls", f.e2eAdminUserCreateCalls)
+	}
+	if f.dashboardUpdateCalls != 0 {
+		t.Errorf("SeedE2EAdmin=false must never touch the dashboard client, got %d update calls", f.dashboardUpdateCalls)
 	}
 }
 

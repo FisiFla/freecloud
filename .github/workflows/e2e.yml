@@ -49,6 +49,15 @@ jobs:
           go-version: '1.25'
           cache-dependency-path: backend/go.sum
 
+      - name: Generate A2 GeoIP e2e fixture
+        # A tiny, non-MaxMind-licensed mmdb (NOT a real GeoLite2 database) so
+        # the geo-condition enforcement e2e test has a live GeoIP lookup to
+        # exercise. Real deployments supply their own operator-downloaded
+        # GeoLite2 file — see docs/DEPLOYMENT.md "GeoIP (MaxMind GeoLite2)".
+        run: |
+          mkdir -p backend/.e2e-fixtures
+          cd backend && go run ./cmd/genfixturemmdb -out .e2e-fixtures/geoip-fixture.mmdb
+
       - name: Build e2e stack
         # docker/Dockerfile.keycloak is a multi-stage build: maven stage builds the jar,
         # second stage bakes it into the Keycloak image.  No Java/Maven needed here
@@ -84,6 +93,19 @@ jobs:
           E2E_ACCESS_EVAL_TOKEN: e2e-access-eval-token
           # F2: LDAP URL exposed for reference (tests use the compose service name internally).
           E2E_LDAP_URL: ldap://localhost:1389
+          # A1: admin-JWT path — Keycloak is reachable at localhost:8083 from the
+          # runner; credentials match E2E_SEED_ADMIN in docker-compose.e2e.yml.
+          E2E_KEYCLOAK_URL: http://localhost:8083
+          E2E_KEYCLOAK_REALM: freecloud-e2e
+          E2E_ADMIN_USERNAME: e2e-admin
+          E2E_ADMIN_PASSWORD: e2e-admin-password
+          E2E_DASHBOARD_CLIENT_ID: freecloud-dashboard
+          # A3: reverse proxy in front of Keycloak for the client-IP-forwarding
+          # test. Port 8089 — 8086/8087 are reserved for the B4 HA overlay's
+          # lb-e2e / backend-e2e-2 in the e2e-ha job below.
+          E2E_KEYCLOAK_PROXY_URL: http://localhost:8089
+          # A1: downstream SCIM mock target for the provisioning round-trip test.
+          E2E_SCIM_MOCK_TOKEN: e2e-scim-mock-token
         run: |
           cd backend && go test -tags=e2e -v -timeout 5m ./internal/e2e/...
 
@@ -115,6 +137,16 @@ jobs:
         with:
           go-version: '1.25'
           cache-dependency-path: backend/go.sum
+
+      - name: Generate A2 GeoIP e2e fixture
+        # Same fixture as the e2e job: the base compose bind-mounts
+        # backend/.e2e-fixtures/geoip-fixture.mmdb into backend-e2e, and the
+        # backend fails closed (refuses to start) when GEOIP_MMDB_PATH is
+        # unreadable — without this step Docker creates an empty DIRECTORY at
+        # the missing host path and both HA replicas die on boot.
+        run: |
+          mkdir -p backend/.e2e-fixtures
+          cd backend && go run ./cmd/genfixturemmdb -out .e2e-fixtures/geoip-fixture.mmdb
 
       - name: Build HA e2e stack
         run: |

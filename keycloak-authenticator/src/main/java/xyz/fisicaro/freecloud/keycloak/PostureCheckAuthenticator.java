@@ -30,6 +30,7 @@ public class PostureCheckAuthenticator implements Authenticator {
     private final String evalUrl;
     private final String evalToken;
     private final boolean postureEnabled;
+    private final boolean trustProxy;
     private final BackendCaller caller;
 
     /** No-arg constructor used by the factory — reads config from environment. */
@@ -37,21 +38,33 @@ public class PostureCheckAuthenticator implements Authenticator {
         this(
             System.getenv("ACCESS_EVAL_URL")   != null ? System.getenv("ACCESS_EVAL_URL")   : "",
             System.getenv("ACCESS_EVAL_TOKEN")  != null ? System.getenv("ACCESS_EVAL_TOKEN")  : "",
-            "true".equalsIgnoreCase(System.getenv("POSTURE_CHECK_ENABLED"))
+            "true".equalsIgnoreCase(System.getenv("POSTURE_CHECK_ENABLED")),
+            "true".equalsIgnoreCase(System.getenv("TRUST_PROXY"))
         );
     }
 
-    /** Parametric constructor used by callers who supply only the three core settings. */
+    /** Parametric constructor used by callers who supply only the four core settings. */
+    public PostureCheckAuthenticator(String evalUrl, String evalToken, boolean postureEnabled, boolean trustProxy) {
+        this(evalUrl, evalToken, postureEnabled, trustProxy, PostureCheckAuthenticator::httpCall);
+    }
+
+    /** Legacy 3-arg constructor (TRUST_PROXY defaults off) — kept for existing callers/tests. */
     public PostureCheckAuthenticator(String evalUrl, String evalToken, boolean postureEnabled) {
-        this(evalUrl, evalToken, postureEnabled, PostureCheckAuthenticator::httpCall);
+        this(evalUrl, evalToken, postureEnabled, false, PostureCheckAuthenticator::httpCall);
     }
 
     /** Full constructor — used by tests to inject a fake BackendCaller. */
-    PostureCheckAuthenticator(String evalUrl, String evalToken, boolean postureEnabled, BackendCaller caller) {
+    PostureCheckAuthenticator(String evalUrl, String evalToken, boolean postureEnabled, boolean trustProxy, BackendCaller caller) {
         this.evalUrl        = evalUrl   != null ? evalUrl.trim()   : "";
         this.evalToken      = evalToken != null ? evalToken.trim() : "";
         this.postureEnabled = postureEnabled;
+        this.trustProxy     = trustProxy;
         this.caller         = caller;
+    }
+
+    /** 4-arg test constructor (TRUST_PROXY defaults off) — kept for existing tests using this arity. */
+    PostureCheckAuthenticator(String evalUrl, String evalToken, boolean postureEnabled, BackendCaller caller) {
+        this(evalUrl, evalToken, postureEnabled, false, caller);
     }
 
     /** Default real HTTP implementation used as a method reference. */
@@ -103,10 +116,18 @@ public class PostureCheckAuthenticator implements Authenticator {
             deviceId = deviceCookie.getValue();
         }
 
+        // A3: resolve the client IP for network/geo conditions. Only trusts
+        // X-Forwarded-For when TRUST_PROXY=true (see ClientIPResolver for the
+        // rightmost-hop rationale); otherwise always the direct TCP peer.
+        String remoteAddr = context.getConnection() != null ? context.getConnection().getRemoteAddr() : "";
+        String forwardedFor = context.getHttpRequest().getHttpHeaders().getHeaderString("X-Forwarded-For");
+        String clientIp = ClientIPResolver.resolve(remoteAddr, forwardedFor, trustProxy);
+
         String requestBody = Json.createObjectBuilder()
             .add("userId", userId)
             .add("appId", appId)
             .add("deviceId", deviceId)
+            .add("clientIp", clientIp)
             .build()
             .toString();
 
