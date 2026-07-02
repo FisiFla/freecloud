@@ -21,16 +21,30 @@ type GitHubConnector struct {
 	orgName     string
 	bearerToken string
 	client      *http.Client
+	// apiBase defaults to githubAPIBase. Overridable via
+	// NewGitHubConnectorWithBaseURL for GitHub Enterprise Server's on-prem
+	// API endpoint (A4's live-verification tool) or, from tests in this
+	// package, an httptest.Server.
+	apiBase string
 }
 
 const githubAPIBase = "https://api.github.com"
 
-// NewGitHubConnector creates a GitHub org membership connector.
+// NewGitHubConnector creates a GitHub org membership connector targeting
+// github.com's API.
 func NewGitHubConnector(orgName, bearerToken string) *GitHubConnector {
+	return NewGitHubConnectorWithBaseURL(orgName, bearerToken, githubAPIBase)
+}
+
+// NewGitHubConnectorWithBaseURL creates a GitHub org membership connector
+// targeting a specific API base URL — use this for GitHub Enterprise Server
+// (on-prem), whose API root is not api.github.com.
+func NewGitHubConnectorWithBaseURL(orgName, bearerToken, apiBase string) *GitHubConnector {
 	return &GitHubConnector{
 		orgName:     orgName,
 		bearerToken: bearerToken,
 		client:      &http.Client{Timeout: 15 * time.Second},
+		apiBase:     strings.TrimRight(apiBase, "/"),
 	}
 }
 
@@ -40,7 +54,7 @@ func (g *GitHubConnector) Name() string { return "github" }
 // The username is derived from the email prefix (before "@").
 func (g *GitHubConnector) ProvisionUser(ctx context.Context, user ProvisionableUser) (string, error) {
 	username := githubUsername(user.Email)
-	url := fmt.Sprintf("%s/orgs/%s/memberships/%s", githubAPIBase, g.orgName, username)
+	url := fmt.Sprintf("%s/orgs/%s/memberships/%s", g.apiBase, g.orgName, username)
 
 	payload := map[string]string{"role": "member"}
 	body, _ := json.Marshal(payload)
@@ -59,7 +73,7 @@ func (g *GitHubConnector) ProvisionUser(ctx context.Context, user ProvisionableU
 
 // DeprovisionUser removes the user from the GitHub organization.
 func (g *GitHubConnector) DeprovisionUser(ctx context.Context, remoteID string) error {
-	url := fmt.Sprintf("%s/orgs/%s/members/%s", githubAPIBase, g.orgName, remoteID)
+	url := fmt.Sprintf("%s/orgs/%s/members/%s", g.apiBase, g.orgName, remoteID)
 
 	resp, err := g.doRequest(ctx, http.MethodDelete, url, nil)
 	if err != nil {

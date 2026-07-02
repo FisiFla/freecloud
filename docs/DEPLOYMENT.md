@@ -184,9 +184,48 @@ PROVISIONING_MASTER_KEY=<output of the command above>
 In development / test mode only, a missing key falls back to base64 storage.
 Production startup fails closed when the key is missing or malformed.
 
-> **Note:** Slack and GitHub live sync still need tenant-level manual
-> verification with real API credentials. The fast verification suite covers
-> wiring and unit behavior only.
+### Connector Verification
+
+Every connector's exact request/response contract (methods, paths, headers,
+bodies — including the offboard-deactivation path) is pinned by recorded-
+fixture tests that run in the normal test suite:
+`backend/internal/provisioning/{github,slack}_connector_contract_test.go`.
+These assert against real GitHub REST API and Slack SCIM API shapes without
+requiring any live credentials, and run in CI on every change.
+
+**GitHub Org** is FreeCloud's own naming — it manages GitHub Organization
+*membership* via GitHub's REST API
+(`PUT`/`DELETE /orgs/{org}/memberships|members/{username}`), not GitHub's
+separate Enterprise SCIM v2 API. This is intentional (org membership covers
+the common "grant/revoke access to the org" use case without requiring a
+GitHub Enterprise plan) — see the contract test file's header for details if
+you're expecting SCIM semantics here.
+
+**Optional live-tenant verification.** The recorded-fixture tests above prove
+the connector code is correct against the documented API contract, but
+they've never run against a real GitHub org or Slack workspace. To do that:
+
+```bash
+# GitHub — requires a PAT/App token with org:write + admin:org, and an
+# existing GitHub account you control in the target org (membership invites
+# an existing user; it can't create a GitHub account).
+GITHUB_SCIM_TOKEN=ghp_xxx \
+GITHUB_SCIM_ORG=my-test-org \
+GITHUB_SCIM_TEST_USERNAME=my-disposable-test-account \
+make verify-provisioning-live
+```
+
+Each target is skipped entirely (exit 0) when its env vars are absent, so
+`make verify-provisioning-live` is safe to leave in CI with no credentials
+configured — it just reports "SKIPPED" for both. `GITHUB_SCIM_BASE_URL`
+overrides the API root for GitHub Enterprise Server (on-prem).
+
+**Slack live verification stays parked.** It requires a paid Slack plan with
+SCIM provisioning enabled — see
+[Slack's SCIM API docs](https://docs.slack.dev/admins/scim-api/). If/when a
+suitable workspace is available, set `SLACK_SCIM_TOKEN` +
+`SLACK_SCIM_TEST_EMAIL` and the same `make verify-provisioning-live` target
+exercises create → update → deactivate against it and cleans up.
 
 ## Reports
 
