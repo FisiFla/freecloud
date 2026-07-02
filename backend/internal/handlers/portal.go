@@ -178,14 +178,19 @@ func (h *Handler) PortalRequestAccess(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	var id string
 	err := h.db.QueryRow(r.Context(),
-		`INSERT INTO access_requests (requester_id, app_id, reason)
-		 VALUES ($1, $2, $3)
+		`INSERT INTO access_requests (requester_id, app_id, reason, org_id)
+		 VALUES ($1, $2, $3, $4)
 		 ON CONFLICT (requester_id, app_id, status) DO NOTHING
 		 RETURNING id`,
-		uid, req.AppID, req.Reason,
+		uid, req.AppID, req.Reason, oc.OrgID,
 	).Scan(&id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -212,12 +217,18 @@ func (h *Handler) AdminListAccessRequests(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 	rows, err := h.db.Query(r.Context(),
 		`SELECT ar.id, ar.requester_id, ar.app_id::text, ar.status,
 		        COALESCE(ar.reason, ''), COALESCE(ar.decided_by, ''), ar.created_at
 		 FROM access_requests ar
-		 WHERE ar.status = 'pending'
+		 WHERE ar.status = 'pending' AND ar.org_id = $1
 		 ORDER BY ar.created_at`,
+		oc.OrgID,
 	)
 	if err != nil {
 		h.logger.Error("admin: failed to list access requests", zap.Error(err))
@@ -280,6 +291,11 @@ func (h *Handler) AdminDecideAccessRequest(w http.ResponseWriter, r *http.Reques
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
@@ -295,9 +311,9 @@ func (h *Handler) AdminDecideAccessRequest(w http.ResponseWriter, r *http.Reques
 	err = tx.QueryRow(ctx,
 		`UPDATE access_requests
 		 SET status = $1, decided_by = $2, decided_at = NOW()
-		 WHERE id = $3 AND status = 'pending'
+		 WHERE id = $3 AND status = 'pending' AND org_id = $4
 		 RETURNING requester_id, app_id::text`,
-		req.Decision, actorID, id,
+		req.Decision, actorID, id, oc.OrgID,
 	).Scan(&requesterID, &appID)
 	if err != nil {
 		h.logger.Error("failed to decide access request", zap.Error(err))
