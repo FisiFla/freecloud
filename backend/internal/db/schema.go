@@ -781,6 +781,14 @@ func WaitForSchema(ctx context.Context, pool *pgxpool.Pool, timeout time.Duratio
 // a pg_advisory_lock for the duration of the run so concurrent callers (e.g.
 // two `migrate` jobs racing during a rolling deploy) serialize rather than
 // both seeing — and racing to apply — the same pending migration.
+//
+// The lock is acquired via AcquireAdvisoryLock's try-lock poll rather than a
+// blocking `pg_advisory_lock`: a blocking acquire is, from Postgres's point
+// of view, one long-running statement, and a server-side statement_timeout
+// (set on some callers' pools) would cancel a legitimately waiting caller
+// out from under it. ctx's own deadline (if any) still governs overall —
+// the fixed timeout below is only an upper bound on the *wait*, not a floor
+// under whatever budget the caller's ctx already carries.
 func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	logger := zap.L()
 
@@ -789,7 +797,9 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("acquire connection for migration lock: %w", err)
 	}
 	defer conn.Release()
-	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock($1)`, int64(migrationLockID)); err != nil {
+	if err := AcquireAdvisoryLock(ctx, conn, int64(migrationLockID), 5*time.Minute, func() {
+		logger.Info("migrate: waiting for another migrate job to finish applying migrations")
+	}); err != nil {
 		return fmt.Errorf("acquire migration advisory lock: %w", err)
 	}
 	defer func() {

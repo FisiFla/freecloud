@@ -141,13 +141,21 @@ func runServer() {
 	// Self-bootstrap Keycloak idempotently under a pg advisory lock so only one
 	// replica runs provisioning at a time. Returns the active service-account secret.
 	kcSecret, err := func() (string, error) {
-		// Acquiring the lock can legitimately block for as long as another
-		// replica's bootstrap run takes (Keycloak cold start + full realm
+		// Acquiring the lock can legitimately take as long as another
+		// replica's bootstrap run does (Keycloak cold start + full realm
 		// provisioning, up to the 4-minute budget below) — use a dedicated,
-		// generous context here instead of the 10s DB-connect ctx above, which
+		// generous timeout here instead of the 10s DB-connect ctx above, which
 		// would otherwise time out a waiting replica while the leader is still
-		// mid-bootstrap (observed in the B4 HA e2e: a second replica failed
-		// with "acquire bootstrap advisory lock: timeout" after only 10s).
+		// mid-bootstrap.
+		//
+		// The wait is done via db.AcquireAdvisoryLock's try-lock poll, NOT a
+		// blocking `pg_advisory_lock`: the backend pool sets a server-side
+		// statement_timeout (15s, see poolCfg above), and a blocking advisory
+		// lock is — from Postgres's perspective — one long-running statement,
+		// so the statement_timeout cancels the wait ("canceling statement due
+		// to statement timeout") regardless of the client context's deadline.
+		// A poll loop's individual statements are always fast, so only the
+		// context/timeout below governs how long we wait.
 		lockCtx, lockCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer lockCancel()
 
@@ -156,7 +164,9 @@ func runServer() {
 			return "", fmt.Errorf("acquire conn for bootstrap lock: %w", err)
 		}
 		defer conn.Release()
-		if _, err := conn.Exec(lockCtx, "SELECT pg_advisory_lock(7919876543)"); err != nil {
+		if err := db.AcquireAdvisoryLock(lockCtx, conn, 7919876543, 5*time.Minute, func() {
+			logger.Info("bootstrap: waiting for another replica to finish bootstrapping")
+		}); err != nil {
 			return "", fmt.Errorf("acquire bootstrap advisory lock: %w", err)
 		}
 		defer func() { _, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(7919876543)") }()
