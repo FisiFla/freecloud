@@ -72,6 +72,7 @@ func TestCreateAppFromTemplate_SAMLGoogleWorkspace(t *testing.T) {
 		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withChiParam(req, "templateId", "google-workspace")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.CreateAppFromTemplate(rec, req)
 
@@ -174,6 +175,7 @@ func TestCreateAppFromTemplate_OIDCGeneric(t *testing.T) {
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withChiParam(req, "templateId", "generic-oidc")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.CreateAppFromTemplate(rec, req)
 
