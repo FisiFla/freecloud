@@ -29,8 +29,8 @@ func NewLimiterFactory(redisURL string, logger *zap.Logger) (factory func(limit 
 			"so a client can multiply its effective rate limit by the replica count. " +
 			"Acceptable only for local/dev single-instance use.")
 		return func(limit int, window time.Duration, _ string) Limiter {
-				return NewRateLimiter(limit, window)
-			}, func() {}, nil
+			return NewRateLimiter(limit, window)
+		}, func() {}, nil
 	}
 
 	opts, err := redis.ParseURL(redisURL)
@@ -48,8 +48,8 @@ func NewLimiterFactory(redisURL string, logger *zap.Logger) (factory func(limit 
 	logger.Info("rate limiter: using Redis-backed shared rate limiting", zap.String("addr", opts.Addr))
 
 	return func(limit int, window time.Duration, name string) Limiter {
-			return NewRedisRateLimiter(client, limit, window, name, logger)
-		}, func() { _ = client.Close() }, nil
+		return NewRedisRateLimiter(client, limit, window, name, logger)
+	}, func() { _ = client.Close() }, nil
 }
 
 // RedisRateLimiter is a Redis-backed, per-client fixed-window rate limiter.
