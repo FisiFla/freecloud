@@ -138,6 +138,16 @@ jobs:
           go-version: '1.25'
           cache-dependency-path: backend/go.sum
 
+      - name: Generate A2 GeoIP e2e fixture
+        # Same fixture as the e2e job: the base compose bind-mounts
+        # backend/.e2e-fixtures/geoip-fixture.mmdb into backend-e2e, and the
+        # backend fails closed (refuses to start) when GEOIP_MMDB_PATH is
+        # unreadable — without this step Docker creates an empty DIRECTORY at
+        # the missing host path and both HA replicas die on boot.
+        run: |
+          mkdir -p backend/.e2e-fixtures
+          cd backend && go run ./cmd/genfixturemmdb -out .e2e-fixtures/geoip-fixture.mmdb
+
       - name: Build HA e2e stack
         run: |
           docker compose -f docker/docker-compose.e2e.yml -f docker/docker-compose.e2e-ha.yml build
