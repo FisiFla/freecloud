@@ -333,6 +333,24 @@ export function setAuthToken(token: string | null) {
   authToken = token;
 }
 
+// ---- Active org store (Epic C multi-tenant) ----
+//
+// The active org ID is published here by OrgProvider (app/providers.tsx) and
+// attached as X-Org-Id to every outgoing request by the request() helper
+// below, so every list/detail page automatically scopes to the selected
+// organization without each call site threading it through manually.
+
+let activeOrgId: string | null = null;
+
+export function setActiveOrgId(orgId: string | null) {
+  if (typeof window === "undefined") return;
+  activeOrgId = orgId;
+}
+
+export function getActiveOrgId(): string | null {
+  return activeOrgId;
+}
+
 // ---- Helpers ----
 
 export class ApiError extends Error {
@@ -371,6 +389,9 @@ async function request<T>(
 
   if (authToken) {
     headers["Authorization"] = `Bearer ${authToken}`;
+  }
+  if (activeOrgId) {
+    headers["X-Org-Id"] = activeOrgId;
   }
 
   const res = await fetch(url, {
@@ -457,6 +478,7 @@ export async function bulkOnboardEmployees(
   const url = `${getBaseUrl()}/api/v1/onboard/bulk`;
   const headers: Record<string, string> = {};
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+  if (activeOrgId) headers["X-Org-Id"] = activeOrgId;
   const res = await fetch(url, { method: "POST", headers, body: form });
   const text = await res.text();
   let json: ApiEnvelope<BulkOnboardResponse>;
@@ -1240,4 +1262,76 @@ export async function updateIdentityProvider(alias: string, req: Omit<IdentityPr
 
 export async function deleteIdentityProvider(alias: string): Promise<{ deleted: boolean }> {
   return request<{ deleted: boolean }>("DELETE", `/api/v1/settings/identity-providers/${alias}`);
+}
+
+// ---------------------------------------------------------------------------
+// Epic C (v1.7): multi-tenant orgs
+// ---------------------------------------------------------------------------
+
+export interface MeOrgMembership {
+  orgId: string;
+  orgName: string;
+  orgSlug: string;
+  role: string;
+}
+
+export interface MeResponse {
+  sub: string;
+  email: string;
+  globalRole: string;
+  activeOrgId: string;
+  activeRole: string;
+  orgs: MeOrgMembership[];
+  isSystemAdmin: boolean;
+}
+
+export async function getMe(): Promise<MeResponse> {
+  return request<MeResponse>("GET", "/api/v1/me");
+}
+
+export interface Org {
+  id: string;
+  name: string;
+  slug: string;
+  createdAt: string;
+}
+
+export interface CreateOrgRequest {
+  name: string;
+  slug: string;
+}
+
+export async function listOrgs(): Promise<Org[]> {
+  return request<Org[]>("GET", "/api/v1/orgs");
+}
+
+export async function createOrg(req: CreateOrgRequest): Promise<Org> {
+  return request<Org>("POST", "/api/v1/orgs", req);
+}
+
+export interface OrgMember {
+  userId: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: string;
+}
+
+export async function listOrgMembers(orgId: string): Promise<OrgMember[]> {
+  return request<OrgMember[]>("GET", `/api/v1/orgs/${orgId}/members`);
+}
+
+export async function addOrgMember(
+  orgId: string,
+  userId: string,
+  role: "org-admin" | "member",
+): Promise<{ userId: string; role: string }> {
+  return request<{ userId: string; role: string }>("POST", `/api/v1/orgs/${orgId}/members`, {
+    userId,
+    role,
+  });
+}
+
+export async function removeOrgMember(orgId: string, userId: string): Promise<{ removed: boolean }> {
+  return request<{ removed: boolean }>("DELETE", `/api/v1/orgs/${orgId}/members/${userId}`);
 }

@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
-import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers, Lock, Plug2, FileBarChart2, Server, Mail, Link2 } from "lucide-react";
+import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers, Lock, Plug2, FileBarChart2, Server, Mail, Link2, Building2 } from "lucide-react";
 import DarkModeToggle from "./DarkModeToggle";
+import { useOrg } from "@/app/providers";
 
 const navLinks = [
   { href: "/", label: "Dashboard", icon: Cloud },
@@ -19,6 +20,7 @@ const navLinks = [
   { href: "/portal", label: "My Portal", icon: LayoutDashboard },
   { href: "/portal/security", label: "Security", icon: Lock },
   { href: "/settings", label: "Settings", icon: Settings },
+  { href: "/settings/organizations", label: "Organizations", icon: Building2 },
   { href: "/settings/fleet", label: "Fleet Config", icon: Server },
   { href: "/settings/smtp", label: "SMTP", icon: Mail },
   { href: "/settings/identity-providers", label: "Identity Providers", icon: Link2 },
@@ -27,6 +29,7 @@ const navLinks = [
 export default function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
+  const { me, activeOrgId, setActiveOrg } = useOrg();
 
   // Don't render the sidebar on auth pages (sign-in).
   if (pathname === "/signin") return null;
@@ -45,6 +48,32 @@ export default function Sidebar() {
         </div>
         <span className="text-lg font-bold text-slate-800 dark:text-slate-100">FreeCloud</span>
       </div>
+
+      {/* Org switcher (Epic C multi-tenant) — only shown once memberships
+          have loaded, so a single-org caller never sees a flash of an
+          empty dropdown. */}
+      {me && me.orgs.length > 0 && (
+        <div className="border-b border-slate-100 px-3 py-3 dark:border-slate-800">
+          <label htmlFor="org-switcher" className="sr-only">
+            Active organization
+          </label>
+          <div className="relative">
+            <Building2 className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
+            <select
+              id="org-switcher"
+              value={activeOrgId}
+              onChange={(e) => setActiveOrg(e.target.value)}
+              className="w-full appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-3 text-sm font-medium text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+            >
+              {me.orgs.map((o) => (
+                <option key={o.orgId} value={o.orgId}>
+                  {o.orgName}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
 
       {/* Navigation */}
       <nav className="flex-1 space-y-1 px-3 py-4">
