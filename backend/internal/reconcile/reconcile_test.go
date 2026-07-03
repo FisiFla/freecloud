@@ -46,6 +46,12 @@ func (f *fakeKC) UpdateUser(_ context.Context, _, _, _, _ string, _ bool) error 
 func (f *fakeKC) SendPasswordReset(_ context.Context, _ string) error           { return nil }
 func (f *fakeKC) ListGroups(_ context.Context) ([]*gocloak.Group, error)        { return nil, nil }
 func (f *fakeKC) CreateGroup(_ context.Context, _ string) (string, error)       { return "", nil }
+func (f *fakeKC) CreateGroupWithOrgID(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+func (f *fakeKC) ListGroupsByOrg(_ context.Context, _ string, _, _ int) ([]*gocloak.Group, error) {
+	return nil, nil
+}
 func (f *fakeKC) AddUserToGroup(_ context.Context, _, _ string) error           { return nil }
 func (f *fakeKC) RemoveUserFromGroup(_ context.Context, _, _ string) error      { return nil }
 func (f *fakeKC) ListRealmRoles(_ context.Context) ([]*gocloak.Role, error)     { return nil, nil }

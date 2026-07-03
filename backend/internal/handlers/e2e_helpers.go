@@ -59,10 +59,17 @@ func (h *Handler) E2ECreateEnrollmentToken(w http.ResponseWriter, r *http.Reques
 	token := "e2e-tok-" + req.UserID[:8] + "-" + strings.ReplaceAll(
 		time.Now().UTC().Format("150405.000000000"), ".", "")
 
+	// M3: enrollment_tokens stores only the sha256 hash (see
+	// enrollment.go's enrollmentTokenHash) — this test-only seam must store
+	// the SAME hash shape the real enrollment/device-identity lookups use,
+	// or e2e tests minting a token here could never be consumed. org_id
+	// isn't set explicitly here (falls back to the column's Default-Org
+	// default) since this endpoint has no org context to draw from; it's
+	// test-only tooling, not a production onboarding path.
 	if _, err := h.db.Exec(ctx,
-		`INSERT INTO enrollment_tokens (token, user_id, expires_at)
+		`INSERT INTO enrollment_tokens (token_hash, user_id, expires_at)
 		 VALUES ($1, $2, NOW() + INTERVAL '1 hour')`,
-		token, req.UserID,
+		enrollmentTokenHash(token), req.UserID,
 	); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to create enrollment token")
 		return

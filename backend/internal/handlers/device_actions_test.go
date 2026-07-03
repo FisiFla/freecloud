@@ -416,7 +416,11 @@ func TestBuildCompliancePostures_FleetError(t *testing.T) {
 func TestListPolicies_HappyPath(t *testing.T) {
 	h := setupTestHandler(t) // fakeFleet returns 1 policy by default
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+	// M1: system-admin claims — ListPolicies now restricts non-admins to an
+	// empty list (Fleet policies have no per-org concept); that restriction
+	// is proven separately in org_isolation_test.go.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/policies", nil).WithContext(
+		middleware.SetClaims(context.Background(), &middleware.JWTClaims{Sub: "admin", Role: middleware.RoleSuperAdmin}))
 	rec := httptest.NewRecorder()
 
 	h.ListPolicies(rec, req)

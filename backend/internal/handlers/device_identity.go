@@ -26,6 +26,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -47,13 +50,61 @@ const deviceCookieName = "freecloud-device-id"
 // login within 15 minutes must re-trigger the cookie-set step.
 const deviceCookieTTL = 15 * time.Minute
 
+// deviceIdentityTrustedOrigin returns the single origin allowed to call this
+// endpoint from a browser: the dashboard's own origin. Read directly from
+// CORS_ORIGIN — the same env var main.go already uses to configure the
+// API's CORS policy — rather than adding a new config surface; main.go
+// falls back to http://localhost:3000 for local dev when it's unset, so
+// this mirrors that default exactly.
+func deviceIdentityTrustedOrigin() string {
+	if origin := os.Getenv("CORS_ORIGIN"); origin != "" {
+		return origin
+	}
+	return "http://localhost:3000"
+}
+
+// originAllowed reports whether the request's Origin header (or, failing
+// that, the origin parsed from Referer) matches trusted. Fail closed:
+// neither header present, either malformed, or either present but
+// mismatched is rejected.
+func originAllowed(r *http.Request, trusted string) bool {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return origin == trusted
+	}
+	if ref := r.Header.Get("Referer"); ref != "" {
+		u, err := url.Parse(ref)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return false
+		}
+		return u.Scheme+"://"+u.Host == trusted
+	}
+	return false
+}
+
 // SetDeviceIdentityCookie resolves an enrollment token to the Fleet host ID
 // that consumed it and writes a short-lived HTTP-only cookie to the response.
 //
 // This endpoint is deliberately unauthenticated: the user may not yet have a
 // Keycloak session when their device enrolls, and the token itself provides
 // adequate proof of enrollment.  It is rate-limited at the route level.
+//
+// M4: being unauthenticated makes it a CSRF target — a cross-site form POST
+// (which browsers send as text/plain or a simple content type, never
+// application/json, and without a matching Origin/Referer) could otherwise
+// mint a device-identity cookie for an arbitrary visitor. Both checks below
+// fail closed.
 func (h *Handler) SetDeviceIdentityCookie(w http.ResponseWriter, r *http.Request) {
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(strings.ToLower(strings.TrimSpace(ct)), "application/json") {
+		respondError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return
+	}
+	if !originAllowed(r, deviceIdentityTrustedOrigin()) {
+		h.logger.Warn("device-identity: rejected request with untrusted or missing origin",
+			zap.String("origin", r.Header.Get("Origin")), zap.String("referer", r.Header.Get("Referer")))
+		respondError(w, http.StatusForbidden, "forbidden: untrusted origin")
+		return
+	}
+
 	var req deviceIdentityRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.EnrollmentToken == "" {
 		respondError(w, http.StatusBadRequest, "enrollmentToken is required")
@@ -71,11 +122,15 @@ func (h *Handler) SetDeviceIdentityCookie(w http.ResponseWriter, r *http.Request
 	// Look up the host ID recorded when FleetDM called the enrollment callback.
 	// used_by_host_id is NULL if the token hasn't been consumed yet (device hasn't
 	// enrolled with Fleet), or if the enrollment predates Migration023.
+	// M3: looked up by hash (never plaintext) with the SAME expires_at bound
+	// as the original enrollment window — this caps how long after
+	// onboarding the cookie-minting capability stays usable at all, even
+	// once the device has already enrolled, instead of forever.
 	var hostID *string
 	err := h.db.QueryRow(ctx,
 		`SELECT used_by_host_id FROM enrollment_tokens
-		 WHERE token = $1 AND used_at IS NOT NULL`,
-		req.EnrollmentToken,
+		 WHERE token_hash = $1 AND used_at IS NOT NULL AND expires_at > NOW()`,
+		enrollmentTokenHash(req.EnrollmentToken),
 	).Scan(&hostID)
 
 	switch {

@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 func withTeamID(r *http.Request, id string) *http.Request {
@@ -25,8 +26,12 @@ func withTeamID(r *http.Request, id string) *http.Request {
 // ---- ListTeams ----
 
 func TestListTeams_Success(t *testing.T) {
+	// M1: system-admin claims — ListTeams now restricts non-admins to an
+	// empty list (Fleet teams have no per-org concept yet); that
+	// restriction is proven separately in org_isolation_test.go.
 	h := setupTestHandler(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil).WithContext(
+		middleware.SetClaims(context.Background(), &middleware.JWTClaims{Sub: "admin", Role: middleware.RoleSuperAdmin}))
 	rec := httptest.NewRecorder()
 	h.ListTeams(rec, req)
 	if rec.Code != http.StatusOK {
@@ -197,11 +202,16 @@ func TestMoveHostToTeam_Success(t *testing.T) {
 			return nil
 		},
 	}
-	h := NewHandler(nil, &fakeKeycloak{}, f, zap.NewNop())
+	// H4: MoveHostToTeam now verifies each host belongs to the caller's org
+	// before ever calling Fleet — needs an OrgContext and a DB that answers
+	// the ownership check.
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
 	body, _ := json.Marshal(MoveHostRequest{HostIDs: []string{"host-1", "host-2"}})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/2/hosts", bytes.NewReader(body))
 	req = withTeamID(req, "2")
 	req.Header.Set("Content-Type", "application/json")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.MoveHostToTeam(rec, req)
 	if rec.Code != http.StatusOK {
@@ -231,11 +241,13 @@ func TestMoveHostToTeam_FleetError(t *testing.T) {
 			return fmt.Errorf("fleet error")
 		},
 	}
-	h := NewHandler(nil, &fakeKeycloak{}, f, zap.NewNop())
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
 	body, _ := json.Marshal(MoveHostRequest{HostIDs: []string{"host-a"}})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/1/hosts", bytes.NewReader(body))
 	req = withTeamID(req, "1")
 	req.Header.Set("Content-Type", "application/json")
+	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.MoveHostToTeam(rec, req)
 	if rec.Code != http.StatusBadGateway {

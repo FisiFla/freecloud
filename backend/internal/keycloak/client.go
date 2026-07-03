@@ -37,6 +37,21 @@ type KeycloakClientInterface interface {
 	GetUserGroups(ctx context.Context, userID string) ([]*gocloak.Group, error)
 	ListGroups(ctx context.Context) ([]*gocloak.Group, error)
 	CreateGroup(ctx context.Context, name string) (string, error)
+	// C1 (SCIM Groups multi-tenant fix): org-aware group operations. Keycloak
+	// groups have no native org concept, so FreeCloud tags ownership itself
+	// via the org_id group attribute (see GroupOrgAttribute/GroupOrgID below).
+	//
+	// CreateGroupWithOrgID creates a group and tags it with the owning org in
+	// one call, so there is never a window where a freshly created group is
+	// org-less (and therefore invisible to org-scoped filtering).
+	CreateGroupWithOrgID(ctx context.Context, name, orgID string) (string, error)
+	// ListGroupsByOrg returns up to `max` groups (0-indexed at `first`) whose
+	// org_id attribute equals orgID, pushing both the filter and the paging
+	// into the Keycloak query via its `q=` attribute search (M7) instead of
+	// fetching the entire realm. Implementations must still defensively
+	// re-check each returned group's org_id before returning it, in case the
+	// server-side search is unsupported/inexact.
+	ListGroupsByOrg(ctx context.Context, orgID string, first, max int) ([]*gocloak.Group, error)
 	AddUserToGroup(ctx context.Context, userID, groupID string) error
 	RemoveUserFromGroup(ctx context.Context, userID, groupID string) error
 	ListRealmRoles(ctx context.Context) ([]*gocloak.Role, error)
@@ -435,20 +450,83 @@ func (k *KeycloakClient) SendPasswordReset(ctx context.Context, userID string) e
 	return nil
 }
 
-// ListGroups returns all groups in the realm.
+// GroupOrgAttribute is the Keycloak group attribute key FreeCloud uses to
+// tag which organization owns a group (C1 — SCIM Groups multi-tenant fix).
+// Keycloak groups have no native org concept; this is FreeCloud's own
+// tenant-ownership marker, read back via GroupOrgID.
+const GroupOrgAttribute = "org_id"
+
+// GroupOrgID extracts the org_id attribute from a Keycloak group, or ""
+// when unset (a group with no org_id never matches a real org's filter,
+// which is the fail-closed behavior every caller of this wants).
+func GroupOrgID(g *gocloak.Group) string {
+	if g == nil || g.Attributes == nil {
+		return ""
+	}
+	if vals, ok := (*g.Attributes)[GroupOrgAttribute]; ok && len(vals) > 0 {
+		return vals[0]
+	}
+	return ""
+}
+
+// ListGroups returns all groups in the realm, including their attributes
+// (BriefRepresentation=false) so callers can read GroupOrgID off the result
+// without a second round trip per group.
 func (k *KeycloakClient) ListGroups(ctx context.Context) ([]*gocloak.Group, error) {
 	token, err := k.login(ctx)
 	if err != nil {
 		return nil, err
 	}
-	groups, err := k.client.GetGroups(ctx, token, k.realm, gocloak.GetGroupsParams{})
+	groups, err := k.client.GetGroups(ctx, token, k.realm, gocloak.GetGroupsParams{
+		BriefRepresentation: gocloak.BoolP(false),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list groups: %w", err)
 	}
 	return groups, nil
 }
 
-// CreateGroup creates a new realm group and returns its ID.
+// ListGroupsByOrg returns up to `max` groups (0-indexed at `first`) whose
+// org_id attribute equals orgID (M7 / C1). Filtering and paging are pushed
+// into the Keycloak query itself via GetGroupsParams.Q (Keycloak's
+// "key:value" attribute search) instead of fetching the whole realm, but
+// the result is still defensively re-filtered by GroupOrgID in case the
+// server-side search is unsupported or inexact — this method must never
+// return a group belonging to a different org than orgID, regardless of
+// what Keycloak's search does.
+func (k *KeycloakClient) ListGroupsByOrg(ctx context.Context, orgID string, first, max int) ([]*gocloak.Group, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if first < 0 {
+		first = 0
+	}
+	if max <= 0 {
+		max = 100
+	}
+	query := GroupOrgAttribute + ":" + orgID
+	groups, err := k.client.GetGroups(ctx, token, k.realm, gocloak.GetGroupsParams{
+		BriefRepresentation: gocloak.BoolP(false),
+		Q:                   &query,
+		First:               &first,
+		Max:                 &max,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list groups for org %s: %w", orgID, err)
+	}
+	out := make([]*gocloak.Group, 0, len(groups))
+	for _, g := range groups {
+		if GroupOrgID(g) == orgID {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
+// CreateGroup creates a new realm group and returns its ID. Used for
+// groups that are not org-tagged (e.g. bootstrap's system groups); SCIM and
+// the native /api/v1/groups endpoint use CreateGroupWithOrgID instead.
 func (k *KeycloakClient) CreateGroup(ctx context.Context, name string) (string, error) {
 	token, err := k.login(ctx)
 	if err != nil {
@@ -459,6 +537,22 @@ func (k *KeycloakClient) CreateGroup(ctx context.Context, name string) (string, 
 		return "", fmt.Errorf("create group %q: %w", name, err)
 	}
 	zap.L().Info("created group", zap.String("group_id", groupID), zap.String("name", name))
+	return groupID, nil
+}
+
+// CreateGroupWithOrgID creates a new realm group tagged with the owning
+// organization via the org_id attribute (C1), atomically at creation time.
+func (k *KeycloakClient) CreateGroupWithOrgID(ctx context.Context, name, orgID string) (string, error) {
+	token, err := k.login(ctx)
+	if err != nil {
+		return "", err
+	}
+	attrs := map[string][]string{GroupOrgAttribute: {orgID}}
+	groupID, err := k.client.CreateGroup(ctx, token, k.realm, gocloak.Group{Name: &name, Attributes: &attrs})
+	if err != nil {
+		return "", fmt.Errorf("create group %q: %w", name, err)
+	}
+	zap.L().Info("created group", zap.String("group_id", groupID), zap.String("name", name), zap.String("org_id", orgID))
 	return groupID, nil
 }
 

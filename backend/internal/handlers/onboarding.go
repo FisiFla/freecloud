@@ -260,10 +260,16 @@ func (h *Handler) persistOnboard(ctx context.Context, kcUserID string, req Onboa
 		return fmt.Errorf("insert audit log: %w", err)
 	}
 	if enrollmentToken != "" {
+		// C2: persist the org the token was issued for, so a device that
+		// later enrolls with it (handlers/enrollment.go) lands in the RIGHT
+		// org instead of silently defaulting to the Default Organization.
+		// M3: store only the sha256 hash of the token, matching every other
+		// bearer secret in this codebase (api_tokens, scim_bearer_tokens) —
+		// the plaintext is never written to the database.
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO enrollment_tokens (token, user_id, expires_at)
-			 VALUES ($1, $2, NOW() + INTERVAL '7 days')`,
-			enrollmentToken, kcUserID,
+			`INSERT INTO enrollment_tokens (token_hash, user_id, org_id, expires_at)
+			 VALUES ($1, $2, $3, NOW() + INTERVAL '7 days')`,
+			enrollmentTokenHash(enrollmentToken), kcUserID, orgID,
 		); err != nil {
 			return fmt.Errorf("insert enrollment token: %w", err)
 		}

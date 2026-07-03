@@ -26,6 +26,11 @@ type fakeKeycloak struct {
 	getUserGroupsFn          func(ctx context.Context, userID string) ([]*gocloak.Group, error)
 	listGroupsFn             func(ctx context.Context) ([]*gocloak.Group, error)
 	createGroupFn            func(ctx context.Context, name string) (string, error)
+	// C1: org-aware group operations. Both default to delegating to the
+	// plain (non-org) fakes above when unset, so existing tests that only
+	// wire listGroupsFn/createGroupFn keep working unchanged.
+	createGroupWithOrgIDFn func(ctx context.Context, name, orgID string) (string, error)
+	listGroupsByOrgFn      func(ctx context.Context, orgID string, first, max int) ([]*gocloak.Group, error)
 	addUserToGroupFn         func(ctx context.Context, userID, groupID string) error
 	removeUserFromGroupFn    func(ctx context.Context, userID, groupID string) error
 	listRealmRolesFn         func(ctx context.Context) ([]*gocloak.Role, error)
@@ -174,6 +179,40 @@ func (f *fakeKeycloak) CreateGroup(ctx context.Context, name string) (string, er
 		return f.createGroupFn(ctx, name)
 	}
 	return "group-fake-123", nil
+}
+
+func (f *fakeKeycloak) CreateGroupWithOrgID(ctx context.Context, name, orgID string) (string, error) {
+	if f.createGroupWithOrgIDFn != nil {
+		return f.createGroupWithOrgIDFn(ctx, name, orgID)
+	}
+	return f.CreateGroup(ctx, name)
+}
+
+func (f *fakeKeycloak) ListGroupsByOrg(ctx context.Context, orgID string, first, max int) ([]*gocloak.Group, error) {
+	if f.listGroupsByOrgFn != nil {
+		return f.listGroupsByOrgFn(ctx, orgID, first, max)
+	}
+	all, err := f.ListGroups(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var matched []*gocloak.Group
+	for _, g := range all {
+		if keycloak.GroupOrgID(g) == orgID {
+			matched = append(matched, g)
+		}
+	}
+	if first < 0 {
+		first = 0
+	}
+	if first >= len(matched) {
+		return []*gocloak.Group{}, nil
+	}
+	end := len(matched)
+	if max > 0 && first+max < end {
+		end = first + max
+	}
+	return matched[first:end], nil
 }
 
 func (f *fakeKeycloak) AddUserToGroup(ctx context.Context, userID, groupID string) error {

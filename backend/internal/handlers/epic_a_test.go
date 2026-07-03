@@ -16,6 +16,8 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 // ---- SCIM tests (A2) ----
@@ -126,12 +128,17 @@ func TestSCIMCreateUserNilDB(t *testing.T) {
 
 func TestSCIMGroupsListReplacedStub(t *testing.T) {
 	// Verify that the Groups endpoint now returns a real response (200) rather than 501.
+	// C1: SCIMListGroups is org-scoped, so the request needs a resolved
+	// OrgContext (as the SCIM bearer middleware would set it) to reach 200.
 	h := setupTestHandler(t)
-	req := httptest.NewRequest(http.MethodGet, "/scim/v2/Groups", nil)
+	req := httptest.NewRequest(http.MethodGet, "/scim/v2/Groups", nil).WithContext(
+		middleware.SetOrgContext(context.Background(), &middleware.OrgContext{
+			OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin,
+		}))
 	rec := httptest.NewRecorder()
 	h.SCIMListGroups(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Errorf("groups list: expected 200, got %d", rec.Code)
+		t.Errorf("groups list: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -171,8 +178,12 @@ func TestParseSCIMFilter(t *testing.T) {
 // ---- Groups tests (A3) ----
 
 func TestListGroupsSuccess(t *testing.T) {
+	// M1: system-admin claims so the (legacy, unfiltered) happy path this
+	// test exercises isn't affected by the new org-filter for non-admins —
+	// that restriction is proven separately in org_isolation_test.go.
 	h := setupTestHandler(t)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/groups", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/groups", nil).WithContext(
+		middleware.SetClaims(context.Background(), &middleware.JWTClaims{Sub: "admin", Role: middleware.RoleSuperAdmin}))
 	rec := httptest.NewRecorder()
 	h.ListGroups(rec, req)
 	if rec.Code != http.StatusOK {
@@ -214,6 +225,12 @@ func TestCreateGroupValidation(t *testing.T) {
 			b, _ := json.Marshal(tt.body)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/groups", bytes.NewReader(b))
 			req.Header.Set("Content-Type", "application/json")
+			// M1: CreateGroup now tags the group with the caller's org, so it
+			// needs a resolved OrgContext. Harmless for the invalid-body
+			// cases, which 400 on validation before that check is reached.
+			req = req.WithContext(middleware.SetOrgContext(req.Context(), &middleware.OrgContext{
+				OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin,
+			}))
 			rec := httptest.NewRecorder()
 			h.CreateGroup(rec, req)
 			if rec.Code != tt.wantStatus {

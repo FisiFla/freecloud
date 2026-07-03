@@ -105,6 +105,22 @@ func TestE2E_CrossOrgIsolation(t *testing.T) {
 		{"approval-requests", http.MethodGet, "/api/v1/approval-requests"},
 		{"federation-sources", http.MethodGet, "/api/v1/federation/sources"},
 		{"analytics-snapshots", http.MethodGet, "/api/v1/analytics/snapshots"},
+		// M1 hardening round: groups/roles/teams/policies gained a
+		// system-admin-only (or, for Groups, org_id-attribute) restriction
+		// for non-system-admin callers. This harness's only credential type
+		// is a super-admin-ROLE API token (see the package doc above — no
+		// admin-JWT / non-admin-role path exists yet), so these entries are
+		// a "still works for system-admin, against LIVE Keycloak/Fleet"
+		// regression guard rather than a non-admin-restriction proof (that
+		// proof is unit-level, see org_isolation_test.go's
+		// TestCrossOrgIsolation_NativeGroupsRestrictedByOrg and
+		// TestM1_RealmRolesTeamsPoliciesRestrictedToSystemAdmin). In
+		// particular /api/v1/groups exercises real Keycloak group-attribute
+		// round-tripping (keycloak.GroupOrgID), which no fake can prove.
+		{"groups", http.MethodGet, "/api/v1/groups"},
+		{"roles", http.MethodGet, "/api/v1/roles"},
+		{"teams", http.MethodGet, "/api/v1/teams"},
+		{"policies", http.MethodGet, "/api/v1/policies"},
 	}
 
 	for _, rc := range resourceClasses {

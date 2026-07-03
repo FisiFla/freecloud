@@ -48,6 +48,14 @@ type AssignPolicyResponse struct {
 
 // ListPolicies returns all global policies from FleetDM.
 // Route: GET /api/v1/policies (requires PermReadCompliance).
+//
+// M1: Fleet policies have no org concept (no per-org Fleet team scoping
+// exists yet — see ListTeams below), so unlike org-scoped resources this
+// isn't a per-org filter, it's a straight system-admin-only restriction.
+// Every other caller holding PermReadCompliance (helpdesk, auditor,
+// read-only) gets an empty list instead of every tenant's compliance
+// policy inventory. Fleet is still queried first so an upstream failure
+// surfaces the same way regardless of role.
 func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -57,12 +65,19 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadGateway, "failed to retrieve policies from Fleet")
 		return
 	}
+	if !isSystemAdminCaller(ctx) {
+		policies = []fleet.Policy{}
+	}
 
 	respondJSON(w, http.StatusOK, ListPoliciesResponse{Policies: policies})
 }
 
 // ListTeams returns all Fleet teams.
 // Route: GET /api/v1/teams (requires PermReadCompliance).
+//
+// M1: Fleet teams have no per-org scoping today (future work — see the
+// package-level TODO note near MoveHostToTeam), so this is a
+// system-admin-only restriction, same rationale as ListPolicies above.
 func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -71,6 +86,9 @@ func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("failed to list fleet teams", zap.Error(err))
 		respondError(w, http.StatusBadGateway, "failed to retrieve teams from Fleet")
 		return
+	}
+	if !isSystemAdminCaller(ctx) {
+		teams = []fleet.Team{}
 	}
 
 	respondJSON(w, http.StatusOK, ListTeamsResponse{Teams: teams})
@@ -194,6 +212,18 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 	if len(req.HostIDs) > 500 {
 		respondError(w, http.StatusBadRequest, "too many host IDs (max 500)")
 		return
+	}
+
+	// H4: every other device-scoped handler in this codebase verifies
+	// ownership via requireDeviceInCallerOrg before acting; this one moved
+	// hosts to a Fleet team with zero check, so an org-B caller who merely
+	// knew (or guessed/enumerated) an org-A host ID could reassign its
+	// policy. Reject the whole batch on the first foreign/unknown host —
+	// requireDeviceInCallerOrg has already written the 403/404 response.
+	for _, id := range req.HostIDs {
+		if !h.requireDeviceInCallerOrg(w, r, id) {
+			return
+		}
 	}
 
 	actorID := middleware.GetActorID(r.Context())

@@ -319,9 +319,18 @@ func (h *Handler) AddOrgMember(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	actorID := middleware.GetActorID(ctx)
 
-	// Verify the target user exists so we return a clean 404 instead of an FK error.
+	// H1: verify the target user's OWN org (users.org_id) is the org being
+	// joined — not merely that the user exists anywhere. Without this, an
+	// org-admin (who passes requireOwnOrgOrSystemAdmin for their own org)
+	// could bind ANY other tenant's user into their org with a caller-chosen
+	// role by ID alone. A user who exists but belongs to a different org is
+	// indistinguishable here from one that doesn't exist at all — both 404,
+	// never leaking which case it was.
 	var foundUID string
-	if err := h.db.QueryRow(ctx, `SELECT keycloak_user_id FROM users WHERE keycloak_user_id = $1`, req.UserID).Scan(&foundUID); err != nil {
+	if err := h.db.QueryRow(ctx,
+		`SELECT keycloak_user_id FROM users WHERE keycloak_user_id = $1 AND org_id = $2`,
+		req.UserID, orgID,
+	).Scan(&foundUID); err != nil {
 		if err == pgx.ErrNoRows {
 			respondError(w, http.StatusNotFound, "user not found")
 			return
