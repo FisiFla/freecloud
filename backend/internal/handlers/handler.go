@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
@@ -66,9 +67,19 @@ type Handler struct {
 	// auditRetainFor is the configured audit retention window (from AUDIT_RETAIN_FOR).
 	// 0 means keep forever. Exposed via GET /api/v1/audit-logs/integrity.
 	auditRetainFor time.Duration
-	// setupMu serializes first-run setup so two concurrent requests cannot both
-	// pass the "no admin exists" check before either creates the first admin.
+	// setupMu is the fallback, in-process-only guard acquireSetupLock uses
+	// when pgPool is nil (unit tests with a fake DBPool). It provides no
+	// additional safety in production — see acquireSetupLock in setup.go.
 	setupMu sync.Mutex
+	// pgPool, when non-nil, is the same underlying database as db but
+	// retained as the concrete *pgxpool.Pool so Setup can take a
+	// cross-replica pg advisory lock (H3) via db.AcquireAdvisoryLock, which
+	// needs a dedicated connection (pgxpool.Pool.Acquire) rather than the
+	// shared DBPool query interface. Populated automatically in NewHandler
+	// when the caller's db happens to be a real *pgxpool.Pool — true for
+	// every production instance (see main.go) — and stays nil for the fakes
+	// unit tests inject.
+	pgPool *pgxpool.Pool
 	// geoIP resolves client IPs to ISO country codes for geo-allowlist conditions (D1).
 	// Defaults to noopGeoIP{} which always returns "" (unknown) — fail-closed for geo conditions.
 	geoIP GeoIPLookup
@@ -88,6 +99,11 @@ func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetCl
 		fleet:    fc,
 		logger:   logger,
 		geoIP:    noopGeoIP{},
+	}
+	// H3: capture the real pool (if that's what was passed) so Setup can take
+	// a distributed advisory lock. See the pgPool field doc above.
+	if p, ok := db.(*pgxpool.Pool); ok {
+		h.pgPool = p
 	}
 	// Default SCIM middleware: fail closed — rejects all requests until a token
 	// is configured via SetSCIMBearerToken.
