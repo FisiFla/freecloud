@@ -1,32 +1,30 @@
 "use client";
 
 import { SessionProvider, useSession, signOut } from "next-auth/react";
-import { setAuthToken, setActiveOrgId, getMe } from "@/lib/api";
+import { setActiveOrgId, getMe } from "@/lib/api";
 import type { MeResponse } from "@/lib/api";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
-// ApiReadyContext exposes whether the access token has been published to the
-// API client, so consumers can synchronously gate fetches without polling.
+// ApiReadyContext exposes whether the session is authenticated, so consumers
+// can synchronously gate fetches without polling.
 const ApiReadyContext = createContext(false);
 
 /**
- * useApiReady returns true once the session's access token has been synced
- * into the API client. Use this to avoid firing authenticated requests before
- * the token is available.
+ * useApiReady returns true once NextAuth reports an authenticated session.
+ * Use this to avoid firing authenticated requests before one exists.
+ *
+ * M6: this no longer waits for a client-visible access token — the token is
+ * never exposed to client JS at all (see auth.ts / api/v1/[...path]/route.ts).
+ * Every request now goes through the same-origin BFF proxy route, which
+ * resolves the real token server-side per request.
  */
 export function useApiReady(): boolean {
   return useContext(ApiReadyContext);
 }
 
 function AuthTokenSync({ children }: { children: React.ReactNode }) {
-  const { data: session } = useSession();
-  const [ready, setReady] = useState(false);
-
-  useEffect(() => {
-    const token = session?.accessToken || null;
-    setAuthToken(token);
-    setReady(!!token);
-  }, [session]);
+  const { data: session, status } = useSession();
+  const ready = status === "authenticated";
 
   // If the access token can no longer be refreshed, force a sign-out so the
   // user is sent back to the sign-in page instead of seeing failing API calls.

@@ -316,23 +316,6 @@ interface ApiEnvelope<T> {
   errors?: { field: string; message: string }[];
 }
 
-// ---- Auth token store ----
-//
-// The access token is published here by the SessionProvider (via setAuthToken)
-// and attached to outgoing requests by the request() helper below. Components
-// should gate fetches on the `useApiReady()` hook from app/providers rather
-// than polling this store directly.
-
-let authToken: string | null = null;
-
-export function setAuthToken(token: string | null) {
-  // Only ever store the token in the browser. This module has no "use client"
-  // directive, so guard against a future server-side import accumulating a
-  // process-wide token that would leak across concurrent requests.
-  if (typeof window === "undefined") return;
-  authToken = token;
-}
-
 // ---- Active org store (Epic C multi-tenant) ----
 //
 // The active org ID is published here by OrgProvider (app/providers.tsx) and
@@ -377,24 +360,26 @@ function getBaseUrl(): string {
   return url;
 }
 
+// M6: requests go to the same-origin BFF proxy route (app/api/v1/[...path]/
+// route.ts), NOT directly to the Go backend. The proxy resolves the caller's
+// session server-side and attaches the real Bearer token there — the token
+// itself is never held in client-reachable JS (see auth.ts's `session`
+// callback and app/providers.tsx). `path` already starts with "/api/v1/...",
+// so it doubles as the relative URL the browser calls on this same origin.
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const url = `${getBaseUrl()}${path}`;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
 
-  if (authToken) {
-    headers["Authorization"] = `Bearer ${authToken}`;
-  }
   if (activeOrgId) {
     headers["X-Org-Id"] = activeOrgId;
   }
 
-  const res = await fetch(url, {
+  const res = await fetch(path, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -475,11 +460,10 @@ export async function bulkOnboardEmployees(
 ): Promise<BulkOnboardResponse> {
   const form = new FormData();
   form.append("file", file);
-  const url = `${getBaseUrl()}/api/v1/onboard/bulk`;
+  // M6: same-origin BFF proxy — see request()'s doc comment above.
   const headers: Record<string, string> = {};
-  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
   if (activeOrgId) headers["X-Org-Id"] = activeOrgId;
-  const res = await fetch(url, { method: "POST", headers, body: form });
+  const res = await fetch("/api/v1/onboard/bulk", { method: "POST", headers, body: form });
   const text = await res.text();
   let json: ApiEnvelope<BulkOnboardResponse>;
   try {

@@ -22,6 +22,20 @@ type fakeKC struct {
 	groupCreateCalls  int32
 	clientCreateCalls int32
 
+	// H8: access-token-lifespan defense-in-depth.
+	// realmPutCalls counts EVERY PUT /admin/realms/freecloud call —
+	// ensurePostureFlow (below) ALSO PUTs the realm on every run (to bind
+	// browserFlow), independent of this fix, so tests use this to confirm
+	// the lifespan check doesn't add an EXTRA call when nothing needs to
+	// change. realmUpdateCallsWithLifespan additionally narrows to calls
+	// whose body sets accessTokenLifespan, to confirm the value is correct
+	// when a call is expected.
+	realmPutCalls                int32
+	realmUpdateCallsWithLifespan int32
+	realmAccessTokenLifespan     *int // pre-set to simulate an existing realm's current value; nil = field absent
+	createdAccessTokenLifespan   *int
+	updatedAccessTokenLifespan   *int
+
 	// A1: e2e-admin seeding.
 	e2eAdminExists           bool
 	e2eAdminUserCreateCalls  int32
@@ -58,6 +72,12 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 	if m == http.MethodPost && (p == "/admin/realms" || p == "/admin/realms/") {
 		atomic.AddInt32(&f.realmCreateCalls, 1)
 		f.realmExists = true
+		var body map[string]interface{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if v, ok := body["accessTokenLifespan"].(float64); ok {
+			iv := int(v)
+			f.createdAccessTokenLifespan = &iv
+		}
 		w.Header().Set("Location", f.srv.URL+"/admin/realms/freecloud")
 		w.WriteHeader(http.StatusCreated)
 		return
@@ -68,13 +88,25 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		if m == http.MethodGet {
 			if f.realmExists {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"realm":"freecloud","enabled":true,"browserFlow":"browser"}`))
+				body := map[string]interface{}{"realm": "freecloud", "enabled": true, "browserFlow": "browser"}
+				if f.realmAccessTokenLifespan != nil {
+					body["accessTokenLifespan"] = *f.realmAccessTokenLifespan
+				}
+				_ = json.NewEncoder(w).Encode(body)
 			} else {
 				http.Error(w, `{"error":"Realm not found."}`, http.StatusNotFound)
 			}
 			return
 		}
 		if m == http.MethodPut {
+			atomic.AddInt32(&f.realmPutCalls, 1)
+			var body map[string]interface{}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if v, ok := body["accessTokenLifespan"].(float64); ok {
+				iv := int(v)
+				f.updatedAccessTokenLifespan = &iv
+				atomic.AddInt32(&f.realmUpdateCallsWithLifespan, 1)
+			}
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -565,6 +597,83 @@ func TestBootstrap_SeedE2EAdminDisabled_NoAdminUserCreated(t *testing.T) {
 	}
 	if f.dashboardUpdateCalls != 0 {
 		t.Errorf("SeedE2EAdmin=false must never touch the dashboard client, got %d update calls", f.dashboardUpdateCalls)
+	}
+}
+
+// TestBootstrap_NewRealmGetsShortAccessTokenLifespan is the H8
+// defense-in-depth guard: a freshly-created realm must not rely on
+// Keycloak's install default access-token lifetime.
+func TestBootstrap_NewRealmGetsShortAccessTokenLifespan(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = false
+	_, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if f.createdAccessTokenLifespan == nil || *f.createdAccessTokenLifespan != accessTokenLifespanSeconds {
+		t.Errorf("expected new realm created with accessTokenLifespan=%d, got %v", accessTokenLifespanSeconds, f.createdAccessTokenLifespan)
+	}
+}
+
+// TestBootstrap_ExistingRealmAccessTokenLifespanBackfilled verifies a realm
+// created before this change (no accessTokenLifespan set, simulating
+// Keycloak's install default) gets updated on the next bootstrap run.
+func TestBootstrap_ExistingRealmAccessTokenLifespanBackfilled(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	f.realmAccessTokenLifespan = nil // field absent, as an old realm would be
+
+	_, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if atomic.LoadInt32(&f.realmUpdateCallsWithLifespan) != 1 {
+		t.Fatalf("expected exactly 1 realm update call carrying accessTokenLifespan, got %d", f.realmUpdateCallsWithLifespan)
+	}
+	if f.updatedAccessTokenLifespan == nil || *f.updatedAccessTokenLifespan != accessTokenLifespanSeconds {
+		t.Errorf("expected realm updated with accessTokenLifespan=%d, got %v", accessTokenLifespanSeconds, f.updatedAccessTokenLifespan)
+	}
+}
+
+// TestBootstrap_ExistingRealmAccessTokenLifespanAlreadyCorrect_NoUpdate
+// verifies idempotency: when the realm already carries the right lifespan,
+// bootstrap must not issue a redundant UpdateRealm call.
+func TestBootstrap_ExistingRealmAccessTokenLifespanAlreadyCorrect_NoUpdate(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	correct := accessTokenLifespanSeconds
+	f.realmAccessTokenLifespan = &correct
+
+	_, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	// Exactly 1 realm PUT is expected regardless — ensurePostureFlow always
+	// PUTs the realm once (to bind browserFlow), independent of this fix. If
+	// the lifespan check redundantly issued its own PUT here, this would be 2.
+	if got := atomic.LoadInt32(&f.realmPutCalls); got != 1 {
+		t.Errorf("expected exactly 1 realm PUT (from posture-flow binding only, no extra lifespan update), got %d", got)
 	}
 }
 

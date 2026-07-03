@@ -33,12 +33,15 @@ const keycloakIssuer = requiredProdEnv(
   "http://localhost:8081/realms/freecloud",
 );
 
-// Augment the Session type so the access token and refresh-error flag are
-// visible to client/server consumers without `as any` casts.
+// M6: the Session type intentionally does NOT carry accessToken/idToken.
+// Those live only on the server-side encrypted JWT (see the `jwt` callback
+// below and TokenWithAccess) and are read server-side via next-auth/jwt's
+// getToken() by the BFF proxy route (app/api/v1/[...path]/route.ts) — never
+// copied onto the client-visible Session. Only the non-sensitive
+// refresh-error flag is exposed, so the client can detect a broken session
+// and force a re-login.
 declare module "next-auth" {
   interface Session {
-    accessToken?: string;
-    idToken?: string;
     error?: "RefreshAccessTokenError";
   }
 }
@@ -127,9 +130,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return t;
     },
     async session({ session, token }) {
+      // M6: deliberately do NOT copy accessToken/idToken from the JWT onto
+      // the session — that would put the raw Keycloak token within reach of
+      // any client-side XSS. Server-side code that needs the real token
+      // (the BFF proxy route) reads it via next-auth/jwt's getToken()
+      // instead, which never crosses into client-visible state.
       const t = token as typeof token & TokenWithAccess;
-      session.accessToken = t.accessToken;
-      session.idToken = t.idToken;
       session.error = t.error;
       return session;
     },
