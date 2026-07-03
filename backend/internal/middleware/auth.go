@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/sync/singleflight"
 )
 
 // Role is the internal RBAC role resolved from Keycloak realm roles.
@@ -40,25 +42,25 @@ const OrgMembershipRoleAdmin = "org-admin"
 type Permission string
 
 const (
-	PermManageUsers     Permission = "manage:users"
-	PermOnboardOffboard Permission = "onboard:offboard"
-	PermReadUsers       Permission = "read:users"
-	PermManageApps      Permission = "manage:apps"
-	PermReadApps        Permission = "read:apps"
-	PermReadAuditLogs   Permission = "read:audit-logs"
-	PermExportAuditLogs Permission = "export:audit-logs"
-	PermManageGroups    Permission = "manage:groups"
-	PermReadGroups      Permission = "read:groups"
-	PermManageDevices   Permission = "manage:devices"
-	PermReadCompliance  Permission = "read:compliance"
-	PermManagePolicies  Permission = "manage:policies"
-	PermManageMFA       Permission = "manage:mfa"
-	PermManageAPITokens Permission = "manage:api-tokens"
-	PermSelfService     Permission = "self:service"
-	PermManageCampaigns Permission = "manage:campaigns"
-	PermReviewCampaigns Permission = "review:campaigns"
-	PermApproveRequests Permission = "approve:requests"
-	PermSubmitApprovals    Permission = "submit:approvals"
+	PermManageUsers         Permission = "manage:users"
+	PermOnboardOffboard     Permission = "onboard:offboard"
+	PermReadUsers           Permission = "read:users"
+	PermManageApps          Permission = "manage:apps"
+	PermReadApps            Permission = "read:apps"
+	PermReadAuditLogs       Permission = "read:audit-logs"
+	PermExportAuditLogs     Permission = "export:audit-logs"
+	PermManageGroups        Permission = "manage:groups"
+	PermReadGroups          Permission = "read:groups"
+	PermManageDevices       Permission = "manage:devices"
+	PermReadCompliance      Permission = "read:compliance"
+	PermManagePolicies      Permission = "manage:policies"
+	PermManageMFA           Permission = "manage:mfa"
+	PermManageAPITokens     Permission = "manage:api-tokens"
+	PermSelfService         Permission = "self:service"
+	PermManageCampaigns     Permission = "manage:campaigns"
+	PermReviewCampaigns     Permission = "review:campaigns"
+	PermApproveRequests     Permission = "approve:requests"
+	PermSubmitApprovals     Permission = "submit:approvals"
 	PermManageAccountPolicy Permission = "manage:account-policy"
 	// PermManageOrgs is system-admin only: create/list organizations (tenants).
 	PermManageOrgs Permission = "manage:orgs"
@@ -74,25 +76,25 @@ const (
 
 // permissionMatrix maps each permission to the roles that hold it.
 var permissionMatrix = map[Permission][]Role{
-	PermManageUsers:     {RoleSuperAdmin},
-	PermOnboardOffboard: {RoleSuperAdmin},
-	PermReadUsers:       {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
-	PermManageApps:      {RoleSuperAdmin},
-	PermReadApps:        {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
-	PermReadAuditLogs:   {RoleSuperAdmin, RoleAuditor},
-	PermExportAuditLogs: {RoleSuperAdmin, RoleAuditor},
-	PermManageGroups:    {RoleSuperAdmin},
-	PermReadGroups:      {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
-	PermManageDevices:   {RoleSuperAdmin, RoleHelpdesk},
-	PermReadCompliance:  {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
-	PermManagePolicies:  {RoleSuperAdmin},
-	PermManageMFA:       {RoleSuperAdmin, RoleHelpdesk},
-	PermManageAPITokens: {RoleSuperAdmin},
-	PermSelfService:     {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly, RoleEndUser},
-	PermManageCampaigns: {RoleSuperAdmin},
-	PermReviewCampaigns: {RoleSuperAdmin, RoleAuditor},
-	PermApproveRequests: {RoleSuperAdmin},
-	PermSubmitApprovals:    {RoleSuperAdmin, RoleHelpdesk},
+	PermManageUsers:         {RoleSuperAdmin},
+	PermOnboardOffboard:     {RoleSuperAdmin},
+	PermReadUsers:           {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermManageApps:          {RoleSuperAdmin},
+	PermReadApps:            {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermReadAuditLogs:       {RoleSuperAdmin, RoleAuditor},
+	PermExportAuditLogs:     {RoleSuperAdmin, RoleAuditor},
+	PermManageGroups:        {RoleSuperAdmin},
+	PermReadGroups:          {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermManageDevices:       {RoleSuperAdmin, RoleHelpdesk},
+	PermReadCompliance:      {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermManagePolicies:      {RoleSuperAdmin},
+	PermManageMFA:           {RoleSuperAdmin, RoleHelpdesk},
+	PermManageAPITokens:     {RoleSuperAdmin},
+	PermSelfService:         {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly, RoleEndUser},
+	PermManageCampaigns:     {RoleSuperAdmin},
+	PermReviewCampaigns:     {RoleSuperAdmin, RoleAuditor},
+	PermApproveRequests:     {RoleSuperAdmin},
+	PermSubmitApprovals:     {RoleSuperAdmin, RoleHelpdesk},
 	PermManageAccountPolicy: {RoleSuperAdmin},
 	PermManageOrgs:          {RoleSuperAdmin},
 	// PermManageOrgMembers is NOT checked via this matrix — see
@@ -194,6 +196,11 @@ type APITokenMiddleware struct {
 
 // NewAPITokenMiddleware returns an APITokenMiddleware wrapping the given AuthMiddleware.
 func NewAPITokenMiddleware(auth *AuthMiddleware, db TokenDB) *APITokenMiddleware {
+	// H8: wire the same DB the fc_ API-token path uses into the wrapped
+	// AuthMiddleware too, so Keycloak JWTs are ALSO checked against
+	// users.disabled — see AuthMiddleware.isUserDisabled. The fc_ token path
+	// (handleAPIToken) already does its own DB check against api_tokens.
+	auth.userStatusDB = db
 	return &APITokenMiddleware{AuthMiddleware: auth, db: db}
 }
 
@@ -292,6 +299,25 @@ func SetClaims(ctx context.Context, claims *JWTClaims) context.Context {
 	return context.WithValue(ctx, claimsKey, claims)
 }
 
+// minJWKSRefreshInterval bounds how often refreshJWKS may actually hit
+// Keycloak (H2). Without this, an attacker who sends requests with a
+// distinct, unknown JWT `kid` header — read from the unverified token before
+// any signature check — can force one upstream fetch per request. Combined
+// with the singleflight below (which collapses truly concurrent callers into
+// one fetch), this means a burst OR a slow drip of bogus kids can force at
+// most one upstream JWKS fetch per this interval.
+const minJWKSRefreshInterval = 5 * time.Second
+
+// jwksCacheTTL bounds how long a successfully-fetched JWKS is trusted before
+// keyForToken forces a fresh fetch even for a kid it already has cached.
+const jwksCacheTTL = 5 * time.Minute
+
+// disabledStatusCacheTTL bounds how long a user's disabled/not-disabled
+// status is cached (H8) before AuthMiddleware re-queries Postgres. This
+// trades a short window of continued access after an offboard (at most this
+// long) for not paying a DB round trip on every authenticated request.
+const disabledStatusCacheTTL = 10 * time.Second
+
 // AuthMiddleware validates JWTs against a Keycloak realm.
 type AuthMiddleware struct {
 	keycloakURL    string
@@ -303,6 +329,32 @@ type AuthMiddleware struct {
 	// keysByKid maps a JWT "kid" header to its parsed RSA public key.
 	keysByKid map[string]*rsa.PublicKey
 	lastFetch time.Time
+	// lastAttempt records the last refreshJWKS ATTEMPT (success or failure),
+	// independent of lastFetch (which only advances on success). Read/written
+	// only inside refreshJWKSRateLimited under a.mu — see minJWKSRefreshInterval.
+	lastAttempt time.Time
+	// sf single-flights concurrent refreshJWKS callers into one upstream
+	// fetch (H2) instead of each holding a.mu.Lock() and fetching separately.
+	sf singleflight.Group
+
+	// userStatusDB, if non-nil, is queried to reject an otherwise-valid JWT
+	// belonging to a user whose local `users` row has disabled=true (H8 —
+	// Offboard sets this flag but JWTs are validated purely statelessly
+	// otherwise, so a captured token would keep working until it expires).
+	// Wired by NewAPITokenMiddleware, the only production construction path
+	// (see main.go); left nil when a test constructs AuthMiddleware directly
+	// to exercise JWT validation in isolation, where the check is skipped.
+	userStatusDB TokenDB
+	// disabledCacheMu guards disabledCache, kept separate from mu (which
+	// guards the JWKS cache) so the two caches never contend with each other.
+	disabledCacheMu sync.Mutex
+	disabledCache   map[string]disabledCacheEntry
+}
+
+// disabledCacheEntry is one entry of AuthMiddleware.disabledCache.
+type disabledCacheEntry struct {
+	disabled  bool
+	expiresAt time.Time
 }
 
 // NewAuthMiddleware creates a new AuthMiddleware.
@@ -318,7 +370,11 @@ func NewAuthMiddleware(keycloakURL, realm, audience string) *AuthMiddleware {
 }
 
 // refreshJWKS fetches the realm's JWKS document and stores the parsed keys
-// indexed by their "kid" header. Must be called with a.mu held.
+// indexed by their "kid" header. Unlike before H2, this does the network
+// fetch and JSON parsing WITHOUT holding a.mu — only the final swap of the
+// parsed map into a.keysByKid takes the (short) write lock. Callers reach
+// this only via refreshJWKSRateLimited, which single-flights and rate-limits
+// invocations.
 func (a *AuthMiddleware) refreshJWKS() error {
 	url := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/certs", a.keycloakURL, a.realm)
 	resp, err := a.httpClient.Get(url)
@@ -371,9 +427,28 @@ func (a *AuthMiddleware) refreshJWKS() error {
 		return fmt.Errorf("no valid RSA keys found in JWKS response")
 	}
 
+	a.mu.Lock()
 	a.keysByKid = parsed
 	a.lastFetch = time.Now()
+	a.mu.Unlock()
 	return nil
+}
+
+// refreshJWKSRateLimited gates refreshJWKS behind minJWKSRefreshInterval
+// (H2): the check-and-set of lastAttempt happens atomically under a short
+// a.mu.Lock() (no I/O inside the critical section), so of any number of
+// callers arriving within the same window — concurrent or sequential — only
+// the first proceeds to actually hit the network; the rest return nil
+// immediately and the caller re-checks the (possibly unchanged) cache.
+func (a *AuthMiddleware) refreshJWKSRateLimited() error {
+	a.mu.Lock()
+	if time.Since(a.lastAttempt) < minJWKSRefreshInterval {
+		a.mu.Unlock()
+		return nil
+	}
+	a.lastAttempt = time.Now()
+	a.mu.Unlock()
+	return a.refreshJWKS()
 }
 
 // keyForToken returns the verification key matching the token's "kid" header.
@@ -393,41 +468,91 @@ func (a *AuthMiddleware) keyForToken(tokenString string) (*rsa.PublicKey, error)
 	}
 
 	a.mu.RLock()
-	if time.Since(a.lastFetch) < 5*time.Minute && len(a.keysByKid) > 0 {
-		if header.Kid != "" {
-			if key, ok := a.keysByKid[header.Kid]; ok {
-				a.mu.RUnlock()
-				return key, nil
-			}
-		}
-		// kid not in cache but cache fresh — fall through and refresh once below.
+	fresh := time.Since(a.lastFetch) < jwksCacheTTL && len(a.keysByKid) > 0
+	var key *rsa.PublicKey
+	if fresh && header.Kid != "" {
+		key = a.keysByKid[header.Kid]
 	}
 	a.mu.RUnlock()
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Double-check after acquiring the write lock.
-	if time.Since(a.lastFetch) < 5*time.Minute && len(a.keysByKid) > 0 {
-		if header.Kid != "" {
-			if key, ok := a.keysByKid[header.Kid]; ok {
-				return key, nil
-			}
-		}
+	if key != nil {
+		return key, nil
+	}
+	if header.Kid == "" && fresh {
+		// No kid in header and the cache is fresh: caller (Middleware) tries
+		// every cached key as a last resort.
+		return nil, nil
 	}
 
-	// Cache stale or kid unknown — refresh.
-	if err := a.refreshJWKS(); err != nil {
+	// Cache miss (unknown kid) or stale/empty cache. H2: refresh via the
+	// single-flighted, rate-limited path instead of fetching directly while
+	// holding a write lock — many callers land here concurrently without
+	// serializing the whole API behind one outbound HTTP call.
+	if _, err, _ := a.sf.Do("jwks", func() (interface{}, error) {
+		return nil, a.refreshJWKSRateLimited()
+	}); err != nil {
 		return nil, err
 	}
-	if header.Kid != "" {
-		if key, ok := a.keysByKid[header.Kid]; ok {
-			return key, nil
-		}
-		return nil, fmt.Errorf("no key found for kid %q after JWKS refresh", header.Kid)
+
+	if header.Kid == "" {
+		// No kid in header: caller (Middleware) will try every key as a last resort.
+		return nil, nil
 	}
-	// No kid in header: caller (Middleware) will try every key as a last resort.
-	return nil, nil
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if key, ok := a.keysByKid[header.Kid]; ok {
+		return key, nil
+	}
+	return nil, fmt.Errorf("no key found for kid %q", header.Kid)
+}
+
+// isUserDisabled reports whether sub (the JWT's `sub` claim) maps to a local
+// `users` row with disabled=true (H8). A user with no local row at all (e.g.
+// the bootstrap admin created by POST /api/v1/setup, which never gets a
+// `users` row — see setup.go) is NOT treated as disabled: Offboard is the
+// only writer of this flag and it only ever updates rows that already exist,
+// so "no row" simply means this identity was never tracked/offboarded here.
+// A genuine lookup failure (DB unreachable, timeout, ...) fails CLOSED.
+func (a *AuthMiddleware) isUserDisabled(ctx context.Context, sub string) (bool, error) {
+	if a.userStatusDB == nil {
+		// Not wired — only possible in tests that construct AuthMiddleware
+		// directly. Every production instance goes through
+		// NewAPITokenMiddleware, which always wires this.
+		return false, nil
+	}
+	if disabled, ok := a.disabledCacheGet(sub); ok {
+		return disabled, nil
+	}
+
+	var disabled bool
+	err := a.userStatusDB.QueryRow(ctx, `SELECT disabled FROM users WHERE keycloak_user_id = $1`, sub).Scan(&disabled)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			a.disabledCacheSet(sub, false)
+			return false, nil
+		}
+		return false, err
+	}
+	a.disabledCacheSet(sub, disabled)
+	return disabled, nil
+}
+
+func (a *AuthMiddleware) disabledCacheGet(sub string) (bool, bool) {
+	a.disabledCacheMu.Lock()
+	defer a.disabledCacheMu.Unlock()
+	e, ok := a.disabledCache[sub]
+	if !ok || time.Now().After(e.expiresAt) {
+		return false, false
+	}
+	return e.disabled, true
+}
+
+func (a *AuthMiddleware) disabledCacheSet(sub string, disabled bool) {
+	a.disabledCacheMu.Lock()
+	defer a.disabledCacheMu.Unlock()
+	if a.disabledCache == nil {
+		a.disabledCache = make(map[string]disabledCacheEntry)
+	}
+	a.disabledCache[sub] = disabledCacheEntry{disabled: disabled, expiresAt: time.Now().Add(disabledStatusCacheTTL)}
 }
 
 // Middleware is an HTTP middleware that validates the Bearer token.
@@ -572,6 +697,22 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			}
 			writeAuthError(w, http.StatusUnauthorized, "unauthorized: "+msg)
 			return
+		}
+
+		// H8: reject a cryptographically-valid, unexpired JWT if it belongs to
+		// a locally-disabled (offboarded) user. JWTs are otherwise validated
+		// purely statelessly above, so without this a captured token from an
+		// offboarded user keeps working until it naturally expires.
+		if claims := GetClaims(r.Context()); claims != nil {
+			disabled, err := a.isUserDisabled(r.Context(), claims.Sub)
+			if err != nil {
+				writeAuthError(w, http.StatusUnauthorized, "unauthorized: unable to verify account status")
+				return
+			}
+			if disabled {
+				writeAuthError(w, http.StatusUnauthorized, "unauthorized: account disabled")
+				return
+			}
 		}
 
 		next.ServeHTTP(w, r)
