@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
+	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
@@ -825,10 +826,27 @@ func scimGroupFromKC(id, name string, members []scimGroupMember) SCIMGroup {
 func (h *Handler) SCIMListGroups(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// C1: org-scoped read. Fail closed — no org context means no rows,
+	// mirroring the User handlers (SCIMListUsers) — never fall back to
+	// listing the whole realm's groups.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
+
 	startIndex := 1
 	if v := r.URL.Query().Get("startIndex"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			startIndex = n
+		}
+	}
+	// M7: honor + clamp count (max 1000), same bound as SCIMListUsers —
+	// previously this was ignored entirely and the whole realm was fetched.
+	count := 100
+	if v := r.URL.Query().Get("count"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			count = n
 		}
 	}
 
@@ -841,7 +859,17 @@ func (h *Handler) SCIMListGroups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	kcGroups, err := h.keycloak.ListGroups(ctx)
+	// M7/C1: fetch only THIS org's groups — never the whole realm. The org
+	// filter is pushed into the Keycloak query itself (ListGroupsByOrg,
+	// with a defensive re-check on the way back). startIndex/count paging
+	// and the optional displayName filter are then applied in-process
+	// against that already-org-scoped set, exactly as before this fix, just
+	// no longer over every tenant's groups. maxOrgGroups bounds the single
+	// upstream call; a truly huge single org would need real Keycloak-side
+	// cursoring, but that's a pagination-completeness concern, not the
+	// security fix this endpoint needed.
+	const maxOrgGroups = 5000
+	kcGroups, err := h.keycloak.ListGroupsByOrg(ctx, oc.OrgID, 0, maxOrgGroups)
 	if err != nil {
 		h.logger.Error("scim list groups: keycloak failed", zap.Error(err))
 		scimRespondError(w, http.StatusInternalServerError, "internal error", "")
@@ -862,7 +890,7 @@ func (h *Handler) SCIMListGroups(w http.ResponseWriter, r *http.Request) {
 		groups = []SCIMGroup{}
 	}
 
-	// Pagination (SCIM uses 1-based startIndex)
+	// Pagination (SCIM uses 1-based startIndex).
 	offset := startIndex - 1
 	if offset < 0 {
 		offset = 0
@@ -872,6 +900,9 @@ func (h *Handler) SCIMListGroups(w http.ResponseWriter, r *http.Request) {
 		groups = groups[offset:]
 	} else {
 		groups = []SCIMGroup{}
+	}
+	if len(groups) > count {
+		groups = groups[:count]
 	}
 
 	scimRespond(w, http.StatusOK, scimGroupListResponse{
@@ -892,6 +923,13 @@ func (h *Handler) SCIMGetGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
+	// C1: org-scoped read. Fail closed — no org context means "not found".
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
+
 	g, err := h.keycloak.GetGroupByID(ctx, groupID)
 	if err != nil {
 		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
@@ -904,6 +942,13 @@ func (h *Handler) SCIMGetGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if g.ID == nil || g.Name == nil {
 		scimRespondError(w, http.StatusInternalServerError, "incomplete group data", "")
+		return
+	}
+	// C1: verify the group belongs to the caller's org — fail closed with
+	// the SAME 404 as "doesn't exist" so a foreign-org group ID never
+	// distinguishably leaks its existence.
+	if keycloak.GroupOrgID(g) != oc.OrgID {
+		scimRespondError(w, http.StatusNotFound, "group not found", "")
 		return
 	}
 
@@ -929,6 +974,21 @@ func (h *Handler) SCIMGetGroup(w http.ResponseWriter, r *http.Request) {
 	scimRespond(w, http.StatusOK, grp)
 }
 
+// scimUserInOrg reports whether userID belongs to orgID (per the users
+// table), used by the SCIM Groups handlers (C1) to stop an org-scoped SCIM
+// token from binding another tenant's user into one of its groups via a
+// member add/replace/initial-members list. Fails closed: any error
+// (including h.db being nil) is treated as "not verified" i.e. not in org.
+func (h *Handler) scimUserInOrg(ctx context.Context, userID, orgID string) bool {
+	ok, err := h.resourceInOrg(ctx, "users", "keycloak_user_id", userID, orgID)
+	if err != nil {
+		h.logger.Warn("scim: failed to verify member org membership; treating as not-in-org",
+			zap.String("user_id", userID), zap.Error(err))
+		return false
+	}
+	return ok
+}
+
 // SCIMCreateGroup handles POST /scim/v2/Groups
 func (h *Handler) SCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 	var req SCIMGroup
@@ -943,29 +1003,63 @@ func (h *Handler) SCIMCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	groupID, err := h.keycloak.CreateGroup(ctx, req.DisplayName)
+	// C1: org-scoped write. Fail closed — no org context means no group.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
+
+	groupID, err := h.keycloak.CreateGroupWithOrgID(ctx, req.DisplayName, oc.OrgID)
 	if err != nil {
 		h.logger.Error("scim create group: keycloak failed", zap.String("name", req.DisplayName), zap.Error(err))
 		scimRespondError(w, http.StatusInternalServerError, "failed to create group", "")
 		return
 	}
 
-	// Add initial members if provided
+	// Add initial members if provided — but only ones that actually belong
+	// to the caller's org (C1): otherwise a per-org SCIM token could bind
+	// another tenant's user into a group it just created in this org.
+	var addedMembers []scimGroupMember
 	for _, m := range req.Members {
 		if m.Value == "" {
+			continue
+		}
+		if !h.scimUserInOrg(ctx, m.Value, oc.OrgID) {
+			h.logger.Warn("scim create group: skipped initial member outside caller's org",
+				zap.String("group_id", groupID), zap.String("user_id", m.Value))
 			continue
 		}
 		if err := h.keycloak.AddUserToGroup(ctx, m.Value, groupID); err != nil {
 			h.logger.Warn("scim create group: failed to add initial member",
 				zap.String("group_id", groupID), zap.String("user_id", m.Value), zap.Error(err))
+			continue
 		}
+		addedMembers = append(addedMembers, m)
 	}
 
-	grp := scimGroupFromKC(groupID, req.DisplayName, req.Members)
+	grp := scimGroupFromKC(groupID, req.DisplayName, addedMembers)
 	if grp.Members == nil {
 		grp.Members = []scimGroupMember{}
 	}
 	scimRespond(w, http.StatusCreated, grp)
+}
+
+// scimFilterUserIDsInOrg returns the subset of uids that belong to orgID,
+// logging (and dropping) any that don't. Used by every SCIM Groups PATCH
+// path that adds/removes/replaces members (C1) so an org-scoped SCIM token
+// can never bind — or unbind — a foreign tenant's user via group membership.
+func (h *Handler) scimFilterUserIDsInOrg(ctx context.Context, groupID, orgID string, uids []string) []string {
+	out := make([]string, 0, len(uids))
+	for _, uid := range uids {
+		if h.scimUserInOrg(ctx, uid, orgID) {
+			out = append(out, uid)
+			continue
+		}
+		h.logger.Warn("scim patch group: skipped member outside caller's org",
+			zap.String("group_id", groupID), zap.String("user_id", uid))
+	}
+	return out
 }
 
 // SCIMPatchGroup handles PATCH /scim/v2/Groups/{id}
@@ -984,6 +1078,13 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
+	// C1: org-scoped write. Fail closed — no org context means "not found".
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
+
 	// Verify group exists
 	g, err := h.keycloak.GetGroupByID(ctx, groupID)
 	if err != nil {
@@ -996,6 +1097,13 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if g.ID == nil || g.Name == nil {
 		scimRespondError(w, http.StatusInternalServerError, "incomplete group data", "")
+		return
+	}
+	// C1: verify the group belongs to the caller's org — fail closed with
+	// the SAME 404 as "doesn't exist" so a foreign-org group ID never
+	// distinguishably leaks its existence.
+	if keycloak.GroupOrgID(g) != oc.OrgID {
+		scimRespondError(w, http.StatusNotFound, "group not found", "")
 		return
 	}
 
@@ -1037,13 +1145,17 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 		case (opLow == "add") && pathLow == "members":
 			if filterQualifiedUserID != "" {
 				// Filter-qualified add: add a specific member by value filter.
-				if err := h.keycloak.AddUserToGroup(ctx, filterQualifiedUserID, groupID); err != nil {
-					h.logger.Warn("scim patch group: filter-qualified add member failed",
-						zap.String("group_id", groupID), zap.String("user_id", filterQualifiedUserID), zap.Error(err))
+				// C1: verify org membership before ever calling Keycloak.
+				for _, uid := range h.scimFilterUserIDsInOrg(ctx, groupID, oc.OrgID, []string{filterQualifiedUserID}) {
+					if err := h.keycloak.AddUserToGroup(ctx, uid, groupID); err != nil {
+						h.logger.Warn("scim patch group: filter-qualified add member failed",
+							zap.String("group_id", groupID), zap.String("user_id", uid), zap.Error(err))
+					}
 				}
 			} else {
-				// Add members: value is []{"value": userID}
-				userIDs := extractMemberValues(op.Value)
+				// Add members: value is []{"value": userID}. C1: only add
+				// members that belong to the caller's org.
+				userIDs := h.scimFilterUserIDsInOrg(ctx, groupID, oc.OrgID, extractMemberValues(op.Value))
 				for _, uid := range userIDs {
 					if err := h.keycloak.AddUserToGroup(ctx, uid, groupID); err != nil {
 						h.logger.Warn("scim patch group: add member failed",
@@ -1054,14 +1166,18 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 
 		case (opLow == "remove") && pathLow == "members":
 			if filterQualifiedUserID != "" {
-				// Filter-qualified remove: remove a specific member.
-				if err := h.keycloak.RemoveUserFromGroup(ctx, filterQualifiedUserID, groupID); err != nil {
-					h.logger.Warn("scim patch group: filter-qualified remove member failed",
-						zap.String("group_id", groupID), zap.String("user_id", filterQualifiedUserID), zap.Error(err))
+				// Filter-qualified remove: remove a specific member. C1: only
+				// act on a user that belongs to the caller's org.
+				for _, uid := range h.scimFilterUserIDsInOrg(ctx, groupID, oc.OrgID, []string{filterQualifiedUserID}) {
+					if err := h.keycloak.RemoveUserFromGroup(ctx, uid, groupID); err != nil {
+						h.logger.Warn("scim patch group: filter-qualified remove member failed",
+							zap.String("group_id", groupID), zap.String("user_id", uid), zap.Error(err))
+					}
 				}
 			} else {
-				// Remove members: value may be []{"value": userID} or empty (remove all, not supported)
-				userIDs := extractMemberValues(op.Value)
+				// Remove members: value may be []{"value": userID} or empty
+				// (remove all, not supported). C1: org-verify each target.
+				userIDs := h.scimFilterUserIDsInOrg(ctx, groupID, oc.OrgID, extractMemberValues(op.Value))
 				for _, uid := range userIDs {
 					if err := h.keycloak.RemoveUserFromGroup(ctx, uid, groupID); err != nil {
 						h.logger.Warn("scim patch group: remove member failed",
@@ -1071,7 +1187,9 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 			}
 
 		case (opLow == "replace") && pathLow == "members":
-			// Replace all members: first remove all, then add new set
+			// Replace all members: first remove all, then add new set. The
+			// removal side doesn't need an org check (it's un-binding
+			// whatever is already there); the new set does (C1), same as add.
 			existing, _ := h.keycloak.ListGroupMembers(ctx, groupID)
 			for _, m := range existing {
 				if m.ID == nil {
@@ -1082,7 +1200,7 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 						zap.String("group_id", groupID), zap.String("user_id", *m.ID), zap.Error(err))
 				}
 			}
-			userIDs := extractMemberValues(op.Value)
+			userIDs := h.scimFilterUserIDsInOrg(ctx, groupID, oc.OrgID, extractMemberValues(op.Value))
 			for _, uid := range userIDs {
 				if err := h.keycloak.AddUserToGroup(ctx, uid, groupID); err != nil {
 					h.logger.Warn("scim patch group: add replacement member failed",
@@ -1129,13 +1247,28 @@ func (h *Handler) SCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	// Verify existence
-	if _, err := h.keycloak.GetGroupByID(ctx, groupID); err != nil {
+	// C1: org-scoped write. Fail closed — no org context means "not found".
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		scimRespondError(w, http.StatusForbidden, "forbidden: no organization context", "")
+		return
+	}
+
+	// Verify existence and ownership
+	g, err := h.keycloak.GetGroupByID(ctx, groupID)
+	if err != nil {
 		if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "not found") {
 			scimRespondError(w, http.StatusNotFound, "group not found", "")
 			return
 		}
 		scimRespondError(w, http.StatusInternalServerError, "internal error", "")
+		return
+	}
+	// C1: verify the group belongs to the caller's org — fail closed with
+	// the SAME 404 as "doesn't exist" so a foreign-org group ID never
+	// distinguishably leaks its existence.
+	if keycloak.GroupOrgID(g) != oc.OrgID {
+		scimRespondError(w, http.StatusNotFound, "group not found", "")
 		return
 	}
 

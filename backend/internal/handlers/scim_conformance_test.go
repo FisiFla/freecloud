@@ -25,6 +25,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 // ---- test router ----
@@ -507,6 +509,11 @@ func newGroupCRUDRouter(t *testing.T) (chi.Router, *Handler) {
 	memberID := "user-a"
 	memberEmail := "a@example.com"
 	members := []*gocloak.User{}
+	// C1: every SCIM Groups handler now resolves ownership via the org_id
+	// group attribute — this router authenticates through the legacy
+	// scimBearerMW, which resolves to the Default Organization, so the
+	// fixture group must be tagged the same way to be found by its owner.
+	groupAttrs := map[string][]string{"org_id": {middleware.DefaultOrgID}}
 
 	kc := &fakeKeycloak{
 		createGroupFn: func(ctx context.Context, name string) (string, error) {
@@ -514,12 +521,12 @@ func newGroupCRUDRouter(t *testing.T) (chi.Router, *Handler) {
 		},
 		getGroupByIDFn: func(ctx context.Context, groupID string) (*gocloak.Group, error) {
 			if groupID == gid {
-				return &gocloak.Group{ID: &gid, Name: &gname}, nil
+				return &gocloak.Group{ID: &gid, Name: &gname, Attributes: &groupAttrs}, nil
 			}
 			return nil, fmt.Errorf("404 not found")
 		},
 		listGroupsFn: func(ctx context.Context) ([]*gocloak.Group, error) {
-			return []*gocloak.Group{{ID: &gid, Name: &gname}}, nil
+			return []*gocloak.Group{{ID: &gid, Name: &gname, Attributes: &groupAttrs}}, nil
 		},
 		listGroupMembersFn: func(ctx context.Context, groupID string) ([]*gocloak.User, error) {
 			return members, nil
@@ -537,7 +544,13 @@ func newGroupCRUDRouter(t *testing.T) (chi.Router, *Handler) {
 		},
 	}
 
-	h := NewHandler(nil, kc, &fakeFleet{}, zap.NewNop())
+	// C1: member add/remove now verifies the target user belongs to the
+	// caller's org — this router's tests only exercise the single-org happy
+	// path, so a permissive fakeDB (every ownership check succeeds) keeps
+	// them focused on group CRUD plumbing, not org isolation (that's proven
+	// separately in scim_groups_test.go / org_isolation_test.go).
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, kc, &fakeFleet{}, zap.NewNop())
 	h.SetSCIMBearerToken("test-bearer")
 
 	r := chi.NewRouter()
@@ -712,11 +725,14 @@ func newFilterRouter(t *testing.T) chi.Router {
 		},
 	}
 
+	// C1: SCIMListGroups is org-scoped now too — tag both fixture groups
+	// with the Default Org (this router authenticates via legacy scimBearerMW).
+	groupAttrs := map[string][]string{"org_id": {middleware.DefaultOrgID}}
 	kc := &fakeKeycloak{
 		listGroupsFn: func(ctx context.Context) ([]*gocloak.Group, error) {
 			return []*gocloak.Group{
-				{ID: &gid1, Name: &gname1},
-				{ID: &gid2, Name: &gname2},
+				{ID: &gid1, Name: &gname1, Attributes: &groupAttrs},
+				{ID: &gid2, Name: &gname2, Attributes: &groupAttrs},
 			}, nil
 		},
 	}
@@ -929,16 +945,19 @@ func TestSCIMConformance_PatchPaths_FilterQualifiedGroupAdd(t *testing.T) {
 	// the filter-qualified form (which should degrade to a regular add with the matching UID).
 	gid, gname := "g1", "Eng"
 	addedUID := ""
+	groupAttrs := map[string][]string{"org_id": {middleware.DefaultOrgID}}
 	kc := &fakeKeycloak{
 		getGroupByIDFn: func(ctx context.Context, groupID string) (*gocloak.Group, error) {
-			return &gocloak.Group{ID: &gid, Name: &gname}, nil
+			return &gocloak.Group{ID: &gid, Name: &gname, Attributes: &groupAttrs}, nil
 		},
 		addUserToGroupFn: func(ctx context.Context, userID, groupID string) error {
 			addedUID = userID
 			return nil
 		},
 	}
-	h := NewHandler(nil, kc, &fakeFleet{}, zap.NewNop())
+	// C1: member add now verifies org membership — permissive fakeDB.
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	h := NewHandler(db, kc, &fakeFleet{}, zap.NewNop())
 	h.SetSCIMBearerToken("test-bearer")
 
 	r := chi.NewRouter()
