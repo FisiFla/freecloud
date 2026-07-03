@@ -18,6 +18,16 @@ import (
 
 var errEnrollmentTokenNotConsumable = errors.New("enrollment token is unknown, used, or expired")
 
+// enrollmentTokenHash returns the sha256-hex digest of a plaintext Fleet
+// enrollment token (M3). enrollment_tokens stores only this hash — never
+// the plaintext — matching every other bearer secret in this codebase
+// (see api_tokens.go, scim_bearer_tokens). Callers look up a token by
+// hashing the value presented to them and comparing against token_hash.
+func enrollmentTokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
 // EnrollmentCallbackRequest is the body FleetDM POSTs when a host enrolls using
 // an enrollment token that was issued for a user during onboarding.
 type EnrollmentCallbackRequest struct {
@@ -92,6 +102,14 @@ func (h *Handler) FleetEnrollmentCallback(w http.ResponseWriter, r *http.Request
 
 // linkEnrolledDevice upserts the device, maps it to the user, and consumes the
 // enrollment token, all in one transaction.
+//
+// C2: the token row carries the org it was issued for (onboarding.go
+// persistOnboard); this resolves that org_id and sets it EXPLICITLY on both
+// the initial INSERT and the ON CONFLICT UPDATE, so a re-enrollment always
+// corrects the device's org rather than leaving it on whatever it had
+// before (or the schema's Default-Org default, which is exactly the hole
+// this fix closes — see requireDeviceInCallerOrg in device_actions.go,
+// which trusts devices.org_id completely).
 func (h *Handler) linkEnrolledDevice(ctx context.Context, req EnrollmentCallbackRequest) (string, error) {
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
@@ -99,14 +117,14 @@ func (h *Handler) linkEnrolledDevice(ctx context.Context, req EnrollmentCallback
 	}
 	defer tx.Rollback(ctx)
 
-	var userID string
+	var userID, orgID string
 	if err := tx.QueryRow(ctx,
 		`UPDATE enrollment_tokens
 		 SET used_at = NOW(), used_by_host_id = $2
-		 WHERE token = $1 AND used_at IS NULL AND expires_at > NOW()
-		 RETURNING user_id`,
-		req.EnrollmentToken, req.HostID,
-	).Scan(&userID); err != nil {
+		 WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+		 RETURNING user_id, org_id`,
+		enrollmentTokenHash(req.EnrollmentToken), req.HostID,
+	).Scan(&userID, &orgID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", errEnrollmentTokenNotConsumable
 		}
@@ -114,11 +132,11 @@ func (h *Handler) linkEnrolledDevice(ctx context.Context, req EnrollmentCallback
 	}
 
 	if _, err := tx.Exec(ctx,
-		`INSERT INTO devices (fleet_host_id, hostname, os_version, last_seen_at)
-		 VALUES ($1, $2, $3, NOW())
+		`INSERT INTO devices (fleet_host_id, hostname, os_version, org_id, last_seen_at)
+		 VALUES ($1, $2, $3, $4, NOW())
 		 ON CONFLICT (fleet_host_id) DO UPDATE
-		SET hostname = EXCLUDED.hostname, os_version = EXCLUDED.os_version, last_seen_at = NOW()`,
-		req.HostID, req.Hostname, req.OsVersion,
+		SET hostname = EXCLUDED.hostname, os_version = EXCLUDED.os_version, org_id = EXCLUDED.org_id, last_seen_at = NOW()`,
+		req.HostID, req.Hostname, req.OsVersion, orgID,
 	); err != nil {
 		return "", err
 	}
@@ -139,8 +157,8 @@ func (h *Handler) respondEnrollmentTokenState(w http.ResponseWriter, ctx context
 	var usedAt *time.Time
 	var expiresAt time.Time
 	err := h.db.QueryRow(ctx,
-		`SELECT used_at, expires_at FROM enrollment_tokens WHERE token = $1`,
-		token,
+		`SELECT used_at, expires_at FROM enrollment_tokens WHERE token_hash = $1`,
+		enrollmentTokenHash(token),
 	).Scan(&usedAt, &expiresAt)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
