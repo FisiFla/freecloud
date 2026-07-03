@@ -190,11 +190,29 @@ func ensureAdminRole(ctx context.Context, gc *gocloak.GoCloak, token, realm stri
 	return nil
 }
 
-// ensureRealm creates the target realm if it does not already exist.
+// accessTokenLifespanSeconds bounds how long a Keycloak-issued access token
+// is valid (H8 defense in depth). AuthMiddleware's users.disabled check
+// (see middleware/auth.go) is the actual fix for offboarded users keeping a
+// working token; this just shortens the blast-radius window for ANY
+// captured token instead of relying on Keycloak's install default (which can
+// be much longer), independent of that check ever misfiring.
+const accessTokenLifespanSeconds = 300 // 5 minutes
+
+// ensureRealm creates the target realm if it does not already exist, and
+// keeps accessTokenLifespanSeconds enforced on realms created before this
+// change too (idempotent — matches ensurePostureFlow's pattern of updating
+// an already-existing realm for a setting introduced later).
 func ensureRealm(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) error {
-	_, err := gc.GetRealm(ctx, token, cfg.TargetRealm)
+	realm, err := gc.GetRealm(ctx, token, cfg.TargetRealm)
 	if err == nil {
 		logger.Info("bootstrap: realm already exists")
+		if realm.AccessTokenLifespan == nil || *realm.AccessTokenLifespan != accessTokenLifespanSeconds {
+			realm.AccessTokenLifespan = gocloak.IntP(accessTokenLifespanSeconds)
+			if err := gc.UpdateRealm(ctx, token, *realm); err != nil {
+				return fmt.Errorf("bootstrap: update access token lifespan: %w", err)
+			}
+			logger.Info("bootstrap: updated access token lifespan", zap.Int("seconds", accessTokenLifespanSeconds))
+		}
 		return nil
 	}
 	if !isNotFound(err) {
@@ -211,6 +229,7 @@ func ensureRealm(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Con
 		ResetPasswordAllowed:   gocloak.BoolP(true),
 		EditUsernameAllowed:    gocloak.BoolP(true),
 		RegistrationAllowed:    gocloak.BoolP(false),
+		AccessTokenLifespan:    gocloak.IntP(accessTokenLifespanSeconds),
 	})
 	return err
 }

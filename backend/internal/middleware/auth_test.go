@@ -5,9 +5,12 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -353,6 +356,238 @@ func TestAuthMiddlewareWrongKey(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("wrong key token: expected 401, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestKeyForTokenManyUnknownKidsSingleUpstreamFetch is the H2 regression
+// guard: an attacker sending many concurrent requests with distinct,
+// JWKS-unknown `kid` header values (read from the unverified token header
+// before any signature check) must not force one upstream JWKS fetch per
+// request. Before the fix, keyForToken refreshed while holding a.mu.Lock()
+// with no dedup/rate-limit, so N concurrent unknown kids caused N fetches
+// (and serialized the whole API behind the lock + a synchronous 5s HTTP
+// call). After the fix, single-flighting + a minimum refresh interval bound
+// this to about one fetch regardless of N.
+func TestKeyForTokenManyUnknownKidsSingleUpstreamFetch(t *testing.T) {
+	privKey, jwksPayload, _, _ := generateTestKeyAndJWKS(t)
+
+	var fetchCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&fetchCount, 1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(jwksPayload))
+	}))
+	defer srv.Close()
+
+	issuer := srv.URL + "/realms/freecloud"
+	am := NewAuthMiddleware(srv.URL, "freecloud", "freecloud-dashboard")
+
+	handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	const n = 20
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			now := time.Now()
+			tokenStr := signedToken(t, privKey, fmt.Sprintf("unknown-kid-%d", i), jwt.MapClaims{
+				"sub":                "attacker",
+				"iss":                issuer,
+				"aud":                "freecloud-dashboard",
+				"azp":                "freecloud-dashboard",
+				"preferred_username": "attacker",
+				"realm_access":       map[string]interface{}{"roles": []string{}},
+				"exp":                float64(now.Add(1 * time.Hour).Unix()),
+				"iat":                float64(now.Unix()),
+			})
+			<-start
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+			req.Header.Set("Authorization", "Bearer "+tokenStr)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("unknown kid %d: expected 401, got %d", i, rec.Code)
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&fetchCount); got > 3 {
+		t.Errorf("expected at most a couple of upstream JWKS fetches for %d concurrent unknown kids (single-flight + rate limit), got %d", n, got)
+	}
+}
+
+// ---- H8: disabled-user JWT rejection ----
+
+// fakeUserStatusDB is a minimal TokenDB fake for isUserDisabled's
+// `SELECT disabled FROM users ...` single-column query shape.
+type fakeUserStatusDB struct {
+	disabled bool
+	err      error
+}
+
+func (d fakeUserStatusDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return fakeUserStatusRow(d)
+}
+
+type fakeUserStatusRow struct {
+	disabled bool
+	err      error
+}
+
+func (r fakeUserStatusRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	if p, ok := dest[0].(*bool); ok {
+		*p = r.disabled
+	}
+	return nil
+}
+
+func newDisabledUserToken(t *testing.T, privKey *rsa.PrivateKey, kid, issuer, sub string) string {
+	t.Helper()
+	now := time.Now()
+	return signedToken(t, privKey, kid, jwt.MapClaims{
+		"sub":                sub,
+		"iss":                issuer,
+		"aud":                "freecloud-dashboard",
+		"azp":                "freecloud-dashboard",
+		"preferred_username": sub,
+		"email":              sub + "@test.com",
+		"realm_access":       map[string]interface{}{"roles": []string{"admin"}},
+		"exp":                float64(now.Add(1 * time.Hour).Unix()),
+		"iat":                float64(now.Unix()),
+	})
+}
+
+// TestAuthMiddlewareRejectsDisabledUser is the H8 regression guard: a
+// cryptographically-valid, unexpired JWT belonging to a user whose local
+// `users` row has disabled=true (set by Offboard) must be rejected.
+func TestAuthMiddlewareRejectsDisabledUser(t *testing.T) {
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
+	jwksSrv := startJWKSServer(t, jwksPayload)
+	issuer := jwksSrv.URL + "/realms/freecloud"
+
+	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
+	am.userStatusDB = fakeUserStatusDB{disabled: true}
+
+	tokenStr := newDisabledUserToken(t, privKey, kid, issuer, "offboarded-user")
+
+	handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("a disabled user's request must never reach the protected handler")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("disabled user with valid JWT: expected 401, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAuthMiddlewareAllowsEnabledUser is the positive counterpart —
+// disabled=false must still pass through, proving the check isn't just
+// always rejecting.
+func TestAuthMiddlewareAllowsEnabledUser(t *testing.T) {
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
+	jwksSrv := startJWKSServer(t, jwksPayload)
+	issuer := jwksSrv.URL + "/realms/freecloud"
+
+	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
+	am.userStatusDB = fakeUserStatusDB{disabled: false}
+
+	tokenStr := newDisabledUserToken(t, privKey, kid, issuer, "active-user")
+
+	handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("enabled user: expected 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAuthMiddlewareAllowsUserNotTrackedLocally guards against a severe
+// regression: the bootstrap admin created by POST /api/v1/setup (and any
+// Keycloak user never onboarded/offboarded through FreeCloud) has NO row in
+// the local `users` table. pgx.ErrNoRows must be treated as "not disabled",
+// not as a lookup failure — otherwise the very first admin would be locked
+// out of their own instance.
+func TestAuthMiddlewareAllowsUserNotTrackedLocally(t *testing.T) {
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
+	jwksSrv := startJWKSServer(t, jwksPayload)
+	issuer := jwksSrv.URL + "/realms/freecloud"
+
+	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
+	am.userStatusDB = fakeUserStatusDB{err: pgx.ErrNoRows}
+
+	tokenStr := newDisabledUserToken(t, privKey, kid, issuer, "bootstrap-admin")
+
+	handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("user with no local users row: expected 200 (allowed), got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestAuthMiddlewareFailsClosedOnUserStatusLookupError verifies a genuine DB
+// error (not "no rows") fails closed (401) rather than assuming the account
+// is fine.
+func TestAuthMiddlewareFailsClosedOnUserStatusLookupError(t *testing.T) {
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
+	jwksSrv := startJWKSServer(t, jwksPayload)
+	issuer := jwksSrv.URL + "/realms/freecloud"
+
+	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
+	am.userStatusDB = fakeUserStatusDB{err: errors.New("connection reset")}
+
+	tokenStr := newDisabledUserToken(t, privKey, kid, issuer, "some-user")
+
+	handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("a lookup error must fail closed, not reach the protected handler")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("DB lookup error: expected 401 (fail closed), got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestNewAPITokenMiddlewareWiresUserStatusDB verifies NewAPITokenMiddleware
+// wires its db into the wrapped AuthMiddleware's disabled-user check (H8) —
+// this is the only production construction path (see main.go), so if this
+// wiring silently regressed, disabled users would keep authenticating in
+// production despite the unit tests above passing.
+func TestNewAPITokenMiddlewareWiresUserStatusDB(t *testing.T) {
+	base := NewAuthMiddleware("http://localhost:8081", "freecloud", "freecloud-dashboard")
+	db := fakeTokenDB{role: string(RoleSuperAdmin)}
+	NewAPITokenMiddleware(base, db)
+	if base.userStatusDB == nil {
+		t.Fatal("expected NewAPITokenMiddleware to wire userStatusDB onto the base AuthMiddleware")
 	}
 }
 
