@@ -66,8 +66,8 @@ func TestEnrollmentLoopEndToEnd(t *testing.T) {
 		t.Fatalf("insert user: %v", err)
 	}
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO enrollment_tokens (token, user_id, expires_at) VALUES ($1,$2, NOW() + INTERVAL '1 hour')`,
-		token, userID); err != nil {
+		`INSERT INTO enrollment_tokens (token_hash, user_id, expires_at) VALUES ($1,$2, NOW() + INTERVAL '1 hour')`,
+		enrollmentTokenHash(token), userID); err != nil {
 		t.Fatalf("insert enrollment token: %v", err)
 	}
 
@@ -101,7 +101,7 @@ func TestEnrollmentLoopEndToEnd(t *testing.T) {
 		t.Fatalf("expected 1 device mapping row, got %d", n)
 	}
 	var used *time.Time
-	if err := pool.QueryRow(ctx, `SELECT used_at FROM enrollment_tokens WHERE token=$1`, token).Scan(&used); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT used_at FROM enrollment_tokens WHERE token_hash=$1`, enrollmentTokenHash(token)).Scan(&used); err != nil {
 		t.Fatalf("lookup token used_at: %v", err)
 	}
 	if used == nil {
@@ -151,8 +151,8 @@ func TestEnrollmentTokenConcurrentCallbacksSingleWinner(t *testing.T) {
 		t.Fatalf("insert user: %v", err)
 	}
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO enrollment_tokens (token, user_id, expires_at) VALUES ($1,$2, NOW() + INTERVAL '1 hour')`,
-		token, userID); err != nil {
+		`INSERT INTO enrollment_tokens (token_hash, user_id, expires_at) VALUES ($1,$2, NOW() + INTERVAL '1 hour')`,
+		enrollmentTokenHash(token), userID); err != nil {
 		t.Fatalf("insert enrollment token: %v", err)
 	}
 

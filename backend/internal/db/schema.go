@@ -162,6 +162,16 @@ var migrations = []migration{
 		name:      "multi_tenant_organizations",
 		statement: Migration043,
 	},
+	{
+		id:        44,
+		name:      "enrollment_tokens_org_id",
+		statement: Migration044,
+	},
+	{
+		id:        45,
+		name:      "enrollment_tokens_hash",
+		statement: Migration045,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -893,6 +903,78 @@ CREATE TABLE IF NOT EXISTS scim_bearer_tokens (
 );
 CREATE INDEX IF NOT EXISTS idx_scim_bearer_tokens_org_id ON scim_bearer_tokens(org_id);
 CREATE INDEX IF NOT EXISTS idx_scim_bearer_tokens_token_hash ON scim_bearer_tokens(token_hash);
+`
+
+// Migration044 (C2 — Epic C multi-tenant hardening) closes a gap left by
+// Migration043: enrollment_tokens was called out in that migration's own
+// doc comment as "org_id is added directly anyway so lookups don't require
+// a join", but the column was never actually added. Without it, every
+// enrolled device lands in the Default Organization regardless of which
+// org onboarded the user (devices.org_id has a DEFAULT), so a Default-Org
+// admin could RemoteLock/RemoteWipe/policy any tenant's devices.
+//
+// Backfill resolves each pre-existing token's org via the user it was
+// issued for (org_memberships/users.org_id, already backfilled to the
+// Default Organization by Migration043 for every pre-v1.7 row), so this is
+// zero-downtime and never invents an org.
+const Migration044 = `
+ALTER TABLE enrollment_tokens ADD COLUMN IF NOT EXISTS org_id UUID;
+
+UPDATE enrollment_tokens et
+SET org_id = u.org_id
+FROM users u
+WHERE et.user_id = u.keycloak_user_id AND et.org_id IS NULL;
+
+-- Any row that still has no org (orphaned user_id, shouldn't happen given
+-- the FK, but keep the same defensive default the rest of the sweep uses).
+UPDATE enrollment_tokens SET org_id = '00000000-0000-0000-0000-000000000001' WHERE org_id IS NULL;
+
+ALTER TABLE enrollment_tokens ALTER COLUMN org_id SET DEFAULT '00000000-0000-0000-0000-000000000001';
+ALTER TABLE enrollment_tokens ALTER COLUMN org_id SET NOT NULL;
+ALTER TABLE enrollment_tokens DROP CONSTRAINT IF EXISTS fk_enrollment_tokens_org;
+ALTER TABLE enrollment_tokens ADD CONSTRAINT fk_enrollment_tokens_org FOREIGN KEY (org_id) REFERENCES organizations(id);
+CREATE INDEX IF NOT EXISTS idx_enrollment_tokens_org_id ON enrollment_tokens(org_id);
+`
+
+// Migration045 (M3) brings enrollment_tokens in line with every other bearer
+// secret in this codebase (api_tokens, scim_bearer_tokens): the Fleet
+// enrollment secret was stored — and used as the table's PRIMARY KEY — in
+// plaintext. pgcrypto's digest() lets the backfill compute the same
+// sha256-hex format the Go side already uses (fmt.Sprintf("%x",
+// sha256.Sum256(...))) without shipping application code as part of a SQL
+// migration. Once every row has a hash, the plaintext column is dropped
+// outright (not just stopped-from-being-written) so the secret doesn't sit
+// on disk indefinitely — the primary key moves from `token` to `token_hash`
+// since nothing else FKs onto enrollment_tokens.
+const Migration045 = `
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+ALTER TABLE enrollment_tokens ADD COLUMN IF NOT EXISTS token_hash TEXT;
+
+-- Backfill token_hash from the plaintext token. Guarded by a column-exists
+-- check (rather than a plain UPDATE) so this migration stays re-runnable
+-- even after the token column has already been dropped by a prior
+-- application of this same migration — every migration in this file is
+-- expected to be idempotent, and a bare "UPDATE ... token ..." would fail
+-- to even plan once the column is gone.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'enrollment_tokens' AND column_name = 'token'
+    ) THEN
+        EXECUTE $sql$UPDATE enrollment_tokens SET token_hash = encode(digest(token, 'sha256'), 'hex')
+            WHERE token_hash IS NULL AND token IS NOT NULL$sql$;
+    END IF;
+END $$;
+
+ALTER TABLE enrollment_tokens DROP CONSTRAINT IF EXISTS enrollment_tokens_pkey;
+ALTER TABLE enrollment_tokens ALTER COLUMN token_hash SET NOT NULL;
+ALTER TABLE enrollment_tokens DROP CONSTRAINT IF EXISTS enrollment_tokens_token_hash_key;
+ALTER TABLE enrollment_tokens ADD CONSTRAINT enrollment_tokens_token_hash_key UNIQUE (token_hash);
+CREATE INDEX IF NOT EXISTS idx_enrollment_tokens_token_hash ON enrollment_tokens(token_hash);
+
+ALTER TABLE enrollment_tokens DROP COLUMN IF EXISTS token;
 `
 
 // migrationLockID is the pg_advisory_lock key guarding RunMigrations. It is a

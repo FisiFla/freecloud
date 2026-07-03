@@ -88,6 +88,17 @@ func (h *Handler) requireReviewScheduleInCallerOrg(w http.ResponseWriter, r *htt
 	return h.requireResourceInCallerOrg(w, r, "review_schedules", "id", scheduleID, "schedule not found")
 }
 
+// isSystemAdminCaller reports whether the authenticated caller holds the
+// global system-admin role (RoleSuperAdmin), as opposed to an org-scoped
+// admin/member. Used by read endpoints that otherwise expose realm/fleet-
+// wide data across every tenant (M1): only a system admin sees the
+// unfiltered view; every other caller is restricted to their own org (or
+// denied entirely where there is no per-org scoping to fall back to).
+func isSystemAdminCaller(ctx context.Context) bool {
+	claims := middleware.GetClaims(ctx)
+	return claims != nil && claims.Role == middleware.RoleSuperAdmin
+}
+
 // requireAppInCallerOrg verifies a connected_apps id belongs to the caller's
 // active org. Used by every app-scoped sub-resource handler (provisioning
 // config/state, access policy, SAML metadata, ...) that takes {appId} from
