@@ -19,12 +19,14 @@ package handlers
 // rather than merely proving "a query with an org_id arg was issued".
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/Nerzal/gocloak/v13"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
@@ -52,6 +54,20 @@ func orgCtx(orgID string) context.Context {
 
 func newIsolationHandler(db DBPool) *Handler {
 	return NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+}
+
+// nonAdminOrgCtx builds a request context for a NON-system-admin caller
+// (e.g. helpdesk) resolved into orgID — used by the M1 restriction tests,
+// where isSystemAdminCaller(ctx) must be false so the caller only sees the
+// per-org (or empty) view, unlike orgCtx's RoleSuperAdmin fixture above.
+func nonAdminOrgCtx(orgID string) context.Context {
+	ctx := middleware.SetClaims(context.Background(), &middleware.JWTClaims{
+		Sub: "test-caller", Role: middleware.RoleHelpdesk,
+	})
+	ctx = context.WithValue(ctx, middleware.ActorIDKey, "test-caller")
+	return middleware.SetOrgContext(ctx, &middleware.OrgContext{
+		OrgID: orgID, Role: middleware.OrgMembershipRoleAdmin,
+	})
 }
 
 // TestCrossOrgIsolation_Users proves ListUsers and GetUser query with the
@@ -435,6 +451,262 @@ func TestCrossOrgIsolation_Devices(t *testing.T) {
 			t.Errorf("org %s: GetOrgCompliance missing its own device: %s", orgID, rec.Body.String())
 		}
 	}
+}
+
+// TestCrossOrgIsolation_MoveHostToTeam is the H4 load-bearing proof:
+// MoveHostToTeam previously passed req.HostIDs straight to Fleet with zero
+// ownership check, unlike every sibling device handler (RemoteLock above).
+// This proves a batch containing even ONE foreign-org host is rejected in
+// full, before Fleet is ever called.
+func TestCrossOrgIsolation_MoveHostToTeam(t *testing.T) {
+	const orgADevice = "host-team-org-a"
+
+	ownershipDB := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if len(args) < 2 {
+				t.Fatalf("device ownership check missing org_id argument: %v", args)
+			}
+			deviceID, _ := args[0].(string)
+			orgID, _ := args[1].(string)
+			if deviceID == orgADevice && orgID == testIsoOrgA {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*int)) = 1
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	h := newIsolationHandler(ownershipDB)
+	fleetCalled := false
+	h.fleet = &fakeFleet{moveHostToTeamFn: func(_ context.Context, _ int, _ []string) error {
+		fleetCalled = true
+		return nil
+	}}
+
+	// Org A moving its OWN device succeeds.
+	bodyA := `{"hostIds":["` + orgADevice + `"]}`
+	reqA := newChiRequestWithOrgBody(http.MethodPost, "/api/v1/teams/1/hosts", []string{"id"}, []string{"1"}, testIsoOrgA, bodyA)
+	recA := httptest.NewRecorder()
+	h.MoveHostToTeam(recA, reqA)
+	if recA.Code != http.StatusOK {
+		t.Fatalf("org A moving its own device: expected 200, got %d: %s", recA.Code, recA.Body.String())
+	}
+	if !fleetCalled {
+		t.Fatal("expected Fleet MoveHostToTeam to be called for org A's own device")
+	}
+
+	// Org B moving org A's device must 404 — never reach Fleet.
+	fleetCalled = false
+	bodyB := `{"hostIds":["` + orgADevice + `"]}`
+	reqB := newChiRequestWithOrgBody(http.MethodPost, "/api/v1/teams/1/hosts", []string{"id"}, []string{"1"}, testIsoOrgB, bodyB)
+	recB := httptest.NewRecorder()
+	h.MoveHostToTeam(recB, reqB)
+	if recB.Code != http.StatusNotFound {
+		t.Fatalf("org B moving org A's device: expected 404, got %d: %s", recB.Code, recB.Body.String())
+	}
+	if fleetCalled {
+		t.Fatal("org B's move attempt on org A's device must NEVER reach Fleet")
+	}
+
+	// A mixed batch (one own device, one foreign) must reject the WHOLE
+	// batch — never partially apply.
+	fleetCalled = false
+	bodyMixed := `{"hostIds":["other-own-device","` + orgADevice + `"]}`
+	reqMixed := newChiRequestWithOrgBody(http.MethodPost, "/api/v1/teams/1/hosts", []string{"id"}, []string{"1"}, testIsoOrgB, bodyMixed)
+	recMixed := httptest.NewRecorder()
+	h.MoveHostToTeam(recMixed, reqMixed)
+	if recMixed.Code != http.StatusNotFound {
+		t.Fatalf("mixed batch with a foreign host: expected 404, got %d: %s", recMixed.Code, recMixed.Body.String())
+	}
+	if fleetCalled {
+		t.Fatal("a batch containing a foreign-org host must NEVER reach Fleet, even partially")
+	}
+}
+
+// TestCrossOrgIsolation_AddOrgMember is the H1 load-bearing proof:
+// AddOrgMember previously validated only that req.UserID existed ANYWHERE
+// in users, then bound it into the caller's org with a caller-chosen role —
+// silently absorbing another tenant's user. This proves the target user's
+// OWN org (users.org_id) must match the org being joined.
+func TestCrossOrgIsolation_AddOrgMember(t *testing.T) {
+	const orgAUser = "aaaaaaaa-0000-0000-0000-0000000000ab"
+
+	db := &fakeDB{
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			// SELECT keycloak_user_id FROM users WHERE keycloak_user_id = $1 AND org_id = $2
+			if len(args) < 2 {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+			userID, _ := args[0].(string)
+			orgID, _ := args[1].(string)
+			if userID == orgAUser && orgID == testIsoOrgA {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = orgAUser
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	h := newIsolationHandler(db)
+
+	// Org A's admin adding their OWN org's user succeeds.
+	bodyOwn := `{"userId":"` + orgAUser + `","role":"member"}`
+	reqOwn := newChiRequestWithOrgBody(http.MethodPost, "/api/v1/orgs/"+testIsoOrgA+"/members",
+		[]string{"orgId"}, []string{testIsoOrgA}, testIsoOrgA, bodyOwn)
+	recOwn := httptest.NewRecorder()
+	h.AddOrgMember(recOwn, reqOwn)
+	if recOwn.Code != http.StatusOK {
+		t.Fatalf("org A adding its own user: expected 200, got %d: %s", recOwn.Code, recOwn.Body.String())
+	}
+
+	// Org B's admin trying to absorb org A's user into org B must 404 — the
+	// membership insert must never be reached.
+	bodyForeign := `{"userId":"` + orgAUser + `","role":"org-admin"}`
+	reqForeign := newChiRequestWithOrgBody(http.MethodPost, "/api/v1/orgs/"+testIsoOrgB+"/members",
+		[]string{"orgId"}, []string{testIsoOrgB}, testIsoOrgB, bodyForeign)
+	recForeign := httptest.NewRecorder()
+	h.AddOrgMember(recForeign, reqForeign)
+	if recForeign.Code != http.StatusNotFound {
+		t.Fatalf("org B absorbing org A's user: expected 404, got %d: %s", recForeign.Code, recForeign.Body.String())
+	}
+}
+
+// TestCrossOrgIsolation_NativeGroupsRestrictedByOrg is the M1 proof for
+// groups.go's ListGroups: a system-admin sees every realm group (unchanged
+// legacy behavior); a non-system-admin only sees groups tagged (via the
+// org_id Keycloak group attribute) as belonging to their own org.
+func TestCrossOrgIsolation_NativeGroupsRestrictedByOrg(t *testing.T) {
+	gidA, gnameA := "gid-a", "Org A Team"
+	gidB, gnameB := "gid-b", "Org B Team"
+	attrsA := map[string][]string{"org_id": {testIsoOrgA}}
+	attrsB := map[string][]string{"org_id": {testIsoOrgB}}
+	kc := &fakeKeycloak{
+		listGroupsFn: func(ctx context.Context) ([]*gocloak.Group, error) {
+			return []*gocloak.Group{
+				{ID: &gidA, Name: &gnameA, Attributes: &attrsA},
+				{ID: &gidB, Name: &gnameB, Attributes: &attrsB},
+			}, nil
+		},
+	}
+	h := NewHandler(nil, kc, &fakeFleet{}, zap.NewNop())
+
+	// System-admin (unchanged behavior): sees BOTH groups.
+	reqAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/groups", nil).WithContext(orgCtx(testIsoOrgA))
+	recAdmin := httptest.NewRecorder()
+	h.ListGroups(recAdmin, reqAdmin)
+	if !containsAll(recAdmin.Body.String(), "Org A Team", "Org B Team") {
+		t.Fatalf("system-admin: expected to see every org's groups (unchanged), got: %s", recAdmin.Body.String())
+	}
+
+	// Non-system-admin, org A: sees ONLY org A's group.
+	reqA := httptest.NewRequest(http.MethodGet, "/api/v1/groups", nil).WithContext(nonAdminOrgCtx(testIsoOrgA))
+	recA := httptest.NewRecorder()
+	h.ListGroups(recA, reqA)
+	if !containsAll(recA.Body.String(), "Org A Team") || containsAll(recA.Body.String(), "Org B Team") {
+		t.Errorf("non-admin org A: expected only its own group, got: %s", recA.Body.String())
+	}
+
+	// Non-system-admin, org B: sees ONLY org B's group.
+	reqB := httptest.NewRequest(http.MethodGet, "/api/v1/groups", nil).WithContext(nonAdminOrgCtx(testIsoOrgB))
+	recB := httptest.NewRecorder()
+	h.ListGroups(recB, reqB)
+	if !containsAll(recB.Body.String(), "Org B Team") || containsAll(recB.Body.String(), "Org A Team") {
+		t.Errorf("non-admin org B: expected only its own group, got: %s", recB.Body.String())
+	}
+}
+
+// TestM1_RealmRolesTeamsPoliciesRestrictedToSystemAdmin proves ListRealmRoles
+// (Keycloak realm roles), ListTeams and ListPolicies (Fleet teams/policies —
+// neither has a per-org concept yet) are restricted to system-admin callers;
+// every other role holding the same PermReadGroups/PermReadCompliance
+// permission gets an empty list instead of every tenant's inventory.
+func TestM1_RealmRolesTeamsPoliciesRestrictedToSystemAdmin(t *testing.T) {
+	roleID, roleName := "role-1", "freecloud-admin"
+	kc := &fakeKeycloak{
+		listRealmRolesFn: func(ctx context.Context) ([]*gocloak.Role, error) {
+			return []*gocloak.Role{{ID: &roleID, Name: &roleName}}, nil
+		},
+	}
+	h := NewHandler(nil, kc, &fakeFleet{}, zap.NewNop())
+
+	adminCtx := orgCtx(testIsoOrgA)
+	nonAdminCtx := nonAdminOrgCtx(testIsoOrgA)
+
+	// ListRealmRoles
+	reqAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/roles", nil).WithContext(adminCtx)
+	recAdmin := httptest.NewRecorder()
+	h.ListRealmRoles(recAdmin, reqAdmin)
+	if !containsAll(recAdmin.Body.String(), roleName) {
+		t.Errorf("system-admin: expected to see realm roles (unchanged), got: %s", recAdmin.Body.String())
+	}
+	reqNonAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/roles", nil).WithContext(nonAdminCtx)
+	recNonAdmin := httptest.NewRecorder()
+	h.ListRealmRoles(recNonAdmin, reqNonAdmin)
+	if containsAll(recNonAdmin.Body.String(), roleName) {
+		t.Errorf("non-system-admin: expected realm roles hidden, got: %s", recNonAdmin.Body.String())
+	}
+
+	// ListTeams / ListPolicies use the default fakeFleet (1 team, 1 policy).
+	hFleet := newIsolationHandler(nil)
+	reqTeamsAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil).WithContext(adminCtx)
+	recTeamsAdmin := httptest.NewRecorder()
+	hFleet.ListTeams(recTeamsAdmin, reqTeamsAdmin)
+	var teamsAdmin ListTeamsResponse
+	if data := decodeAPIData(t, recTeamsAdmin.Body.Bytes()); data != nil {
+		_ = json.Unmarshal(data, &teamsAdmin)
+	}
+	if len(teamsAdmin.Teams) == 0 {
+		t.Error("system-admin: expected at least one Fleet team (unchanged)")
+	}
+
+	reqTeamsNonAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil).WithContext(nonAdminCtx)
+	recTeamsNonAdmin := httptest.NewRecorder()
+	hFleet.ListTeams(recTeamsNonAdmin, reqTeamsNonAdmin)
+	var teamsNonAdmin ListTeamsResponse
+	if data := decodeAPIData(t, recTeamsNonAdmin.Body.Bytes()); data != nil {
+		_ = json.Unmarshal(data, &teamsNonAdmin)
+	}
+	if len(teamsNonAdmin.Teams) != 0 {
+		t.Errorf("non-system-admin: expected zero Fleet teams, got %d", len(teamsNonAdmin.Teams))
+	}
+
+	reqPoliciesAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/policies", nil).WithContext(adminCtx)
+	recPoliciesAdmin := httptest.NewRecorder()
+	hFleet.ListPolicies(recPoliciesAdmin, reqPoliciesAdmin)
+	var policiesAdmin ListPoliciesResponse
+	if data := decodeAPIData(t, recPoliciesAdmin.Body.Bytes()); data != nil {
+		_ = json.Unmarshal(data, &policiesAdmin)
+	}
+	if len(policiesAdmin.Policies) == 0 {
+		t.Error("system-admin: expected at least one Fleet policy (unchanged)")
+	}
+
+	reqPoliciesNonAdmin := httptest.NewRequest(http.MethodGet, "/api/v1/policies", nil).WithContext(nonAdminCtx)
+	recPoliciesNonAdmin := httptest.NewRecorder()
+	hFleet.ListPolicies(recPoliciesNonAdmin, reqPoliciesNonAdmin)
+	var policiesNonAdmin ListPoliciesResponse
+	if data := decodeAPIData(t, recPoliciesNonAdmin.Body.Bytes()); data != nil {
+		_ = json.Unmarshal(data, &policiesNonAdmin)
+	}
+	if len(policiesNonAdmin.Policies) != 0 {
+		t.Errorf("non-system-admin: expected zero Fleet policies, got %d", len(policiesNonAdmin.Policies))
+	}
+}
+
+// decodeAPIData unwraps the {success,data} envelope (respondJSON) and
+// returns the raw `data` bytes for a second-stage json.Unmarshal into a
+// concrete type.
+func decodeAPIData(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("decode envelope: %v\nbody: %s", err, body)
+	}
+	return envelope.Data
 }
 
 // TestCrossOrgIsolation_Campaigns proves review campaigns are org-scoped:

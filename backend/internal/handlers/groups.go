@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
+	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
@@ -34,7 +35,12 @@ type RealmRoleResponse struct {
 
 // ---- handlers ----
 
-// ListGroups returns all realm groups.
+// ListGroups returns realm groups. M1: a system-admin sees every group
+// (unchanged legacy behavior); anyone else — helpdesk/auditor/read-only,
+// who all hold PermReadGroups too — only sees groups tagged (via the org_id
+// attribute, see keycloak.GroupOrgAttribute / C1) as belonging to their own
+// org. A group with no org_id attribute (e.g. one created before this fix,
+// or a bootstrap system group) is fail-closed: invisible to non-admins.
 func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	groups, err := h.keycloak.ListGroups(ctx)
@@ -43,9 +49,21 @@ func (h *Handler) ListGroups(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "failed to list groups")
 		return
 	}
+
+	isAdmin := isSystemAdminCaller(ctx)
+	var callerOrgID string
+	if !isAdmin {
+		if oc := middleware.GetOrgContext(ctx); oc != nil {
+			callerOrgID = oc.OrgID
+		}
+	}
+
 	out := make([]GroupResponse, 0, len(groups))
 	for _, g := range groups {
 		if g.ID == nil || g.Name == nil {
+			continue
+		}
+		if !isAdmin && (callerOrgID == "" || keycloak.GroupOrgID(g) != callerOrgID) {
 			continue
 		}
 		out = append(out, GroupResponse{ID: *g.ID, Name: *g.Name})
@@ -58,7 +76,10 @@ type CreateGroupRequest struct {
 	Name string `json:"name"`
 }
 
-// CreateGroup creates a new realm group.
+// CreateGroup creates a new realm group, tagged (M1/C1) with the caller's
+// active org so it is visible to that org's non-system-admin roles under
+// ListGroups' filter above. Fail closed: no resolvable org context means no
+// group, same as every other org-tagged write in this codebase.
 func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	var req CreateGroupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -76,7 +97,13 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	groupID, err := h.keycloak.CreateGroup(ctx, req.Name)
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
+
+	groupID, err := h.keycloak.CreateGroupWithOrgID(ctx, req.Name, oc.OrgID)
 	if err != nil {
 		h.logger.Error("failed to create group", zap.String("name", req.Name), zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to create group")
@@ -232,7 +259,12 @@ func (h *Handler) triggerGroupSyncForUser(ctx context.Context, userID string) {
 	}
 }
 
-// ListRealmRoles returns all realm-level roles.
+// ListRealmRoles returns all realm-level roles. M1: realm roles have no org
+// concept (they're global RBAC definitions, not tenant data), so unlike
+// Groups this isn't a per-org filter — it's a straight system-admin-only
+// restriction. Every other caller holding PermReadGroups (helpdesk,
+// auditor, read-only) gets an empty list rather than every tenant's role
+// inventory.
 func (h *Handler) ListRealmRoles(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	roles, err := h.keycloak.ListRealmRoles(ctx)
@@ -242,11 +274,13 @@ func (h *Handler) ListRealmRoles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := make([]RealmRoleResponse, 0, len(roles))
-	for _, role := range roles {
-		if role.ID == nil || role.Name == nil {
-			continue
+	if isSystemAdminCaller(ctx) {
+		for _, role := range roles {
+			if role.ID == nil || role.Name == nil {
+				continue
+			}
+			out = append(out, RealmRoleResponse{ID: *role.ID, Name: *role.Name})
 		}
-		out = append(out, RealmRoleResponse{ID: *role.ID, Name: *role.Name})
 	}
 	respondJSON(w, http.StatusOK, out)
 }
