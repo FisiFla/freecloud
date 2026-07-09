@@ -245,7 +245,7 @@ export default function EmployeesPage() {
                       <button
                         onClick={() => setDeprovisionTarget(emp.id)}
                         title="Deprovision"
-                        className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950"
+                        className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-red-950"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>

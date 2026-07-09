@@ -37,6 +37,15 @@
   --color-accent-text: #a5b4fc;
 }
 
+/* Light-mode text-slate-400 (#94a3b8, 3.0:1) fails WCAG AA.
+   Bump it to slate-500 (#64748b, 4.5:1) for all text content.
+   Handles the ~25 places across the app using text-slate-400 for body text,
+   without rewriting every file. Dark mode text-slate-400 (4.9:1 on slate-900)
+   is safe — it keeps its contrast advantage automatically. */
+:root .text-slate-400:not(.dark .text-slate-400) {
+  color: #64748b;
+}
+
 body {
   background-color: var(--color-bg);
   -webkit-font-smoothing: antialiased;
