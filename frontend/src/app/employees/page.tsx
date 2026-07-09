@@ -8,6 +8,7 @@ import ConfirmDialog from "@/components/ConfirmDialog";
 import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
 import LoadingRows from "@/components/LoadingRows";
+import { Button, Input, Badge, Card } from "@/components/ui";
 import OnboardForm from "./onboard/OnboardForm";
 import { offboardUser, listUsers } from "@/lib/api";
 import type { User } from "@/lib/api";
@@ -71,12 +72,9 @@ export default function EmployeesPage() {
     try {
       const result = await offboardUser(deprovisionTarget);
       if (result.warnings && result.warnings.length > 0) {
-        // Offboarding partially succeeded — surface the warnings and refresh
-        // so the (likely-disabled) user's new status is shown.
         setActionWarnings(result.warnings);
         fetchEmployees();
       } else {
-        // Clean success: remove the row immediately.
         setEmployees((prev) => prev.filter((e) => e.id !== deprovisionTarget));
       }
     } catch (err: unknown) {
@@ -119,13 +117,10 @@ export default function EmployeesPage() {
             <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Employees</h1>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage users and their accounts.</p>
           </div>
-          <button
-            onClick={() => setShowOnboard(true)}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-400"
-          >
+          <Button onClick={() => setShowOnboard(true)}>
             <UserPlus className="h-4 w-4" />
             Onboard New Employee
-          </button>
+          </Button>
         </div>
 
         {/* Error banner */}
@@ -176,18 +171,18 @@ export default function EmployeesPage() {
         )}
 
         {/* Search */}
-        <div className="mt-6 relative">
+        <div className="relative mt-6">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
+          <Input
             type="text"
             placeholder="Search employees..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full rounded-lg border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
+            className="pl-10"
           />
         </div>
 
-        {/* Loading skeleton */}
+        {/* Loading / Empty / Table */}
         {loading ? (
           <LoadingRows count={3} className="h-16" />
         ) : filtered.length === 0 && employees.length === 0 ? (
@@ -203,62 +198,57 @@ export default function EmployeesPage() {
             description="Try a different search term."
           />
         ) : (
-          /* Table */
-          <div className="mt-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-400">
-                  <th className="px-6 py-3">Name</th>
-                  <th className="px-6 py-3">Email</th>
-                  <th className="px-6 py-3">Department</th>
-                  <th className="px-6 py-3">Role</th>
-                  <th className="px-6 py-3">Status</th>
-                  <th className="px-6 py-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filtered.map((emp) => (
-                  <tr key={emp.id} className="hover:bg-slate-50 transition-colors dark:hover:bg-slate-800">
-                    <td className="px-6 py-4">
-                      <Link
-                        href={`/employees/${emp.id}`}
-                        className="font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
-                      >
-                        {emp.firstName} {emp.lastName}
-                      </Link>
-                    </td>
-                    <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{emp.email}</td>
-                    <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{emp.department}</td>
-                    <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{emp.role}</td>
-                    <td className="px-6 py-4">
-                      <span
-                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          emp.status === "Active"
-                            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
-                            : "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
-                        }`}
-                      >
-                        {emp.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <button
-                        onClick={() => setDeprovisionTarget(emp.id)}
-                        title="Deprovision"
-                        className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-indigo-500 dark:hover:bg-red-950"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </td>
+          <Card padding={false} className="mt-6 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-slate-800 dark:text-slate-400">
+                    <th className="px-6 py-3">Name</th>
+                    <th className="px-6 py-3">Email</th>
+                    <th className="px-6 py-3">Department</th>
+                    <th className="px-6 py-3">Role</th>
+                    <th className="px-6 py-3">Status</th>
+                    <th className="px-6 py-3">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {filtered.map((emp) => (
+                    <tr key={emp.id} className="transition-colors hover:bg-slate-50 dark:hover:bg-slate-800">
+                      <td className="px-6 py-4">
+                        <Link
+                          href={`/employees/${emp.id}`}
+                          className="font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300"
+                        >
+                          {emp.firstName} {emp.lastName}
+                        </Link>
+                      </td>
+                      <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{emp.email}</td>
+                      <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{emp.department}</td>
+                      <td className="px-6 py-4 text-slate-600 dark:text-slate-400">{emp.role}</td>
+                      <td className="px-6 py-4">
+                        <Badge variant={emp.status === "Active" ? "success" : "warning"}>
+                          {emp.status}
+                        </Badge>
+                      </td>
+                      <td className="px-6 py-4">
+                        <Button
+                          variant="danger"
+                          onClick={() => setDeprovisionTarget(emp.id)}
+                          title="Deprovision"
+                          className="p-1.5"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
         )}
       </div>
 
-      {/* Slide-over Onboard Panel */}
       <SlideOver
         isOpen={showOnboard}
         onClose={() => setShowOnboard(false)}
@@ -271,7 +261,6 @@ export default function EmployeesPage() {
         />
       </SlideOver>
 
-      {/* Confirm close dialog (dirty form) */}
       <ConfirmDialog
         isOpen={confirmClose}
         onClose={() => setConfirmClose(false)}
@@ -282,7 +271,6 @@ export default function EmployeesPage() {
         variant="default"
       />
 
-      {/* Confirm deprovision dialog */}
       <ConfirmDialog
         isOpen={deprovisionTarget !== null}
         onClose={() => setDeprovisionTarget(null)}

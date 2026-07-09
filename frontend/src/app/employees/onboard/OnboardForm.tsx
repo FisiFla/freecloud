@@ -2,8 +2,8 @@
 
 import { useState, FormEvent, useEffect } from "react";
 import { CheckCircle, Copy, AlertCircle } from "lucide-react";
-import { onboardEmployee } from "@/lib/api";
-import { ApiError } from "@/lib/api";
+import { ApiError, onboardEmployee } from "@/lib/api";
+import { Button, Field, Input, Select } from "@/components/ui";
 
 interface OnboardFormProps {
   onSuccess?: () => void;
@@ -103,7 +103,6 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
         )}
 
         <div className="mt-6 space-y-4">
-          {/* Next Step notice */}
           {result.nextStep && (
             <div className="mt-4 rounded-lg bg-indigo-50 p-3 text-sm text-indigo-700">
               {result.nextStep}
@@ -111,48 +110,45 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
           )}
 
           {/* Enrollment Token */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700">Enrollment Token</label>
+          <Field label="Enrollment Token">
             <div className="mt-1 flex items-center gap-2">
-              <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800">
+              <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-800">
                 {result.enrollmentToken}
               </code>
-              <button
+              <Button
+                variant="ghost"
                 onClick={() => copyToClipboard(result.enrollmentToken)}
-                className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
                 title="Copy token"
+                className="p-2"
               >
                 <Copy className="h-4 w-4" />
-              </button>
+              </Button>
             </div>
-          </div>
+          </Field>
 
-          {/* Enrollment URL — only shown when the backend supplies one. */}
           {result.enrollmentUrl && (
-            <div>
-              <label className="block text-sm font-medium text-slate-700">Enrollment URL</label>
+            <Field label="Enrollment URL">
               <div className="mt-1 flex items-center gap-2">
-                <code className="flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-mono text-slate-800 break-all">
+                <code className="flex-1 break-all rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-800">
                   {result.enrollmentUrl}
                 </code>
-                <button
+                <Button
+                  variant="ghost"
                   onClick={() => copyToClipboard(result.enrollmentUrl)}
-                  className="rounded-lg border border-slate-200 p-2 text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
                   title="Copy URL"
+                  className="p-2"
                 >
                   <Copy className="h-4 w-4" />
-                </button>
+                </Button>
               </div>
-            </div>
+            </Field>
           )}
 
           {copied && <p className="text-sm text-emerald-600">Copied to clipboard!</p>}
         </div>
 
-        <button
-          type="button"
+        <Button
           onClick={() => {
-            // Reset form state so a reopened panel shows a blank form.
             setResult(null);
             setFirstName("");
             setLastName("");
@@ -161,137 +157,97 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
             setCopied(false);
             onSuccess?.();
           }}
-          className="mt-6 w-full rounded-lg bg-slate-100 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-200"
+          variant="secondary"
+          className="mt-6 w-full"
         >
           Close
-        </button>
+        </Button>
       </div>
     );
   }
 
+  const isValid = firstName.trim() !== "" && lastName.trim() !== "" && email.includes("@") && role.trim() !== "";
+
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       <div className="grid grid-cols-2 gap-4">
-        <div>
-          <label htmlFor="firstName" className="block text-sm font-medium text-slate-700">
-            First Name
-          </label>
-          <input
+        <Field label="First Name" required error={fieldErrors.firstName}>
+          <Input
             id="firstName"
-            type="text"
-            required
             value={firstName}
             onChange={(e) => {
               setFirstName(e.target.value);
-              if (fieldErrors.firstName) setFieldErrors(prev => ({...prev, firstName: ''}));
+              if (fieldErrors.firstName) setFieldErrors((prev) => ({ ...prev, firstName: "" }));
             }}
-            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
             placeholder="Jane"
           />
-          {fieldErrors.firstName && <p className="mt-1 text-xs text-red-500">{fieldErrors.firstName}</p>}
-        </div>
-        <div>
-          <label htmlFor="lastName" className="block text-sm font-medium text-slate-700">
-            Last Name
-          </label>
-          <input
+        </Field>
+        <Field label="Last Name" required error={fieldErrors.lastName}>
+          <Input
             id="lastName"
-            type="text"
-            required
             value={lastName}
             onChange={(e) => {
               setLastName(e.target.value);
-              if (fieldErrors.lastName) setFieldErrors(prev => ({...prev, lastName: ''}));
+              if (fieldErrors.lastName) setFieldErrors((prev) => ({ ...prev, lastName: "" }));
             }}
-            className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
             placeholder="Doe"
           />
-          {fieldErrors.lastName && <p className="mt-1 text-xs text-red-500">{fieldErrors.lastName}</p>}
-        </div>
+        </Field>
       </div>
 
-      <div>
-        <label htmlFor="email" className="block text-sm font-medium text-slate-700">
-          Email
-        </label>
-        <input
+      <Field label="Email" required error={fieldErrors.email || emailError}>
+        <Input
           id="email"
           type="email"
-          required
           value={email}
           onChange={(e) => {
             setEmail(e.target.value);
-            if (fieldErrors.email) setFieldErrors(prev => ({...prev, email: ''}));
-            if (e.target.value && !e.target.value.includes('@')) {
-              setEmailError('Please enter a valid email address');
-            } else {
-              setEmailError(null);
-            }
+            if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: "" }));
+            setEmailError(e.target.value && !e.target.value.includes("@") ? "Please enter a valid email address" : null);
           }}
-          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
           placeholder="jane@example.com"
         />
-        {emailError && <p className="mt-1 text-xs text-red-500">{emailError}</p>}
-        {fieldErrors.email && <p className="mt-1 text-xs text-red-500">{fieldErrors.email}</p>}
-      </div>
+      </Field>
 
-      <div>
-        <label htmlFor="department" className="block text-sm font-medium text-slate-700">
-          Department
-        </label>
-        <select
+      <Field label="Department" error={fieldErrors.department}>
+        <Select
           id="department"
           value={department}
           onChange={(e) => {
             setDepartment(e.target.value);
-            if (fieldErrors.department) setFieldErrors(prev => ({...prev, department: ''}));
+            if (fieldErrors.department) setFieldErrors((prev) => ({ ...prev, department: "" }));
           }}
-          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
         >
           <option>Engineering</option>
           <option>Marketing</option>
           <option>Sales</option>
           <option>Operations</option>
-        </select>
-        {fieldErrors.department && <p className="mt-1 text-xs text-red-500">{fieldErrors.department}</p>}
-      </div>
+        </Select>
+      </Field>
 
-      <div>
-        <label htmlFor="role" className="block text-sm font-medium text-slate-700">
-          Role
-        </label>
-        <input
+      <Field label="Role" required error={fieldErrors.role}>
+        <Input
           id="role"
-          type="text"
-          required
           value={role}
           onChange={(e) => {
             setRole(e.target.value);
-            if (fieldErrors.role) setFieldErrors(prev => ({...prev, role: ''}));
+            if (fieldErrors.role) setFieldErrors((prev) => ({ ...prev, role: "" }));
           }}
-          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-700 placeholder-slate-400 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
           placeholder="e.g. Software Engineer"
         />
-        {fieldErrors.role && <p className="mt-1 text-xs text-red-500">{fieldErrors.role}</p>}
-      </div>
+      </Field>
 
-      {error && (
-        <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>
-      )}
+      {error && <div className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</div>}
 
-      {(() => {
-        const isValid = firstName.trim() !== '' && lastName.trim() !== '' && email.includes('@') && role.trim() !== '';
-        return (
-          <button
-            type="submit"
-            disabled={submitting || !isValid}
-            title={!isValid ? "Please fill in all required fields correctly" : ""}
-            className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {submitting ? "Onboarding..." : "Submit Onboarding"}
-          </button>
-        );
-      })()}
+      <Button
+        type="submit"
+        loading={submitting}
+        disabled={!isValid}
+        title={!isValid ? "Please fill in all required fields correctly" : ""}
+        className="w-full"
+      >
+        {submitting ? "Onboarding..." : "Submit Onboarding"}
+      </Button>
     </form>
   );
 }

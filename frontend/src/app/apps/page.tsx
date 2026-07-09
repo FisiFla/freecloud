@@ -5,6 +5,7 @@ import { Plus, Globe, AlertCircle, UserPlus } from "lucide-react";
 import SlideOver from "@/components/SlideOver";
 import ErrorBanner from "@/components/ErrorBanner";
 import EmptyState from "@/components/EmptyState";
+import { Button, Input, Field, Badge, Card } from "@/components/ui";
 import { listApps, createApp, listUsers, assignAppToUser, getAppPolicy, upsertAppPolicy, downloadSAMLMetadata } from "@/lib/api";
 import type { App, User, CreateAppResponse, AppAccessPolicy, SAMLAttributeMappingRequest } from "@/lib/api";
 import { useApiReady } from "../providers";
@@ -183,13 +184,10 @@ export default function AppsPage() {
             <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">App Catalog</h1>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage SSO-connected applications.</p>
           </div>
-          <button
-            onClick={() => setShowAdd(true)}
-            className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 dark:bg-indigo-500 dark:hover:bg-indigo-400"
-          >
+          <Button onClick={() => setShowAdd(true)}>
             <Plus className="h-4 w-4" />
             Add Application
-          </button>
+          </Button>
         </div>
 
         {/* Error banner */}
@@ -456,13 +454,9 @@ export default function AppsPage() {
             </>
           )}
 
-          <button
-            type="submit"
-            disabled={submitting}
-            className="w-full rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-500 dark:hover:bg-indigo-400"
-          >
+          <Button type="submit" loading={submitting} className="w-full">
             {submitting ? "Creating..." : "Create Application"}
-          </button>
+          </Button>
         </form>
 
         {/* SAML SP metadata panel shown after successful creation */}
