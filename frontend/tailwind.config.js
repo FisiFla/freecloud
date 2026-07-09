@@ -44,6 +44,25 @@ module.exports = {
           900: "#312e81",
           950: "#1e1b4b",
         },
+        // Semantic aliases — use these instead of raw color names
+        // to keep the design system referenceable and themeable.
+        accent: {
+          DEFAULT: "#4f46e5",    // indigo-600
+          hover: "#4338ca",      // indigo-700
+          subtle: "#eef2ff",     // indigo-50
+          text: "#4338ca",       // indigo-700
+        },
+        surface: {
+          DEFAULT: "#ffffff",
+          subtle: "#f8fafc",     // slate-50
+          fg: "#1e293b",         // slate-800
+          "fg-secondary": "#475569", // slate-600
+          "fg-muted": "#64748b", // slate-500
+        },
+        border: {
+          DEFAULT: "#e2e8f0",    // slate-200
+          subtle: "#f1f5f9",     // slate-100
+        },
       },
     },
   },

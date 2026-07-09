@@ -246,21 +246,21 @@ export default function AppsPage() {
                 <div className="mt-4 flex gap-2">
                   <button
                     onClick={() => { setAssignAppId(app.id); setAssignUserId(""); setAssignMessage(null); }}
-                    className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 dark:border-slate-700 dark:text-slate-400"
+                    className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-surface-fg-secondary transition-colors hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 dark:border-slate-700 dark:text-slate-400"
                   >
                     <UserPlus className="h-3.5 w-3.5" />
                     Assign
                   </button>
                   <button
                     onClick={() => openPolicy(app)}
-                    className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200 dark:border-slate-700 dark:text-slate-400"
+                    className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-surface-fg-secondary transition-colors hover:bg-amber-50 hover:text-amber-700 hover:border-amber-200 dark:border-slate-700 dark:text-slate-400"
                   >
                     Access Policy
                   </button>
                   {app.protocol === "SAML" && (
                     <button
                       onClick={() => downloadSAMLMetadata(app.id)}
-                      className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-600 transition-colors hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 dark:border-slate-700 dark:text-slate-400"
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-surface-fg-secondary transition-colors hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 dark:border-slate-700 dark:text-slate-400"
                     >
                       Download SP Metadata
                     </button>
