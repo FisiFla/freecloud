@@ -1,0 +1,8 @@
+{
+  "files": ["src/app/layout.tsx"],
+  "insertBefore": "</head>",
+  "commentSyntax": "jsx",
+  "framework": "nextjs",
+  "devServerCommand": "cd frontend && npm run dev",
+  "devServerUrl": "http://localhost:3000"
+}

@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-14T00:00:00Z",
+  "title": "Design System: FreeCloud",
+  "extensions": {
+    "colorMeta": {
+      "primary": { "role": "primary", "displayName": "Indigo", "canonical": "oklch(0.46 0.18 273)", "tonalRamp": ["oklch(0.15 0.10 273)", "oklch(0.25 0.14 273)", "oklch(0.35 0.17 273)", "oklch(0.46 0.18 273)", "oklch(0.58 0.16 273)", "oklch(0.70 0.12 273)", "oklch(0.82 0.08 273)", "oklch(0.94 0.03 273)"] },
+      "neutral-text-primary": { "role": "neutral", "displayName": "Ink", "canonical": "oklch(0.21 0.03 250)", "tonalRamp": ["oklch(0.21 0.03 250)", "oklch(0.32 0.03 250)", "oklch(0.42 0.02 250)", "oklch(0.54 0.02 250)", "oklch(0.74 0.01 250)", "oklch(0.85 0.01 250)", "oklch(0.93 0.01 250)", "oklch(0.97 0.01 250)"] },
+      "success": { "role": "semantic", "displayName": "Success", "canonical": "oklch(0.54 0.15 165)", "tonalRamp": ["oklch(0.25 0.12 165)", "oklch(0.40 0.14 165)", "oklch(0.54 0.15 165)", "oklch(0.68 0.12 165)", "oklch(0.82 0.08 165)", "oklch(0.96 0.03 165)"] },
+      "error": { "role": "semantic", "displayName": "Error", "canonical": "oklch(0.52 0.22 30)", "tonalRamp": ["oklch(0.25 0.15 30)", "oklch(0.38 0.18 30)", "oklch(0.52 0.22 30)", "oklch(0.66 0.16 30)", "oklch(0.80 0.10 30)", "oklch(0.96 0.03 30)"] },
+      "warning": { "role": "semantic", "displayName": "Warning", "canonical": "oklch(0.65 0.15 75)", "tonalRamp": ["oklch(0.30 0.12 75)", "oklch(0.48 0.14 75)", "oklch(0.65 0.15 75)", "oklch(0.78 0.10 75)", "oklch(0.88 0.06 75)", "oklch(0.97 0.04 75)"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "H1 page titles only." },
+      "title": { "displayName": "Title", "purpose": "Card headers, section subheadings." },
+      "body": { "displayName": "Body", "purpose": "Table cells, paragraphs, descriptions." },
+      "label": { "displayName": "Label", "purpose": "Form labels, table headers, badges." }
+    },
+    "shadows": [
+      { "name": "card", "value": "0 1px 2px 0 rgba(0,0,0,0.05)", "purpose": "Default card elevation." },
+      { "name": "drawer", "value": "-4px 0 24px rgba(0,0,0,0.12)", "purpose": "Mobile sidebar overlay." }
+    ],
+    "motion": [
+      { "name": "ease-standard", "value": "cubic-bezier(0.4, 0, 0.2, 1)", "purpose": "Default easing for state transitions (150-250ms)." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary action button, indigo fill.",
+      "html": "<button class=\"ds-btn-primary\">Onboard Employee</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; gap: 8px; background: #4f46e5; color: #fff; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 500; padding: 10px 16px; border-radius: 8px; border: none; cursor: pointer; transition: background 0.15s cubic-bezier(0.4,0,0.2,1); } .ds-btn-primary:hover { background: #4338ca; } .ds-btn-primary:focus-visible { outline: 2px solid #4f46e5; outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Secondary/ghost action, bordered.",
+      "html": "<button class=\"ds-btn-secondary\">Cancel</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; gap: 8px; background: #fff; color: #475569; font-family: Inter, system-ui, sans-serif; font-size: 14px; font-weight: 500; padding: 10px 16px; border-radius: 8px; border: 1px solid #e2e8f0; cursor: pointer; transition: background 0.15s cubic-bezier(0.4,0,0.2,1); } .ds-btn-secondary:hover { background: #f8fafc; }"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input-default",
+      "description": "Text input field.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search employees...\" />",
+      "css": ".ds-input { width: 100%; background: #fff; color: #1e293b; font-family: Inter, system-ui, sans-serif; font-size: 14px; padding: 10px 12px; border-radius: 8px; border: 1px solid #e2e8f0; outline: none; transition: border-color 0.15s, box-shadow 0.15s; } .ds-input:focus { border-color: #818cf8; box-shadow: 0 0 0 1px #818cf8; } .ds-input::placeholder { color: #64748b; }"
+    },
+    {
+      "name": "Badge Success",
+      "kind": "chip",
+      "refersTo": "badge-success",
+      "description": "Status pill, success variant.",
+      "html": "<span class=\"ds-badge-success\">Active</span>",
+      "css": ".ds-badge-success { display: inline-flex; align-items: center; padding: 2px 10px; font-family: Inter, system-ui, sans-serif; font-size: 12px; font-weight: 500; border-radius: 9999px; background: #ecfdf5; color: #059669; }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card-default",
+      "description": "Standard card container.",
+      "html": "<div class=\"ds-card\"><h3 class=\"ds-card-title\">Security Health</h3><p class=\"ds-card-body\">Device compliance overview and policy status.</p></div>",
+      "css": ".ds-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05); } .ds-card-title { margin: 0 0 4px 0; font-family: Inter, system-ui, sans-serif; font-size: 18px; font-weight: 600; color: #1e293b; } .ds-card-body { margin: 0; font-family: Inter, system-ui, sans-serif; font-size: 14px; color: #475569; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Trustworthy Terminal",
+    "overview": "FreeCloud's visual system is designed for the IT admin who manages 10 to 10,000 devices from a browser window — seated, multi-monitor, under deadline pressure to offboard a departing employee or investigate a compliance failure. Every pixel either serves the task or is removed. The interface is restrained, technical, and trustworthy: slate neutrals carry structure, a single indigo accent signals action, and semantic color (green/red/amber/blue) is reserved exclusively for state and meaning — never decoration.",
+    "keyCharacteristics": [
+      "Restrained color: one cool indigo accent on a cool slate neutral scale. ≤10% accent coverage per screen.",
+      "Single font family (Inter) across all roles — no display/body pairing.",
+      "Flat-by-default elevation. Cards use a thin border (1px #e2e8f0) and a minimal shadow (0 1px 2px 0 rgba(0,0,0,0.05)).",
+      "Consistent page rhythm: title + subtitle → error banner → search/filter → content.",
+      "Dark mode with prefers-color-scheme auto-detection plus manual toggle."
+    ],
+    "rules": [
+      { "name": "The Restraint Rule", "body": "The indigo accent is used on ≤10% of any given screen. Its rarity is the point.", "section": "colors" },
+      { "name": "The Semantic Color Rule", "body": "Green, red, amber, and blue are reserved exclusively for state. They never appear as decoration.", "section": "colors" },
+      { "name": "The Flat-By-Default Rule", "body": "Surfaces are flat at rest. Shadows appear only as a response to interaction or semantic context.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do use the indigo accent exactly once per viewport section.",
+      "Do use semantic colors consistently across every screen.",
+      "Do follow the page rhythm: title + subtitle → error banner → search/filter → content.",
+      "Do use focus-visible:ring-2 on every interactive element.",
+      "Do provide dark mode variants for every component."
+    ],
+    "donts": [
+      "Don't use side-stripe borders.",
+      "Don't use gradient text.",
+      "Don't use glassmorphism.",
+      "Don't place gray text (text-slate-400, #94a3b8) on white backgrounds for body copy.",
+      "Don't nest cards inside cards.",
+      "Don't animate layout properties.",
+      "Don't use bounce, elastic, or spring easing.",
+      "Don't rely on color as the only indicator of state."
+    ]
+  }
+}
