@@ -189,7 +189,7 @@ export default function AuditLogPage() {
       )}
 
       {/* Filters */}
-      <div className="mt-6 flex flex-wrap items-end gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <div className="mt-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <div className="flex-1 min-w-[200px]">
           <label htmlFor="actor-filter" className="block text-xs font-medium uppercase tracking-wider text-slate-500 mb-1 dark:text-slate-400">
             Actor
