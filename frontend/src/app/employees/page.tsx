@@ -235,7 +235,7 @@ export default function EmployeesPage() {
                           variant="danger"
                           onClick={() => setDeprovisionTarget(emp.id)}
                           title="Deprovision"
-                          className="p-1.5"
+                          className="p-2.5"
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
