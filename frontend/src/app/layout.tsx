@@ -25,7 +25,7 @@ export default function RootLayout({
       <head>
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{const d=localStorage.getItem('fc-dark-mode');if(d==='true')document.documentElement.classList.add('dark');}catch(e){}})()`,
+            __html: `(function(){try{const d=localStorage.getItem('fc-dark-mode');if(d==='true'){document.documentElement.classList.add('dark')}else if(d==='false'){document.documentElement.classList.remove('dark')}else if(window.matchMedia('(prefers-color-scheme:dark)').matches){document.documentElement.classList.add('dark')}}catch(e){}})()`,
           }}
         />
       </head>

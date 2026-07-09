@@ -9,7 +9,29 @@ export default function DarkModeToggle() {
 
   useEffect(() => {
     setMounted(true);
-    setIsDark(document.documentElement.classList.contains("dark"));
+    // Respect saved preference first, then system
+    const saved = localStorage.getItem("fc-dark-mode");
+    if (saved === "true") setIsDark(true);
+    else if (saved === "false") setIsDark(false);
+    else setIsDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }, []);
+
+  // Sync state back to DOM when it changes
+  useEffect(() => {
+    if (!mounted) return;
+    document.documentElement.classList.toggle("dark", isDark);
+  }, [isDark, mounted]);
+
+  // Listen for system preference changes when no explicit saved choice
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => {
+      if (!localStorage.getItem("fc-dark-mode")) {
+        setIsDark(e.matches);
+      }
+    };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
   }, []);
 
   if (!mounted) return null;
@@ -17,13 +39,7 @@ export default function DarkModeToggle() {
   const toggle = () => {
     const next = !isDark;
     setIsDark(next);
-    if (next) {
-      document.documentElement.classList.add("dark");
-      localStorage.setItem("fc-dark-mode", "true");
-    } else {
-      document.documentElement.classList.remove("dark");
-      localStorage.setItem("fc-dark-mode", "false");
-    }
+    localStorage.setItem("fc-dark-mode", next ? "true" : "false");
   };
 
   return (
