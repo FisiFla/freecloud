@@ -1,9 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
-import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers, Lock, Plug2, FileBarChart2, Server, Mail, Link2, Building2 } from "lucide-react";
+import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers, Lock, Plug2, FileBarChart2, Server, Mail, Link2, Building2, Menu, X } from "lucide-react";
 import DarkModeToggle from "./DarkModeToggle";
 import { useOrg } from "@/app/providers";
 
@@ -30,6 +31,10 @@ export default function Sidebar() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const { me, activeOrgId, setActiveOrg } = useOrg();
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Close mobile menu on navigation
+  const closeMobile = () => setMobileOpen(false);
 
   // Don't render the sidebar on auth pages (sign-in).
   if (pathname === "/signin") return null;
@@ -39,8 +44,8 @@ export default function Sidebar() {
     return !!pathname && pathname.startsWith(href);
   };
 
-  return (
-    <aside className="fixed left-0 top-0 z-30 flex h-screen w-60 flex-col border-r border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-700">
+  const sidebarContent = (
+    <>
       {/* Logo */}
       <div className="flex items-center gap-2 border-b border-slate-100 px-6 py-5 dark:border-slate-800">
         <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white">
@@ -49,26 +54,20 @@ export default function Sidebar() {
         <span className="text-lg font-bold text-slate-800 dark:text-slate-100">FreeCloud</span>
       </div>
 
-      {/* Org switcher (Epic C multi-tenant) — only shown once memberships
-          have loaded, so a single-org caller never sees a flash of an
-          empty dropdown. */}
+      {/* Org switcher */}
       {me && me.orgs.length > 0 && (
         <div className="border-b border-slate-100 px-3 py-3 dark:border-slate-800">
-          <label htmlFor="org-switcher" className="sr-only">
-            Active organization
-          </label>
+          <label htmlFor="org-switcher" className="sr-only">Active organization</label>
           <div className="relative">
-            <Building2 className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400 dark:text-slate-500" />
+            <Building2 className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500 dark:text-slate-500" />
             <select
               id="org-switcher"
               value={activeOrgId}
               onChange={(e) => setActiveOrg(e.target.value)}
-              className="w-full appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-3 text-sm font-medium text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+              className="w-full appearance-none rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-3 text-sm font-medium text-slate-700 focus:border-indigo-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
             >
               {me.orgs.map((o) => (
-                <option key={o.orgId} value={o.orgId}>
-                  {o.orgName}
-                </option>
+                <option key={o.orgId} value={o.orgId}>{o.orgName}</option>
               ))}
             </select>
           </div>
@@ -76,15 +75,16 @@ export default function Sidebar() {
       )}
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 px-3 py-4">
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {navLinks.map((link) => {
           const active = isActive(link.href);
           return (
             <Link
               key={link.href}
               href={link.href}
+              onClick={closeMobile}
               aria-current={active ? "page" : undefined}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-indigo-500 ${
                 active
                   ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
                   : "text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
@@ -101,27 +101,23 @@ export default function Sidebar() {
       <div className="border-t border-slate-100 px-6 py-4 dark:border-slate-800">
         {session?.user && (
           <div className="mb-3 flex items-center gap-3">
-            <div className="h-8 w-8 rounded-full bg-indigo-100 flex items-center justify-center text-xs font-semibold text-indigo-700">
+            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700">
               {session.user.name?.charAt(0) || "U"}
             </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-slate-700 truncate dark:text-slate-300">
-                {session.user.name}
-              </p>
-              <p className="text-xs text-slate-400 truncate dark:text-slate-500">
-                {session.user.email}
-              </p>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-slate-700 dark:text-slate-300">{session.user.name}</p>
+              <p className="truncate text-xs text-slate-500 dark:text-slate-500">{session.user.email}</p>
             </div>
           </div>
         )}
         <div className="flex items-center justify-between">
-          <p className="text-xs text-slate-400 dark:text-slate-600">FreeCloud v0.1.0</p>
+          <p className="text-xs text-slate-500 dark:text-slate-600">FreeCloud v1.7.0</p>
           <div className="flex items-center gap-1">
             <DarkModeToggle />
             {session && (
               <button
                 onClick={() => signOut({ callbackUrl: "/signin" })}
-                className="text-slate-400 hover:text-red-500 transition-colors dark:text-slate-500 dark:hover:text-red-400"
+                className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-slate-500 dark:hover:bg-red-950 dark:hover:text-red-400"
                 aria-label="Sign out"
                 title="Sign out"
               >
@@ -131,6 +127,37 @@ export default function Sidebar() {
           </div>
         </div>
       </div>
-    </aside>
+    </>
+  );
+
+  return (
+    <>
+      {/* Mobile hamburger */}
+      <button
+        onClick={() => setMobileOpen(!mobileOpen)}
+        className="fixed left-4 top-4 z-40 rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm lg:hidden dark:border-slate-700 dark:bg-slate-900 focus-visible:ring-2 focus-visible:ring-indigo-500"
+        aria-label={mobileOpen ? "Close sidebar" : "Open sidebar"}
+        aria-expanded={mobileOpen}
+      >
+        {mobileOpen ? <X className="h-5 w-5 text-slate-700 dark:text-slate-300" /> : <Menu className="h-5 w-5 text-slate-700 dark:text-slate-300" />}
+      </button>
+
+      {/* Desktop sidebar (always visible) */}
+      <aside className="fixed left-0 top-0 z-30 hidden h-screen w-60 flex-col border-r border-slate-200 bg-white lg:flex dark:bg-slate-900 dark:border-slate-700">
+        {sidebarContent}
+      </aside>
+
+      {/* Mobile drawer (overlay) */}
+      {mobileOpen && (
+        <div className="fixed inset-0 z-30 lg:hidden">
+          {/* Backdrop */}
+          <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} />
+          {/* Drawer */}
+          <aside className="relative flex h-full w-60 flex-col border-r border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-700 shadow-xl">
+            {sidebarContent}
+          </aside>
+        </div>
+      )}
+    </>
   );
 }

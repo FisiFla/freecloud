@@ -2,6 +2,11 @@
 /* Load the existing v3-style theme (custom colors) via v4's config-compat path. */
 @config "../../tailwind.config.js";
 
+/*
+ * Minimal targeted token definition.
+ * The full color system lives in tailwind.config.js (shared between CSS and JSX).
+ */
+
 :root {
   --color-bg: #f8fafc;
   --color-surface: #ffffff;
@@ -9,8 +14,8 @@
   --color-border: #e2e8f0;
   --color-border-subtle: #f1f5f9;
   --color-text-primary: #1e293b;
-  --color-text-secondary: #64748b;
-  --color-text-muted: #94a3b8;
+  --color-text-secondary: #475569;
+  --color-text-muted: #64748b;
   --color-accent: #4f46e5;
   --color-accent-hover: #4338ca;
   --color-accent-subtle: #eef2ff;
