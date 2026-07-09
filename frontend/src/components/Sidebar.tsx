@@ -117,7 +117,7 @@ export default function Sidebar() {
             {session && (
               <button
                 onClick={() => signOut({ callbackUrl: "/signin" })}
-                className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-slate-500 dark:hover:bg-red-950 dark:hover:text-red-400"
+                className="rounded-lg p-2.5 text-surface-fg-secondary transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-slate-500 dark:hover:bg-red-950 dark:hover:text-red-400"
                 aria-label="Sign out"
                 title="Sign out"
               >
