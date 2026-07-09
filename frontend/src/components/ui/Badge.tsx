@@ -8,17 +8,18 @@ interface BadgeProps {
   className?: string;
 }
 
-const variantClasses: Record<BadgeVariant, string> = {
-  success: "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-  warning: "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
-  info: "bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300",
-  neutral: "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400",
+const variantStyles: Record<BadgeVariant, React.CSSProperties> = {
+  success: { backgroundColor: "var(--color-success-bg)", color: "var(--color-success)" },
+  warning: { backgroundColor: "var(--color-warning-bg)", color: "var(--color-warning)" },
+  info: { backgroundColor: "var(--color-accent-subtle)", color: "var(--color-accent-text)" },
+  neutral: { backgroundColor: "#f1f5f9", color: "#475569" },
 };
 
 export function Badge({ variant = "neutral", children, className = "" }: BadgeProps) {
   return (
     <span
-      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${variantClasses[variant]} ${className}`}
+      className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${className}`}
+      style={variantStyles[variant]}
     >
       {children}
     </span>

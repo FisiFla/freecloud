@@ -20,6 +20,15 @@
   --color-accent-hover: #4338ca;
   --color-accent-subtle: #eef2ff;
   --color-accent-text: #4338ca;
+  /* Semantic */
+  --color-success: #059669;
+  --color-success-bg: #ecfdf5;
+  --color-error: #dc2626;
+  --color-error-bg: #fef2f2;
+  --color-warning: #d97706;
+  --color-warning-bg: #fffbeb;
+  --color-info: #2563eb;
+  --color-info-bg: #eff6ff;
 }
 
 .dark {
@@ -35,6 +44,15 @@
   --color-accent-hover: #a5b4fc;
   --color-accent-subtle: #1e1b4b;
   --color-accent-text: #a5b4fc;
+  /* Semantic */
+  --color-success: #34d399;
+  --color-success-bg: #022c22;
+  --color-error: #f87171;
+  --color-error-bg: #450a0a;
+  --color-warning: #fbbf24;
+  --color-warning-bg: #451a03;
+  --color-info: #60a5fa;
+  --color-info-bg: #172554;
 }
 
 /* Light-mode text-slate-400 (#94a3b8, 3.0:1) fails WCAG AA.

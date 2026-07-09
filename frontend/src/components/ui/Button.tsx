@@ -17,7 +17,7 @@ const variantClasses: Record<Variant, string> = {
   ghost:
     "text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200",
   danger:
-    "text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950 dark:hover:text-red-400",
+    "text-slate-500 hover:bg-[var(--color-error-bg)] hover:text-[var(--color-error)] dark:hover:bg-[#450a0a] dark:hover:text-[#f87171]",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
