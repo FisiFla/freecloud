@@ -25,7 +25,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailError, setEmailError] = useState<string | undefined>(undefined);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   // Track dirty state: any form field filled in
@@ -203,7 +203,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
           onChange={(e) => {
             setEmail(e.target.value);
             if (fieldErrors.email) setFieldErrors((prev) => ({ ...prev, email: "" }));
-            setEmailError(e.target.value && !e.target.value.includes("@") ? "Please enter a valid email address" : null);
+            setEmailError(e.target.value && !e.target.value.includes("@") ? "Please enter a valid email address" : undefined);
           }}
           placeholder="jane@example.com"
         />
