@@ -36,8 +36,15 @@ export default function Sidebar() {
   // Close mobile menu on navigation
   const closeMobile = () => setMobileOpen(false);
 
-  // Don't render the sidebar on auth pages (sign-in).
-  if (pathname === "/signin") return null;
+  // Don't render the sidebar on unauthenticated / chrome-less pages.
+  if (
+    pathname === "/signin" ||
+    pathname === "/setup" ||
+    pathname === "/forgot-password" ||
+    pathname === "/access-blocked"
+  ) {
+    return null;
+  }
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";

@@ -776,3 +776,48 @@ func TestAPITokenMiddlewareStoredRoleDeniesMissingPermission(t *testing.T) {
 		t.Fatalf("read-only API token: expected 403, got %d — body: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Helpdesk/auditor/read-only API tokens must not receive OrgMembershipRoleAdmin
+// (which would let them pass RequireOrgAdminOrSystemAdmin and manage org members).
+func TestAPITokenMiddlewareOrgRoleElevation(t *testing.T) {
+	base := NewAuthMiddleware("http://localhost:8081", "freecloud", "freecloud-dashboard")
+
+	t.Run("super-admin token is org-admin", func(t *testing.T) {
+		apiMW := NewAPITokenMiddleware(base, fakeTokenDB{role: string(RoleSuperAdmin)})
+		handler := apiMW.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			oc := GetOrgContext(r.Context())
+			if oc == nil {
+				t.Fatal("expected org context")
+			}
+			if oc.Role != OrgMembershipRoleAdmin {
+				t.Fatalf("super-admin API token: expected org-admin, got %q", oc.Role)
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+		req.Header.Set("Authorization", "Bearer fc_testtoken")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", rec.Code)
+		}
+	})
+
+	for _, role := range []Role{RoleHelpdesk, RoleAuditor, RoleReadOnly} {
+		t.Run(string(role)+" token is not org-admin", func(t *testing.T) {
+			apiMW := NewAPITokenMiddleware(base, fakeTokenDB{role: string(role)})
+			handler := apiMW.Middleware(RequireOrgAdminOrSystemAdmin(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					t.Fatalf("%s API token must not pass RequireOrgAdminOrSystemAdmin", role)
+				}),
+			))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/orgs/"+DefaultOrgID+"/members", nil)
+			req.Header.Set("Authorization", "Bearer fc_testtoken")
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s API token: expected 403, got %d — body: %s", role, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}

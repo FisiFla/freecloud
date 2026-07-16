@@ -60,15 +60,15 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	// Step 1: Disable user in Keycloak. This is the critical lock; if it fails
 	// the account is NOT reliably disabled, so the whole offboard reports a
 	// non-2xx status (below) instead of silently returning 200.
+	// Local DB soft-disable only runs AFTER a successful Keycloak disable so we
+	// never leave FreeCloud "disabled" while the IdP still accepts logins
+	// (split-brain that confuses admins and the disabled-user JWT check).
 	disableFailed := false
 	if err := h.keycloak.DisableUser(ctx, userID); err != nil {
 		logger.Warn("failed to disable user in Keycloak", zap.String("user_id", userID), zap.Error(err))
 		warnings = append(warnings, "failed to disable user in identity provider")
 		disableFailed = true
-	}
-	// Always best-effort soft-disable in local DB regardless of Keycloak outcome,
-	// so local state reflects the intent even if Keycloak is unreachable.
-	if h.db != nil {
+	} else if h.db != nil {
 		_, dbErr := h.db.Exec(ctx,
 			`UPDATE users SET disabled = true, updated_at = NOW() WHERE keycloak_user_id = $1`,
 			userID,
@@ -219,4 +219,3 @@ func (h *Handler) triggerDeprovisioningForUser(ctx context.Context, userID strin
 		}
 	}
 }
-

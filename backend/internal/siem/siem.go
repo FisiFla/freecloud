@@ -4,9 +4,9 @@
 // sinks (syslog RFC5424 and HTTP NDJSON). A durable cursor persisted in the
 // siem_cursor table ensures no events are dropped across restarts.
 //
-// Single-instance design: the cursor is a simple monotonic seq offset — no
-// distributed locking. If multiple instances run they will each stream the same
-// events (at-least-once delivery to the sink).
+// Multi-instance: wire SetLeaderGate so only one replica advances the cursor
+// and streams events. Without a gate, every replica would re-deliver the same
+// audit rows (at-least-once fan-out).
 package siem
 
 import (
@@ -128,14 +128,20 @@ func (h *HTTPSink) Send(ctx context.Context, entry AuditEntry) error {
 
 // Streamer polls audit_logs and streams new entries to a Sink.
 type Streamer struct {
-	pool   DBPool
-	sink   Sink
-	logger *zap.Logger
+	pool     DBPool
+	sink     Sink
+	logger   *zap.Logger
+	isLeader func() bool
 }
 
 // New creates a Streamer.
 func New(pool DBPool, sink Sink, logger *zap.Logger) *Streamer {
 	return &Streamer{pool: pool, sink: sink, logger: logger}
+}
+
+// SetLeaderGate wires a leader-election check so only one replica streams.
+func (s *Streamer) SetLeaderGate(isLeader func() bool) {
+	s.isLeader = isLeader
 }
 
 // poll reads the cursor, fetches new audit_log rows (by seq), sends them to
@@ -234,6 +240,9 @@ func (s *Streamer) Start(ctx context.Context, interval time.Duration) {
 				s.logger.Info("siem streamer stopped")
 				return
 			case <-ticker.C:
+				if s.isLeader != nil && !s.isLeader() {
+					continue
+				}
 				s.poll(ctx)
 			}
 		}

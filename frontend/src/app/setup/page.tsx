@@ -4,8 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Cloud } from "lucide-react";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
-
 interface FieldError {
   field: string;
   message: string;
@@ -39,7 +37,8 @@ export default function SetupPage() {
 
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/v1/setup`, {
+      // Same-origin BFF (public setup path) — avoids CORS and keeps one network shape.
+      const res = await fetch(`/api/v1/setup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminEmail, adminPassword, orgName }),

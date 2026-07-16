@@ -2,7 +2,7 @@
 
 Unified, open-source identity and device management. A single pane of glass over Keycloak (Identity Provider / SSO / SCIM) and FleetDM (Device Management / MDM).
 
-## Architecture
+## Stack
 
 - **Backend:** Go + Chi router + gocloak (Keycloak admin client)
 - **Frontend:** Next.js 16 (App Router) + React 19 + TypeScript + Tailwind CSS 4

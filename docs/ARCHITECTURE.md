@@ -55,11 +55,13 @@ graph LR
 ### Next.js Frontend (`frontend/`)
 
 - **Framework:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4.
-- **Auth:** Auth.js (next-auth) with the Keycloak OIDC provider. The access token
-  is published into a module-level store (`frontend/src/lib/api.ts:setAuthToken`)
-  and attached as a Bearer header on every API call.
+- **Auth:** Auth.js (next-auth) with the Keycloak OIDC provider. Access tokens
+  live only in the encrypted server-side JWT cookie; the browser never sees
+  them. Authenticated API calls go through the same-origin BFF proxy at
+  `frontend/src/app/api/v1/[...path]/route.ts`, which attaches the Bearer
+  header server-side.
 - **API client:** `frontend/src/lib/api.ts` — typed wrapper over `fetch` with a
-  standard `{ success, data, error, errors }` envelope.
+  standard `{ success, data, error, errors }` envelope (same-origin `/api/v1/...`).
 - **Pages:** dashboard, employees, apps, groups, teams, compliance, audit log,
   settings, portal (self-service), analytics, access review campaigns.
 - **Design tokens:** Tailwind CSS 4 with a v3-compat config (`tailwind.config.js`).
@@ -96,9 +98,10 @@ graph LR
   snapshots, API tokens, and access review campaigns.
 - Migrations are append-only (`backend/internal/db/schema.go`; never edit an
   applied migration).
-- The backend runs migrations automatically on startup. Because there is no
-  advisory lock, only one backend instance may run at a time (see
-  [ADR 0003](adr/0003-single-instance.md)).
+- Schema migrations are applied by a dedicated one-shot `server migrate` job
+  under a Postgres advisory lock; the API process only waits for the schema
+  to be current (`WaitForSchema`). Multi-instance HA is described in
+  [ADR 0004](adr/0004-multi-instance-ha.md) (which supersedes ADR 0003).
 
 ### Caddy (production only)
 

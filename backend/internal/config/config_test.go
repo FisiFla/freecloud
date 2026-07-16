@@ -22,6 +22,7 @@ func setSecureProdEnv(t *testing.T) {
 	t.Setenv("SCIM_BEARER_TOKEN", "scim-secret-token")
 	t.Setenv("ACCESS_EVAL_TOKEN", "access-eval-secret")
 	t.Setenv("REDIS_URL", "redis://redis:6379/0")
+	t.Setenv("KC_BOOTSTRAP_PASSWORD", "prod-bootstrap-s3cret!")
 }
 
 func TestValidateDevelopmentExplicit(t *testing.T) {
@@ -55,6 +56,15 @@ func TestValidateProductionAllSecure(t *testing.T) {
 	cfg := Load()
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error with a full secure prod config, got %v", err)
+	}
+}
+
+func TestValidateProductionRejectsWeakBootstrapPassword(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("KC_BOOTSTRAP_PASSWORD", "admin")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for default KC_BOOTSTRAP_PASSWORD in production, got nil")
 	}
 }
 

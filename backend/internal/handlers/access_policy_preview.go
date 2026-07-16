@@ -129,29 +129,7 @@ func (h *Handler) PreviewAppPolicy(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			reasons = append(reasons, "device is not enrolled for user")
 		} else {
-			state, err := h.fleet.GetHostSecurityState(ctx, req.DeviceID)
-			if err != nil {
-				reasons = append(reasons, "device posture unavailable for device "+req.DeviceID)
-			} else {
-				if !state.FirewallEnabled {
-					reasons = append(reasons, "firewall disabled on device "+req.DeviceID)
-				}
-				if !state.DiskEncrypted {
-					reasons = append(reasons, "disk not encrypted on device "+req.DeviceID)
-				}
-				for _, v := range state.Vulnerabilities {
-					reasons = append(reasons, "vulnerability: "+v+" on device "+req.DeviceID)
-				}
-				if policy.RequireDiskEncrypted && !state.DiskEncrypted {
-					reasons = append(reasons, "app policy requires disk encryption on device "+req.DeviceID)
-				}
-				if policy.RequireNoCriticalVulns && (len(state.Vulnerabilities) > 0 || state.UnknownVulns) {
-					reasons = append(reasons, "app policy requires no critical vulnerabilities on device "+req.DeviceID)
-				}
-				if policy.MaxOsAgeDays != nil {
-					reasons = append(reasons, "app policy max OS age is configured but not supported by available Fleet posture data")
-				}
-			}
+			reasons = append(reasons, evaluateDevicePosture(ctx, h, policy, req.DeviceID)...)
 		}
 	}
 

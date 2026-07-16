@@ -125,4 +125,37 @@ describe("BFF proxy route (app/api/v1/[...path])", () => {
 
     expect(res.status).toBe(502);
   });
+
+  it("rejects path traversal segments that would escape /api/v1", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const req = makeRequest("http://localhost/api/v1/../metrics");
+    const res = await GET(req, { params: Promise.resolve({ path: ["..", "metrics"] }) });
+
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("forwards Content-Disposition so browser downloads work through the BFF", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response("a,b,c\n", {
+        status: 200,
+        headers: {
+          "content-type": "text/csv",
+          "content-disposition": 'attachment; filename="audit.csv"',
+        },
+      }),
+    ) as unknown as typeof fetch;
+
+    const req = makeRequest("http://localhost/api/v1/audit-logs/export?format=csv");
+    const res = await GET(req, {
+      params: Promise.resolve({ path: ["audit-logs", "export"] }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="audit.csv"');
+  });
 });

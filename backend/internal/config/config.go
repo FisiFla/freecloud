@@ -260,6 +260,15 @@ func (c *Config) Validate() error {
 	if c.RedisURL == "" {
 		add("REDIS_URL must be set (the rate limiter requires shared state across replicas in production)")
 	}
+	// Bootstrap admin password used to provision Keycloak on first start.
+	// Reject empty/well-known defaults so a hand-rolled prod deploy cannot
+	// leave master-realm admin/admin reachable.
+	weakBootstrap := map[string]bool{
+		"": true, "admin": true, "password": true, "changeme": true, "admin123": true,
+	}
+	if weakBootstrap[strings.ToLower(strings.TrimSpace(c.BootstrapAdminPassword))] {
+		add("KC_BOOTSTRAP_PASSWORD must be set to a strong non-default value")
+	}
 
 	if len(problems) > 0 {
 		return fmt.Errorf("insecure configuration for %s environment: %s", env, strings.Join(problems, "; "))

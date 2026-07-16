@@ -266,46 +266,24 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		// API's documented "no policy row means no posture gate" behavior.
 	}
 
-	// 4. Evaluate posture for every device.
+	// 4. Evaluate posture. When the SPI supplies an explicit deviceId we check
+	// that one device only. When deviceId is empty we allow if ANY enrolled
+	// device is compliant — AND-ing failures across every host blocked SSO for
+	// users who still had one clean laptop next to a retired non-compliant one.
 	var reasons []string
+	anyCompliant := false
+	var worstReasons []string
 
 	for _, devID := range deviceIDs {
-		state, err := h.fleet.GetHostSecurityState(ctx, devID)
-		if err != nil {
-			h.logger.Error("access eval: failed to get security state",
-				zap.String("device_id", devID),
-				zap.Error(err),
-			)
-			reasons = append(reasons, "device posture unavailable for device "+devID)
-			continue
+		devReasons := evaluateDevicePosture(ctx, h, policy, devID)
+		if len(devReasons) == 0 {
+			anyCompliant = true
+			break
 		}
-
-		if !state.FirewallEnabled {
-			reasons = append(reasons, "firewall disabled on device "+devID)
-		}
-		if !state.DiskEncrypted {
-			reasons = append(reasons, "disk not encrypted on device "+devID)
-		}
-		for _, v := range state.Vulnerabilities {
-			reasons = append(reasons, "vulnerability: "+v+" on device "+devID)
-		}
-		if state.UnknownVulns {
-			h.logger.Warn("access eval: vulnerability data incomplete",
-				zap.String("device_id", devID),
-			)
-			reasons = append(reasons, "vulnerability data unavailable for device "+devID)
-		}
-
-		// Apply per-app policy checks.
-		if policy.RequireDiskEncrypted && !state.DiskEncrypted {
-			reasons = append(reasons, "app policy requires disk encryption on device "+devID)
-		}
-		if policy.RequireNoCriticalVulns && (len(state.Vulnerabilities) > 0 || state.UnknownVulns) {
-			reasons = append(reasons, "app policy requires no critical vulnerabilities on device "+devID)
-		}
-		if policy.MaxOsAgeDays != nil {
-			reasons = append(reasons, "app policy max OS age is configured but not supported by available Fleet posture data")
-		}
+		worstReasons = append(worstReasons, devReasons...)
+	}
+	if !anyCompliant {
+		reasons = append(reasons, worstReasons...)
 	}
 
 	// 5. Evaluate D1 policy conditions (time window, network, geo).
@@ -318,6 +296,56 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		Allow:   allow,
 		Reasons: reasons,
 	})
+}
+
+// evaluateDevicePosture returns deny reasons for a single device. Empty means
+// the device is compliant under the active policy (and the global baseline).
+//
+// max_os_age_days is intentionally ignored at evaluation time: Fleet posture
+// does not currently expose OS age, and treating the field as permanent deny
+// locked operators out. UpsertAppAccessPolicy rejects new writes of the field.
+func evaluateDevicePosture(ctx context.Context, h *Handler, policy appPolicy, devID string) []string {
+	var reasons []string
+	state, err := h.fleet.GetHostSecurityState(ctx, devID)
+	if err != nil {
+		h.logger.Error("access eval: failed to get security state",
+			zap.String("device_id", devID),
+			zap.Error(err),
+		)
+		return []string{"device posture unavailable for device " + devID}
+	}
+
+	// Global secure baseline: firewall on, disk encrypted, no known vulns.
+	// Per-app flags only add redundant explicit messaging when set.
+	if !state.FirewallEnabled {
+		reasons = append(reasons, "firewall disabled on device "+devID)
+	}
+	if !state.DiskEncrypted {
+		reasons = append(reasons, "disk not encrypted on device "+devID)
+	}
+	for _, v := range state.Vulnerabilities {
+		reasons = append(reasons, "vulnerability: "+v+" on device "+devID)
+	}
+	if state.UnknownVulns {
+		h.logger.Warn("access eval: vulnerability data incomplete",
+			zap.String("device_id", devID),
+		)
+		reasons = append(reasons, "vulnerability data unavailable for device "+devID)
+	}
+
+	if policy.RequireDiskEncrypted && !state.DiskEncrypted {
+		reasons = append(reasons, "app policy requires disk encryption on device "+devID)
+	}
+	if policy.RequireNoCriticalVulns && (len(state.Vulnerabilities) > 0 || state.UnknownVulns) {
+		reasons = append(reasons, "app policy requires no critical vulnerabilities on device "+devID)
+	}
+	if policy.MaxOsAgeDays != nil {
+		h.logger.Warn("access eval: max_os_age_days is configured but not supported; ignoring",
+			zap.String("device_id", devID),
+			zap.Int("max_os_age_days", *policy.MaxOsAgeDays),
+		)
+	}
+	return reasons
 }
 
 // evalConditions evaluates the D1 policy conditions (time window, network allowlist,

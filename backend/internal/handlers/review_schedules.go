@@ -4,6 +4,7 @@ package handlers
 // Recurring access review schedules: create, list, update (enable/disable), delete.
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -276,4 +277,135 @@ func (h *Handler) DeleteReviewSchedule(w http.ResponseWriter, r *http.Request) {
 		map[string]interface{}{})
 
 	respondJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+}
+
+// RunDueReviewSchedules creates access-review campaigns for every enabled
+// schedule whose next_run_at is due. Intended to be called from a leader-gated
+// ticker so only one replica fires schedules in multi-instance deploys.
+// Returns the number of schedules that successfully created a campaign.
+func (h *Handler) RunDueReviewSchedules(ctx context.Context) int {
+	if h.db == nil {
+		return 0
+	}
+	rows, err := h.db.Query(ctx, `
+		SELECT id, name, cadence, org_id::text, created_by
+		FROM review_schedules
+		WHERE enabled = true AND next_run_at <= NOW()
+		ORDER BY next_run_at ASC
+		LIMIT 50`)
+	if err != nil {
+		h.logger.Error("review schedules: list due failed", zap.Error(err))
+		return 0
+	}
+	defer rows.Close()
+
+	type due struct {
+		id, name, cadence, orgID, createdBy string
+	}
+	var dueList []due
+	for rows.Next() {
+		var d due
+		if err := rows.Scan(&d.id, &d.name, &d.cadence, &d.orgID, &d.createdBy); err != nil {
+			h.logger.Error("review schedules: scan due failed", zap.Error(err))
+			return 0
+		}
+		dueList = append(dueList, d)
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("review schedules: iterate due failed", zap.Error(err))
+		return 0
+	}
+
+	created := 0
+	for _, d := range dueList {
+		if err := h.fireReviewSchedule(ctx, d.id, d.name, d.cadence, d.orgID, d.createdBy); err != nil {
+			h.logger.Error("review schedules: fire failed",
+				zap.String("schedule_id", d.id),
+				zap.Error(err),
+			)
+			continue
+		}
+		created++
+	}
+	return created
+}
+
+func (h *Handler) fireReviewSchedule(ctx context.Context, scheduleID, name, cadence, orgID, createdBy string) error {
+	tx, err := h.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	// Re-check due under lock via UPDATE ... WHERE next_run_at <= NOW() so two
+	// leaders cannot double-fire the same schedule.
+	nextRun := nextRunFromCadence(cadence)
+	tag, err := tx.Exec(ctx, `
+		UPDATE review_schedules
+		SET last_run_at = NOW(), next_run_at = $1
+		WHERE id = $2 AND enabled = true AND next_run_at <= NOW()`,
+		nextRun, scheduleID,
+	)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return nil // lost the race; another replica already advanced it
+	}
+
+	campaignName := name + " (" + time.Now().UTC().Format("2006-01-02") + ")"
+	var campaignID string
+	if err := tx.QueryRow(ctx,
+		`INSERT INTO review_campaigns (name, created_by, org_id) VALUES ($1, $2, $3) RETURNING id`,
+		campaignName, createdBy, orgID,
+	).Scan(&campaignID); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO review_items (campaign_id, user_id, resource_type, resource_id, resource_name)
+		SELECT $1, aa.user_id, 'app', aa.app_id::text, ca.name
+		FROM app_assignments aa
+		JOIN connected_apps ca ON ca.id = aa.app_id
+		WHERE ca.org_id = $2`,
+		campaignID, orgID,
+	); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	h.logger.Info("review schedules: created campaign",
+		zap.String("schedule_id", scheduleID),
+		zap.String("campaign_id", campaignID),
+		zap.String("org_id", orgID),
+	)
+	return nil
+}
+
+// StartReviewScheduleRunner runs due schedules on interval when isLeader (if
+// non-nil) reports true. interval <= 0 disables the runner.
+func (h *Handler) StartReviewScheduleRunner(ctx context.Context, interval time.Duration, isLeader func() bool) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if isLeader != nil && !isLeader() {
+					continue
+				}
+				n := h.RunDueReviewSchedules(ctx)
+				if n > 0 {
+					h.logger.Info("review schedules: fired due schedules", zap.Int("count", n))
+				}
+			}
+		}
+	}()
 }
