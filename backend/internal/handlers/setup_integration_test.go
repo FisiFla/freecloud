@@ -89,7 +89,7 @@ func TestSetupConcurrentReplicasSingleWinner(t *testing.T) {
 	h1 := NewHandler(pool1, kc, &fakeFleet{}, zap.NewNop())
 	h2 := NewHandler(pool2, kc, &fakeFleet{}, zap.NewNop())
 
-	body := []byte(`{"adminEmail":"admin@example.com","adminPassword":"securepass1","orgName":"Acme Corp"}`)
+	body := []byte(`{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp"}`)
 
 	start := make(chan struct{})
 	statuses := make(chan int, 2)

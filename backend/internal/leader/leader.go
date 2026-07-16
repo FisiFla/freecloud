@@ -176,9 +176,16 @@ func (e *Elector) tryAcquire(ctx context.Context) bool {
 	return true
 }
 
-// releaseIfLeader releases the advisory lock (implicitly, by releasing the
-// connection back to the pool — a session-scoped lock is held only as long
-// as its session/connection lives) and clears leader state.
+// releaseIfLeader explicitly unlocks the session advisory lock, then returns
+// the dedicated connection to the pool and clears leader state.
+//
+// Important: with pgxpool, Conn.Release() returns the live session to the
+// pool — it does NOT close the backend connection. Session-scoped
+// pg_advisory_lock therefore persists across Release() unless we call
+// pg_advisory_unlock first. Without the explicit unlock, a mid-life
+// leadership loss (failed Ping) can leave the lock held on a pooled conn
+// while isLeader=false, blocking every replica from re-acquiring leadership
+// until that backend session dies.
 func (e *Elector) releaseIfLeader() {
 	if !e.isLeader.Load() {
 		return
@@ -186,6 +193,9 @@ func (e *Elector) releaseIfLeader() {
 	e.isLeader.Store(false)
 	isLeaderGauge.WithLabelValues(e.job).Set(0)
 	if e.conn != nil {
+		// Best-effort unlock; if the connection is already dead, Postgres will
+		// drop the lock when the backend session ends.
+		_ = e.conn.QueryRow(context.Background(), `SELECT pg_advisory_unlock($1)`, e.lockID).Scan(new(bool))
 		e.conn.Release()
 		e.conn = nil
 	}

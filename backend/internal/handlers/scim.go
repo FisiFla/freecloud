@@ -1,10 +1,12 @@
 package handlers
 
-// SCIM 2.0 /Users endpoint — RFC 7644 / RFC 7643
+// SCIM 2.0 Users and Groups endpoints — RFC 7644 / RFC 7643
 //
-// Scope: Users resource only. /scim/v2/Groups is deferred (stub 501 below).
-// Auth: dedicated bearer token from config.SCIMBearerToken, checked by
-//       SCIMBearerMiddleware. These routes sit OUTSIDE the user-JWT group.
+// Scope: /scim/v2/Users and /scim/v2/Groups (plus org-scoped
+// /scim/v2/orgs/{orgID}/… variants). Auth: dedicated bearer token from
+// config.SCIMBearerToken (legacy Default Org) or per-org scim_bearer_tokens,
+// checked by SCIMBearerMiddleware / SCIMOrgBearerMiddleware. These routes sit
+// OUTSIDE the user-JWT group.
 //
 // The user lifecycle is delegated to the existing onboard/offboard logic so
 // Keycloak + DB writes stay consistent.
@@ -305,6 +307,30 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 	if offset < 0 {
 		offset = 0
 	}
+	// COUNT(*) with the same WHERE (before LIMIT) so SCIM clients paginate correctly.
+	countQuery := `SELECT COUNT(*) FROM users u WHERE u.org_id = $1`
+	countArgs := []interface{}{oc.OrgID}
+	countArgIdx := 2
+	switch filterOp {
+	case "eq":
+		countQuery += ` AND u.email = $` + strconv.Itoa(countArgIdx)
+		countArgs = append(countArgs, filterVal)
+		countArgIdx++
+	case "co":
+		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countArgIdx)
+		countArgs = append(countArgs, "%"+filterVal+"%")
+		countArgIdx++
+	case "sw":
+		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countArgIdx)
+		countArgs = append(countArgs, filterVal+"%")
+	}
+	var totalResults int
+	if err := h.db.QueryRow(ctx, countQuery, countArgs...).Scan(&totalResults); err != nil {
+		h.logger.Error("scim list users count failed", zap.Error(err))
+		scimRespondError(w, http.StatusInternalServerError, "internal error", "")
+		return
+	}
+
 	query += fmt.Sprintf(` LIMIT $%d OFFSET $%d`, argIdx, argIdx+1)
 	args = append(args, count, offset)
 
@@ -340,7 +366,7 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 
 	scimRespond(w, http.StatusOK, scimListResponse{
 		Schemas:      []string{scimListSchema},
-		TotalResults: len(users),
+		TotalResults: totalResults,
 		StartIndex:   startIndex,
 		ItemsPerPage: len(users),
 		Resources:    users,

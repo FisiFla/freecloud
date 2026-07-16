@@ -316,6 +316,13 @@ func TestCrossOrgIsolation_SCIM(t *testing.T) {
 			}}, nil
 		},
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			// SCIMListUsers now issues COUNT(*) with only org_id before the page query.
+			if strings.Contains(sql, "COUNT(") {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*int)) = 1
+					return nil
+				}}
+			}
 			if len(args) < 2 {
 				t.Fatalf("SCIMGetUser query missing org_id argument: %v", args)
 			}

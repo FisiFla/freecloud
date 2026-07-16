@@ -274,10 +274,11 @@ export async function getSAMLIdPInitiatedURL(appId: string): Promise<{ url: stri
   return request<{ url: string }>("GET", `/api/v1/apps/${appId}/saml/idp-url`);
 }
 
-// C3: Trigger browser download of Keycloak SAML IdP metadata XML
+// C3: Trigger browser download of Keycloak SAML IdP metadata XML.
+// Same-origin BFF path so the encrypted session cookie authenticates the
+// request (access tokens are never available to browser JS after M6).
 export function downloadSAMLMetadata(appId: string): void {
-  const base = getBaseUrl();
-  window.location.href = `${base}/api/v1/apps/${appId}/saml/metadata`;
+  window.location.href = `/api/v1/apps/${appId}/saml/metadata`;
 }
 
 // B4 (kept for global policy listing)
@@ -344,20 +345,6 @@ export class ApiError extends Error {
     this.name = "ApiError";
     this.fieldErrors = fieldErrors;
   }
-}
-
-function getBaseUrl(): string {
-  const url = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-  // In production the API must be reached over TLS or bearer tokens travel in
-  // plaintext. Fail closed on the server; loudly warn in the browser (the value
-  // is already baked into the bundle at build time and can't be changed here).
-  if (process.env.NODE_ENV === "production" && url.startsWith("http://")) {
-    const msg = `NEXT_PUBLIC_API_URL must use https:// in production (got: ${url})`;
-    if (typeof window === "undefined") throw new Error(msg);
-    // eslint-disable-next-line no-console
-    console.error(msg);
-  }
-  return url;
 }
 
 // M6: requests go to the same-origin BFF proxy route (app/api/v1/[...path]/
@@ -494,7 +481,7 @@ export async function forgotPassword(email: string): Promise<{ message: string }
   return request<{ message: string }>("POST", "/api/v1/auth/forgot-password", { email });
 }
 
-// C4: Audit log export — opens a browser download
+// C4: Audit log export — opens a browser download via the same-origin BFF
 export function downloadAuditLogs(
   format: "csv" | "json",
   filters?: { actor?: string; action?: string; from?: string; to?: string },
@@ -504,11 +491,9 @@ export function downloadAuditLogs(
   if (filters?.action) params.set("action", filters.action);
   if (filters?.from) params.set("from", filters.from);
   if (filters?.to) params.set("to", filters.to);
-  const base = getBaseUrl();
-  const url = `${base}/api/v1/audit-logs/export?${params.toString()}`;
-  // Open in current tab — browser will treat it as a download due to
-  // Content-Disposition: attachment on the backend response.
-  window.location.href = url;
+  // BFF attaches the session Bearer server-side; Content-Disposition is
+  // forwarded so the browser treats the response as a download.
+  window.location.href = `/api/v1/audit-logs/export?${params.toString()}`;
 }
 
 // B2: On-demand compliance / access-review reports
@@ -520,9 +505,7 @@ export function downloadReport(
   const params = new URLSearchParams({ type, format });
   if (range?.from) params.set("from", range.from);
   if (range?.to) params.set("to", range.to);
-  const base = getBaseUrl();
-  const url = `${base}/api/v1/reports?${params.toString()}`;
-  window.location.href = url;
+  window.location.href = `/api/v1/reports?${params.toString()}`;
 }
 
 // B3: Audit integrity — chain verification + retention config
@@ -1120,8 +1103,7 @@ export function downloadCampaignExport(
   campaignId: string,
   format: "csv" | "json",
 ): void {
-  const base = getBaseUrl();
-  window.location.href = `${base}/api/v1/campaigns/${campaignId}/export?format=${format}`;
+  window.location.href = `/api/v1/campaigns/${campaignId}/export?format=${format}`;
 }
 
 // E3: Access review campaigns (new types)

@@ -5,13 +5,13 @@ dev-up:
 	@echo "Waiting for services..."
 	@sleep 5
 	@echo "Running migrations..."
-	cd backend && go run cmd/server/migrate.go
+	cd backend && go run ./cmd/server migrate
 
 dev-down:
 	docker compose -f docker/docker-compose.yml down
 
 db-migrate:
-	cd backend && go run cmd/server/migrate.go
+	cd backend && go run ./cmd/server migrate
 
 # A2 (FCEX3-6): Build the custom Keycloak image with the posture-check SPI.
 # Requires Docker. Runs the multi-stage docker/Dockerfile.keycloak build.

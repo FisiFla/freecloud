@@ -184,6 +184,13 @@ func (h *Handler) PortalRequestAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tenant isolation: app_id must belong to the caller's org. Without this,
+	// a user who learns another org's app UUID can open a pending request that
+	// an approver then grants as a cross-org assignment.
+	if !h.requireAppInCallerOrg(w, r, req.AppID) {
+		return
+	}
+
 	var id string
 	err := h.db.QueryRow(r.Context(),
 		`INSERT INTO access_requests (requester_id, app_id, reason, org_id)
@@ -321,8 +328,17 @@ func (h *Handler) AdminDecideAccessRequest(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// If approved, create the app assignment (idempotent).
+	// If approved, create the app assignment (idempotent). Re-check the app
+	// still belongs to this org so a stale/cross-org app_id can never grant
+	// access even if it somehow landed in access_requests.
 	if req.Decision == "approved" {
+		var appOrg string
+		if err := tx.QueryRow(ctx,
+			`SELECT org_id::text FROM connected_apps WHERE id = $1::uuid`, appID,
+		).Scan(&appOrg); err != nil || appOrg != oc.OrgID {
+			respondError(w, http.StatusNotFound, "app not found")
+			return
+		}
 		_, assignErr := tx.Exec(ctx,
 			`INSERT INTO app_assignments (app_id, user_id, assigned_by)
 			 VALUES ($1::uuid, $2, $3)

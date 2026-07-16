@@ -21,6 +21,18 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
+// allowedOrgTables is a whitelist of table/column pairs resourceInOrg may
+// query. SQL identifiers cannot be parameterized, so concatenation is only
+// safe when both table and idColumn come from this map — never request input.
+var allowedOrgTables = map[string]string{
+	"review_campaigns":   "id",
+	"federation_sources": "id",
+	"review_schedules":   "id",
+	"connected_apps":     "id",
+	"users":              "keycloak_user_id",
+	"devices":            "fleet_host_id",
+}
+
 // resourceInOrg runs a `SELECT 1 FROM <table> WHERE <idColumn> = $1 AND
 // org_id = $2` existence check and reports whether the resource belongs to
 // orgID. A non-existent resource and a foreign-org resource are
@@ -30,6 +42,10 @@ import (
 func (h *Handler) resourceInOrg(ctx context.Context, table, idColumn, id, orgID string) (bool, error) {
 	if h.db == nil {
 		return false, errors.New("database not available")
+	}
+	wantCol, ok := allowedOrgTables[table]
+	if !ok || wantCol != idColumn {
+		return false, errors.New("resourceInOrg: table/column not in allowlist")
 	}
 	var found int
 	err := h.db.QueryRow(ctx,

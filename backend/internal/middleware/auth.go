@@ -279,7 +279,18 @@ func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Reque
 	// super-admin-role token is correctly confined to its OWN org rather
 	// than hitting the system-admin cross-org fallback that would otherwise
 	// apply to any super-admin JWT with zero memberships.
-	ctx = SetOrgContext(ctx, &OrgContext{OrgID: orgID, Role: OrgMembershipRoleAdmin})
+	//
+	// Org membership admin is only granted to super-admin tokens. Helpdesk /
+	// auditor / read-only tokens keep their global RBAC via claims.Role but
+	// must not pass RequireOrgAdminOrSystemAdmin (which only checks
+	// OrgContext.Role for non-super-admins). Previously every API token was
+	// hard-coded org-admin, elevating low-privilege tokens into membership
+	// management.
+	orgRole := ""
+	if resolved == RoleSuperAdmin {
+		orgRole = OrgMembershipRoleAdmin
+	}
+	ctx = SetOrgContext(ctx, &OrgContext{OrgID: orgID, Role: orgRole})
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 

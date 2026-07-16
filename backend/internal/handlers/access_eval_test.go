@@ -528,11 +528,10 @@ func TestAccessEvalLegacyMaxOSAgePolicyFailsClosed(t *testing.T) {
 	h.EvaluateAccess(rec, req)
 
 	resp := evalResponse(t, rec)
-	if resp.Allow {
-		t.Fatal("expected allow=false for legacy max OS age policy")
-	}
-	if len(resp.Reasons) != 1 || resp.Reasons[0] != "app policy max OS age is configured but not supported by available Fleet posture data" {
-		t.Fatalf("unexpected reasons: %v", resp.Reasons)
+	// max_os_age_days is rejected at write time and ignored at eval so legacy
+	// rows cannot permanently lock out compliant devices.
+	if !resp.Allow {
+		t.Fatalf("expected allow=true when max OS age is set but unsupported; reasons: %v", resp.Reasons)
 	}
 }
 

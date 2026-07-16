@@ -78,7 +78,7 @@ func TestSetupCreatesFirstAdmin(t *testing.T) {
 	}, &fakeFleet{}, zap.NewNop())
 	r := newTestRouter(h)
 
-	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass1","orgName":"Acme Corp"}`
+	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -98,7 +98,7 @@ func TestSetupRejectsSecondCall(t *testing.T) {
 	}, &fakeFleet{}, zap.NewNop())
 	r := newTestRouter(h)
 
-	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass1","orgName":"Acme Corp"}`
+	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -122,12 +122,12 @@ func TestSetupValidation(t *testing.T) {
 	}{
 		{
 			name: "missing orgName",
-			body: `{"adminEmail":"admin@example.com","adminPassword":"securepass1","orgName":""}`,
+			body: `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":""}`,
 			want: "orgName",
 		},
 		{
 			name: "bad email",
-			body: `{"adminEmail":"not-an-email","adminPassword":"securepass1","orgName":"Acme"}`,
+			body: `{"adminEmail":"not-an-email","adminPassword":"securepass12","orgName":"Acme"}`,
 			want: "adminEmail",
 		},
 		{

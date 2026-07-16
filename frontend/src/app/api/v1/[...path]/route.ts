@@ -36,10 +36,37 @@ const PUBLIC_BACKEND_PATHS = new Set([
   "/health/keycloak",
   "/health/fleetdm",
   "/auth/forgot-password",
+  "/setup",
+  "/setup/status",
 ]);
 
+/** Reject path segments that could escape /api/v1 via .. or empty components. */
+function sanitizePathParts(pathParts: string[]): string | null {
+  if (pathParts.length === 0) return null;
+  const decoded: string[] = [];
+  for (const part of pathParts) {
+    let seg: string;
+    try {
+      seg = decodeURIComponent(part);
+    } catch {
+      return null;
+    }
+    if (!seg || seg === "." || seg === ".." || seg.includes("/") || seg.includes("\\")) {
+      return null;
+    }
+    // Reject encoded-dot tricks that survived a single decode.
+    const lower = seg.toLowerCase();
+    if (lower === "%2e" || lower === "%2e%2e") return null;
+    decoded.push(seg);
+  }
+  return "/" + decoded.map(encodeURIComponent).join("/");
+}
+
 async function proxy(req: NextRequest, pathParts: string[]): Promise<NextResponse> {
-  const backendPath = "/" + pathParts.map(encodeURIComponent).join("/");
+  const backendPath = sanitizePathParts(pathParts);
+  if (backendPath === null) {
+    return NextResponse.json({ success: false, error: "invalid path" }, { status: 400 });
+  }
   const isPublic = PUBLIC_BACKEND_PATHS.has(backendPath);
 
   const token = await getToken({
@@ -55,7 +82,12 @@ async function proxy(req: NextRequest, pathParts: string[]): Promise<NextRespons
     return NextResponse.json({ success: false, error: "unauthorized" }, { status: 401 });
   }
 
-  const targetUrl = new URL(`${INTERNAL_API_URL}/api/v1${backendPath}`);
+  const base = INTERNAL_API_URL.replace(/\/$/, "");
+  const targetUrl = new URL(`${base}/api/v1${backendPath}`);
+  // Defense in depth: after URL resolution the pathname must still be under /api/v1.
+  if (!targetUrl.pathname.startsWith("/api/v1/") && targetUrl.pathname !== "/api/v1") {
+    return NextResponse.json({ success: false, error: "invalid path" }, { status: 400 });
+  }
   targetUrl.search = req.nextUrl.search;
 
   const outHeaders = new Headers();
@@ -86,6 +118,8 @@ async function proxy(req: NextRequest, pathParts: string[]): Promise<NextRespons
   const resHeaders = new Headers();
   const respContentType = backendRes.headers.get("content-type");
   if (respContentType) resHeaders.set("content-type", respContentType);
+  const contentDisposition = backendRes.headers.get("content-disposition");
+  if (contentDisposition) resHeaders.set("content-disposition", contentDisposition);
 
   return new NextResponse(buf, { status: backendRes.status, headers: resHeaders });
 }

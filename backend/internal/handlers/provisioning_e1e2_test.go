@@ -108,3 +108,32 @@ func TestLoadProvisioningConnectorsRegistersEnabledSCIM(t *testing.T) {
 		t.Fatalf("expected connector for app %s", appID)
 	}
 }
+
+func TestValidateOutboundEndpointURL(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
+	// Prefer literal IPs so the suite does not depend on outbound DNS.
+	cases := []struct {
+		url  string
+		want bool
+	}{
+		{"https://8.8.8.8/v2", true}, // public IP, https
+		{"http://8.8.8.8/v2", false}, // http blocked outside dev
+		{"https://169.254.169.254/latest", false},
+		{"https://127.0.0.1/v2", false},
+		{"https://10.0.0.5/v2", false},
+		{"not-a-url", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		err := validateOutboundEndpointURL(tc.url)
+		ok := err == nil
+		if ok != tc.want {
+			t.Errorf("url %q: got ok=%v err=%v, want ok=%v", tc.url, ok, err, tc.want)
+		}
+	}
+	// Dev allows localhost http
+	t.Setenv("APP_ENV", "development")
+	if err := validateOutboundEndpointURL("http://localhost:9999/scim"); err != nil {
+		t.Errorf("dev localhost http should be allowed: %v", err)
+	}
+}

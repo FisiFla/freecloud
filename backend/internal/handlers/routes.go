@@ -37,8 +37,13 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 	// FleetDM enrollment callback — called by Fleet (not a browser) and
 	// authenticated by an HMAC signature over the body, so it sits OUTSIDE the
-	// JWT auth group.
-	r.Post("/api/v1/fleet/enrollment-callback", h.FleetEnrollmentCallback)
+	// JWT auth group. Rate-limited to blunt HMAC/DoS noise against the public
+	// surface (body is still capped globally at 1 MiB).
+	enrollmentLimiter := newLimiter(60, time.Minute, "enrollment_callback")
+	r.Group(func(r chi.Router) {
+		r.Use(enrollmentLimiter.Middleware)
+		r.Post("/api/v1/fleet/enrollment-callback", h.FleetEnrollmentCallback)
+	})
 
 	// A3 (FCEX3-7): Device-identity cookie — browser-facing, unauthenticated.
 	// Called after Fleet enrollment to set the freecloud-device-id cookie that

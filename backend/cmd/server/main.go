@@ -298,9 +298,13 @@ func runServer() {
 	reconcileLeader := leader.New(leader.PoolAdapter{Pool: pool}, "reconcile", 8241093601, logger)
 	snapshotLeader := leader.New(leader.PoolAdapter{Pool: pool}, "snapshot", 8241093602, logger)
 	auditRetentionLeader := leader.New(leader.PoolAdapter{Pool: pool}, "audit_retention", 8241093603, logger)
+	siemLeader := leader.New(leader.PoolAdapter{Pool: pool}, "siem", 8241093604, logger)
+	reviewScheduleLeader := leader.New(leader.PoolAdapter{Pool: pool}, "review_schedules", 8241093605, logger)
 	reconcileLeader.Start(lifecycleCtx)
 	snapshotLeader.Start(lifecycleCtx)
 	auditRetentionLeader.Start(lifecycleCtx)
+	siemLeader.Start(lifecycleCtx)
+	reviewScheduleLeader.Start(lifecycleCtx)
 
 	// Start the Keycloak↔DB reconciliation job (FCEXP-21).
 	// RECONCILE_INTERVAL=0 disables it; the default is 15m.
@@ -316,9 +320,10 @@ func runServer() {
 	snap.SetLeaderGate(snapshotLeader.IsLeader)
 	snap.Start(lifecycleCtx, cfg.SnapshotInterval)
 
-	// D3 — SIEM streamer.
+	// D3 — SIEM streamer (leader-gated so multi-replica does not double-deliver).
 	siemSink := siem.BuildSink(cfg.SIEMSyslogNet, cfg.SIEMSyslogAddr, cfg.SIEMHTTPUrl, cfg.SIEMHTTPToken, logger)
 	siemStreamer := siem.New(pool, siemSink, logger)
+	siemStreamer.SetLeaderGate(siemLeader.IsLeader)
 	siemStreamer.Start(lifecycleCtx, cfg.SIEMInterval)
 
 	// C2 (FCEX3-14) — Audit retention/pruning.
@@ -345,6 +350,9 @@ func runServer() {
 	handler.SetSnapshotter(snap)
 	handler.SetProvisionEngine(provisionEngine)
 	handler.SetLDAPBindPassword(cfg.LDAPBindPassword)
+
+	// E3 — Recurring access-review schedule runner (leader-gated).
+	handler.StartReviewScheduleRunner(lifecycleCtx, 1*time.Minute, reviewScheduleLeader.IsLeader)
 
 	// A2 — Live GeoIP (optional). GEOIP_MMDB_PATH unset keeps the handlers
 	// package's no-op default (fails closed: unknown country whenever a
@@ -410,7 +418,7 @@ func runServer() {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{corsOrigin},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Org-Id"},
 		ExposedHeaders:   []string{"Link"},
 		AllowCredentials: true,
 		MaxAge:           300,

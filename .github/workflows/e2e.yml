@@ -46,7 +46,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache-dependency-path: backend/go.sum
 
       - name: Generate A2 GeoIP e2e fixture
@@ -135,7 +135,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25'
+          go-version: '1.26'
           cache-dependency-path: backend/go.sum
 
       - name: Generate A2 GeoIP e2e fixture

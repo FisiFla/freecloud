@@ -30,6 +30,7 @@ below.
 | App catalog templates | ✅ |
 | Conditional access / device posture enforcement | ✅ |
 | Conditional access — time / network / geo conditions | ✅ |
+| Conditional access — max OS age days | ⚠️ Field rejected at write time until Fleet exposes OS age posture |
 | Conditional access policy dry-run (preview) | ✅ |
 
 ### MFA

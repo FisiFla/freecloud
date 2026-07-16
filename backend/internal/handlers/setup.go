@@ -148,16 +148,24 @@ func (h *Handler) acquireSetupLock(ctx context.Context) (unlock func(), err erro
 	}, nil
 }
 
-// isStrongEnough checks that the password has at least 8 characters and is not
-// purely whitespace.
+// isStrongEnough requires length ≥ 12 and at least one letter + one digit.
+// First-admin is the highest-privilege account and is created over an
+// unauthenticated endpoint during the setup window.
 func isStrongEnough(s string) bool {
-	if len(s) < 8 {
+	if len(s) < 12 {
 		return false
 	}
+	hasLetter, hasDigit, hasNonSpace := false, false, false
 	for _, r := range s {
 		if !unicode.IsSpace(r) {
-			return true
+			hasNonSpace = true
+		}
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+		if unicode.IsDigit(r) {
+			hasDigit = true
 		}
 	}
-	return false
+	return hasNonSpace && hasLetter && hasDigit
 }

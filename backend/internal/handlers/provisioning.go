@@ -15,7 +15,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -149,6 +151,14 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 	if !validConnectors[req.ConnectorType] {
 		respondError(w, http.StatusBadRequest, "connectorType must be scim, slack, or github")
 		return
+	}
+
+	req.EndpointURL = strings.TrimSpace(req.EndpointURL)
+	if req.EndpointURL != "" {
+		if err := validateOutboundEndpointURL(req.EndpointURL); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	attrMapJSON := []byte(`{}`)
@@ -619,4 +629,87 @@ func provisioningMasterKey() ([]byte, error) {
 		return nil, fmt.Errorf("PROVISIONING_MASTER_KEY must be a base64-encoded 32-byte key")
 	}
 	return key, nil
+}
+
+// validateOutboundEndpointURL rejects non-HTTPS (except localhost in
+// development/test) and private/link-local/metadata destinations so a
+// super-admin cannot point provisioning at the cloud IMDS or internal
+// compose services (confused-deputy SSRF).
+func validateOutboundEndpointURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("endpointUrl must be a valid absolute URL")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("endpointUrl must include a host")
+	}
+	devOrTest := os.Getenv("APP_ENV") == "development" || os.Getenv("APP_ENV") == "test"
+	switch scheme {
+	case "https":
+		// always ok
+	case "http":
+		if !devOrTest {
+			return fmt.Errorf("endpointUrl must use https")
+		}
+		// allow http only for localhost-style hosts in dev/test
+		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+			return fmt.Errorf("endpointUrl http is only allowed for localhost in development/test")
+		}
+	default:
+		return fmt.Errorf("endpointUrl scheme must be https")
+	}
+
+	// Block obvious metadata / internal hostnames without DNS.
+	lowerHost := strings.ToLower(host)
+	if lowerHost == "metadata.google.internal" ||
+		strings.HasSuffix(lowerHost, ".internal") ||
+		lowerHost == "metadata" {
+		return fmt.Errorf("endpointUrl host is not allowed")
+	}
+
+	// If host is a literal IP, check it directly.
+	if ip := net.ParseIP(host); ip != nil {
+		if isBlockedOutboundIP(ip) {
+			return fmt.Errorf("endpointUrl must not target a private or link-local address")
+		}
+		return nil
+	}
+
+	// Resolve DNS and reject if any answer is private/link-local.
+	// Skip DNS in unit tests when host is clearly external-looking? Always resolve
+	// for safety; failures fail closed.
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		// Fail closed: cannot verify destination.
+		return fmt.Errorf("endpointUrl host could not be resolved")
+	}
+	for _, ip := range ips {
+		if isBlockedOutboundIP(ip) {
+			return fmt.Errorf("endpointUrl must not target a private or link-local address")
+		}
+	}
+	return nil
+}
+
+func isBlockedOutboundIP(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+		// Allow loopback only when APP_ENV is development/test (http localhost
+		// path above). For resolved IPs, still block loopback outside dev —
+		// and even in dev block non-loopback private ranges.
+		devOrTest := os.Getenv("APP_ENV") == "development" || os.Getenv("APP_ENV") == "test"
+		if devOrTest && ip.IsLoopback() {
+			return false
+		}
+		return true
+	}
+	// AWS/GCP/Azure link-local metadata (169.254.169.254 is link-local; covered above).
+	// Also block CGNAT 100.64.0.0/10 commonly used for cloud private nets.
+	if ip4 := ip.To4(); ip4 != nil {
+		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			return true
+		}
+	}
+	return false
 }
