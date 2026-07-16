@@ -33,6 +33,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/FisiFla/freecloud/backend/internal/handlers"
 )
 
 // ---- flags / config ----
@@ -48,6 +50,17 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// signedDeviceID mints a freecloud-device-id cookie value so access/evaluate
+// accepts the host under HMAC verification (FLEET_WEBHOOK_SECRET).
+func signedDeviceID(t *testing.T, hostID string) string {
+	t.Helper()
+	v, err := handlers.MintDeviceCookieValue(hostID, *flagWebhookSecret, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("mint signed device cookie: %v", err)
+	}
+	return v
 }
 
 // ---- http helpers ----

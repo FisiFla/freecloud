@@ -32,6 +32,10 @@ reports within a few days.
   authenticated by an HMAC-SHA256 signature over the request body keyed by
   `FLEET_WEBHOOK_SECRET` (constant-time compared); an unset secret rejects all
   callbacks.
+- **Device identity cookie.** `freecloud-device-id` is an HMAC-signed v1 value
+  (same `FLEET_WEBHOOK_SECRET`); `POST /api/v1/access/evaluate` verifies the
+  signature before trusting the Fleet host ID (forged bare host IDs are denied
+  when the secret is configured).
 - **Least privilege.** The Keycloak service account is granted only
   `manage-users` + `manage-clients`, not the `realm-admin` super-role.
 - **Auditability.** Privileged actions (onboard, offboard, app create/assign,

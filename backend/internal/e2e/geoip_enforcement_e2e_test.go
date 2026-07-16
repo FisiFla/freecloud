@@ -96,7 +96,7 @@ func TestE2E_Admin_GeoCondition_Enforcement(t *testing.T) {
 	// 203.0.113.0/24 -> DE mapping) — must allow.
 	allowEval := map[string]string{
 		"userId":   user.ID,
-		"deviceId": hostID,
+		"deviceId": signedDeviceID(t, hostID),
 		"appId":    appID,
 		"clientIp": "203.0.113.42",
 	}
@@ -118,7 +118,7 @@ func TestE2E_Admin_GeoCondition_Enforcement(t *testing.T) {
 	// must deny with a geo-specific reason.
 	denyEval := map[string]string{
 		"userId":   user.ID,
-		"deviceId": hostID,
+		"deviceId": signedDeviceID(t, hostID),
 		"appId":    appID,
 		"clientIp": "198.51.100.42",
 	}

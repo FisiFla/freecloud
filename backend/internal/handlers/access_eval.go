@@ -103,6 +103,27 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	req.AppID = strings.TrimSpace(req.AppID)
 	req.DeviceID = strings.TrimSpace(req.DeviceID)
 
+	// Device identity cookies are HMAC-signed (v1.…). The SPI forwards the raw
+	// cookie value as deviceId — verify and unwrap the Fleet host ID here so a
+	// forged bare host ID cannot pass posture for someone else's device.
+	if req.DeviceID != "" {
+		secret := h.deviceCookieSigningSecret()
+		if hostID, ok := ParseAndVerifyDeviceCookie(req.DeviceID, secret, time.Now().UTC()); ok {
+			req.DeviceID = hostID
+		} else if strings.HasPrefix(req.DeviceID, "v1.") || secret != "" {
+			// Signed-looking value that failed MAC/expiry, or any deviceId when
+			// signing is configured (reject legacy plain host IDs).
+			h.auditAccessDecision(req.UserID, req.AppID, false, []string{"invalid or expired device identity"})
+			respondJSON(w, http.StatusOK, AccessEvalResponse{
+				Allow:   false,
+				Reasons: []string{"invalid or expired device identity"},
+			})
+			return
+		}
+		// secret empty + plain deviceId: only possible in misconfigured dev;
+		// leave as-is so unit tests that inject bare host IDs still work.
+	}
+
 	// Determine effective client IP for network/geo conditions.
 	clientIP := strings.TrimSpace(req.ClientIP)
 	if clientIP == "" {

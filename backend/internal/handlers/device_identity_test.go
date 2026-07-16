@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
@@ -193,6 +194,7 @@ func TestSetDeviceIdentityCookie_HostIDNil(t *testing.T) {
 
 func TestSetDeviceIdentityCookie_Success(t *testing.T) {
 	hostID := "host-abc-123"
+	const secret = "device-cookie-test-secret"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
 			if !strings.Contains(sql, "expires_at > NOW()") {
@@ -207,6 +209,7 @@ func TestSetDeviceIdentityCookie_Success(t *testing.T) {
 		},
 	}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	h.SetFleetWebhookSecret(secret)
 	body, _ := json.Marshal(deviceIdentityRequest{EnrollmentToken: "valid-token"})
 	req := trustedDeviceIdentityRequest(body)
 	rec := httptest.NewRecorder()
@@ -218,8 +221,12 @@ func TestSetDeviceIdentityCookie_Success(t *testing.T) {
 	if c == nil {
 		t.Fatal("expected freecloud-device-id cookie to be set")
 	}
-	if c.Value != hostID {
-		t.Errorf("cookie value: got %q, want %q", c.Value, hostID)
+	gotHost, ok := ParseAndVerifyDeviceCookie(c.Value, secret, time.Now().UTC())
+	if !ok {
+		t.Fatalf("cookie value is not a valid signed device cookie: %q", c.Value)
+	}
+	if gotHost != hostID {
+		t.Errorf("cookie host: got %q, want %q", gotHost, hostID)
 	}
 	if !c.HttpOnly {
 		t.Error("cookie must be HttpOnly")

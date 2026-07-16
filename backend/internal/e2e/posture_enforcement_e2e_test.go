@@ -159,7 +159,7 @@ func TestE2E_PostureEnforcement_CompliantDeviceAllowed(t *testing.T) {
 	// reports it as compliant (firewall+disk both true, no vulns).
 	evalBody := map[string]string{
 		"userId":   created.ID,
-		"deviceId": hostID,
+		"deviceId": signedDeviceID(t, hostID),
 	}
 	status, resp = do(t, "POST", "/api/v1/access/evaluate", accessEvalHeaders(), evalBody)
 	if status != 200 {
@@ -250,7 +250,7 @@ func TestE2E_PostureEnforcement_NonCompliantDeviceDenied(t *testing.T) {
 	// any host other than host-001, so the backend denies with posture reasons.
 	evalBody := map[string]string{
 		"userId":   created.ID,
-		"deviceId": noncompliantHost,
+		"deviceId": signedDeviceID(t, noncompliantHost),
 	}
 	status, resp = do(t, "POST", "/api/v1/access/evaluate", accessEvalHeaders(), evalBody)
 	if status != 200 {
