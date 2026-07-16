@@ -10,24 +10,28 @@ package handlers
 // Authenticator SPI reads this cookie during the browser login flow and passes
 // the device ID to POST /api/v1/access/evaluate.
 //
-// Security note (per spike 0001-conditional-access-authenticator.md §3):
-// The cookie value is the Fleet host ID, which is client-visible and therefore
-// spoofable.  The threat model accepts this because:
-//   - A spoofed host ID will still face the posture check against FleetDM, so
-//     the attacker's device must actually pass posture to gain access.
-//   - The cookie is bound to the same domain as the Keycloak login page.
-//   - The TTL is intentionally short (15 minutes) so stale cookies don't linger.
+// Security note: the cookie is client-visible, so it is HMAC-signed (v1 format)
+// using the Fleet webhook secret (same high-entropy secret already required in
+// production). access/evaluate verifies the signature before trusting the host
+// ID — a forged host ID without a valid MAC is rejected. The SPI still just
+// forwards the cookie value as deviceId; verification is server-side.
 //
 // FAIL-CLOSED: any error → no cookie is set and a 4xx/5xx is returned.
 // The Keycloak SPI treats an absent or unresolvable device cookie as a deny
 // when a per-app posture policy is configured.
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -153,9 +157,25 @@ func (h *Handler) SetDeviceIdentityCookie(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	secret := h.deviceCookieSigningSecret()
+	if secret == "" {
+		// Fail closed: without a signing secret the cookie would be a bare
+		// spoofable host ID (the pre-hardening behaviour). Production always
+		// has FLEET_WEBHOOK_SECRET via config.Validate().
+		h.logger.Error("device-identity: no signing secret configured")
+		respondError(w, http.StatusServiceUnavailable, "device identity is not configured")
+		return
+	}
+	cookieVal, err := MintDeviceCookieValue(*hostID, secret, time.Now().UTC())
+	if err != nil {
+		h.logger.Error("device-identity: failed to mint signed cookie", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
 	http.SetCookie(w, &http.Cookie{
 		Name:     deviceCookieName,
-		Value:    *hostID,
+		Value:    cookieVal,
 		Path:     "/",
 		MaxAge:   int(deviceCookieTTL.Seconds()),
 		HttpOnly: true,
@@ -170,6 +190,67 @@ func (h *Handler) SetDeviceIdentityCookie(w http.ResponseWriter, r *http.Request
 		"status":  "ok",
 		"message": "device identity cookie set; proceed to login",
 	})
+}
+
+// deviceCookieSigningSecret returns the HMAC key for freecloud-device-id.
+// Prefer FLEET_WEBHOOK_SECRET (already required in production and injected on
+// the handler); empty means signing/verification is unavailable.
+func (h *Handler) deviceCookieSigningSecret() string {
+	return h.fleetWebhookSecret
+}
+
+// MintDeviceCookieValue builds a v1 signed freecloud-device-id cookie value:
+//
+//	v1.<base64url(hostID)>.<expUnix>.<hmac_hex>
+//
+// Message for HMAC-SHA256: "v1|" + hostID + "|" + expUnix (decimal).
+// Exported for e2e tests that call access/evaluate with a deviceId.
+func MintDeviceCookieValue(hostID, secret string, now time.Time) (string, error) {
+	if hostID == "" || secret == "" {
+		return "", fmt.Errorf("hostID and secret are required")
+	}
+	exp := now.Add(deviceCookieTTL).Unix()
+	msg := fmt.Sprintf("v1|%s|%d", hostID, exp)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(msg))
+	sig := hex.EncodeToString(mac.Sum(nil))
+	encHost := base64.RawURLEncoding.EncodeToString([]byte(hostID))
+	return fmt.Sprintf("v1.%s.%d.%s", encHost, exp, sig), nil
+}
+
+// ParseAndVerifyDeviceCookie extracts the Fleet host ID from a signed v1
+// cookie. Returns ("", false) on any failure (malformed, bad MAC, expired).
+// Plain (unsigned) host IDs are not accepted when callers enforce a secret —
+// spoofing a compliant peer's host ID is no longer enough without the key.
+func ParseAndVerifyDeviceCookie(value, secret string, now time.Time) (string, bool) {
+	if value == "" || secret == "" {
+		return "", false
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) != 4 || parts[0] != "v1" {
+		return "", false
+	}
+	hostBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || len(hostBytes) == 0 {
+		return "", false
+	}
+	hostID := string(hostBytes)
+	exp, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return "", false
+	}
+	if now.Unix() > exp {
+		return "", false
+	}
+	msg := fmt.Sprintf("v1|%s|%d", hostID, exp)
+	mac := hmac.New(sha256.New, []byte(secret))
+	_, _ = mac.Write([]byte(msg))
+	expected := mac.Sum(nil)
+	got, err := hex.DecodeString(parts[3])
+	if err != nil || !hmac.Equal(expected, got) {
+		return "", false
+	}
+	return hostID, true
 }
 
 // safePrefix returns the first n characters of s, or all of s if shorter.
