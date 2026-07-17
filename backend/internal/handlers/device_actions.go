@@ -217,12 +217,8 @@ type ComplianceResponse struct {
 // Route: GET /api/v1/users/{id}/devices/compliance (requires PermReadCompliance).
 func (h *Handler) GetUserCompliance(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" {
-		respondError(w, http.StatusBadRequest, "user id is required")
-		return
-	}
-	if !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "user id must be a valid UUID")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireUserInCallerOrg(w, r, userID) {

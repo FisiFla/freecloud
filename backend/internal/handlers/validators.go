@@ -61,6 +61,29 @@ func ValidateTeamDescription(desc string) error {
 	return nil
 }
 
+// ValidateUserID rejects empty, overlong, path-like, or non-UUID user path ids.
+func ValidateUserID(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("user id is required")
+	}
+	if len(id) > 64 {
+		return fmt.Errorf("user id too long")
+	}
+	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		return fmt.Errorf("user id must not contain path separators or '..'")
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("user id must not contain control characters")
+		}
+	}
+	if !isValidUUID(id) {
+		return fmt.Errorf("user id must be a valid UUID")
+	}
+	return nil
+}
+
 // ParsePositiveTeamID parses a Fleet team path segment as a positive int.
 // Rejects empty, non-digit, zero, and overlong digit strings (overflow-safe).
 func ParsePositiveTeamID(s string) (int, error) {
