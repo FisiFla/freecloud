@@ -34,7 +34,7 @@ type exportItem struct {
 // Route: GET /api/v1/campaigns/{id}/export?format=csv|json
 func (h *Handler) ExportCampaign(w http.ResponseWriter, r *http.Request) {
 	campaignID := chi.URLParam(r, "id")
-	if !isValidUUID(campaignID) {
+	if err := ValidateUserID(campaignID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid campaign id")
 		return
 	}
