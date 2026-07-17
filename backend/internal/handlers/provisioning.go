@@ -256,7 +256,7 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 // ListProvisioningState returns per-user provisioning state for an app.
 func (h *Handler) ListProvisioningState(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
-	if !isValidUUID(appID) {
+	if err := ValidateUserID(appID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid appId")
 		return
 	}
@@ -319,8 +319,12 @@ func (h *Handler) ListProvisioningState(w http.ResponseWriter, r *http.Request) 
 func (h *Handler) ResyncUser(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
 	userID := chi.URLParam(r, "userId")
-	if !isValidUUID(appID) || !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "invalid appId or userId")
+	if err := ValidateUserID(appID); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid appId")
+		return
+	}
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid userId")
 		return
 	}
 	if h.db == nil {
@@ -402,15 +406,8 @@ type DryRunProvisioningResponse struct {
 // Route: POST /api/v1/apps/{appId}/provisioning/dry-run
 func (h *Handler) DryRunProvisioning(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
-	if !isValidUUID(appID) {
+	if err := ValidateUserID(appID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid appId")
-		return
-	}
-	if h.db == nil {
-		respondError(w, http.StatusInternalServerError, "database not available")
-		return
-	}
-	if !h.requireAppInCallerOrg(w, r, appID) {
 		return
 	}
 
@@ -419,8 +416,15 @@ func (h *Handler) DryRunProvisioning(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if !isValidUUID(req.UserID) {
+	if err := ValidateUserID(req.UserID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid userId")
+		return
+	}
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return
+	}
+	if !h.requireAppInCallerOrg(w, r, appID) {
 		return
 	}
 	if !h.requireUserInCallerOrg(w, r, req.UserID) {
@@ -497,7 +501,7 @@ func (h *Handler) DryRunProvisioning(w http.ResponseWriter, r *http.Request) {
 // Route: POST /api/v1/apps/{appId}/provisioning/reconcile-all
 func (h *Handler) ReconcileAllHandler(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
-	if !isValidUUID(appID) {
+	if err := ValidateUserID(appID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid appId")
 		return
 	}
