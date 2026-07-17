@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -81,5 +82,22 @@ func TestExportCampaignInvalidFormat(t *testing.T) {
 	h.ExportCampaign(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("invalid format: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRunDueReviewSchedulesNilDB(t *testing.T) {
+	h := setupTestHandler(t)
+	if n := h.RunDueReviewSchedules(context.Background()); n != 0 {
+		t.Fatalf("nil DB: expected 0 schedules fired, got %d", n)
+	}
+}
+
+func TestNextRunFromCadence(t *testing.T) {
+	now := time.Now().UTC()
+	for _, c := range []string{"weekly", "monthly", "quarterly", "unknown"} {
+		got := nextRunFromCadence(c)
+		if !got.After(now) {
+			t.Errorf("cadence %q: next run %v not after now", c, got)
+		}
 	}
 }
