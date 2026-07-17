@@ -309,6 +309,32 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Leader election (is_leader by job)",
+      "description": "1 if this scrape target holds the named job advisory lock. Across the fleet, each job label should sum to 1.",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 29 },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "unit": "short",
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "spanNulls": true }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["lastNotNull"] }
+      },
+      "targets": [
+        {
+          "expr": "freecloud_leader_election_is_leader",
+          "legendFormat": "{{job}} @ {{instance}}",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

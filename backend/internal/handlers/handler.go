@@ -41,6 +41,10 @@ type Handler struct {
 	// Empty means the callback rejects everything (fail closed).
 	fleetWebhookSecret string
 
+	// deviceCookieSecret HMAC-signs freecloud-device-id cookies when set.
+	// Empty falls back to fleetWebhookSecret (see deviceCookieSigningSecret).
+	deviceCookieSecret string
+
 	// scimBearerMW is the SCIM bearer-token middleware. Set via SetSCIMBearerToken.
 	// Defaults to a middleware that rejects all requests (fail closed).
 	scimBearerMW func(http.Handler) http.Handler
@@ -89,6 +93,12 @@ type Handler struct {
 // callback signatures. Called once at startup from main.
 func (h *Handler) SetFleetWebhookSecret(secret string) {
 	h.fleetWebhookSecret = secret
+}
+
+// SetDeviceCookieSecret sets the optional dedicated HMAC key for device-identity
+// cookies. When empty, mint/verify fall back to the Fleet webhook secret.
+func (h *Handler) SetDeviceCookieSecret(secret string) {
+	h.deviceCookieSecret = secret
 }
 
 // NewHandler creates a new Handler.

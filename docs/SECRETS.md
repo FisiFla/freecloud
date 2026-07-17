@@ -52,20 +52,26 @@ The following config fields use `resolveSecret`:
 | `KeycloakClientSecret` | `KEYCLOAK_CLIENT_SECRET` |
 | `FleetAPIToken` | `FLEET_API_TOKEN` |
 | `FleetWebhookSecret` | `FLEET_WEBHOOK_SECRET` |
+| `DeviceCookieSecret` | `DEVICE_COOKIE_SECRET` (optional; falls back to fleet webhook secret) |
 | `ProvisioningMasterKey` | `PROVISIONING_MASTER_KEY` |
 | `SCIMBearerToken` | `SCIM_BEARER_TOKEN` |
 | `AccessEvalToken` | `ACCESS_EVAL_TOKEN` |
 
 ### Device identity cookie signing
 
-`FLEET_WEBHOOK_SECRET` is also the HMAC key for the `freecloud-device-id`
-cookie minted by `POST /api/v1/enrollment/device-identity` and verified by
-`POST /api/v1/access/evaluate`. Rotating the webhook secret invalidates
-outstanding device cookies (users re-enroll cookie mint before login) **and**
-requires updating Fleet's webhook signature configuration at the same time.
+| Config field | Env var | Required |
+|---|---|---|
+| `DeviceCookieSecret` | `DEVICE_COOKIE_SECRET` | Optional |
 
-There is no separate `DEVICE_COOKIE_SECRET` yet; reuse is intentional to avoid
-another production-required secret until rotation UX exists.
+`POST /api/v1/enrollment/device-identity` and `POST /api/v1/access/evaluate`
+HMAC-sign/verify `freecloud-device-id` with:
+
+1. **`DEVICE_COOKIE_SECRET`** when set (preferred for independent rotation), else
+2. **`FLEET_WEBHOOK_SECRET`** (default, so existing deploys need no new secret).
+
+Rotating the active key invalidates outstanding device cookies (users re-mint
+before login). If you only use the fleet webhook secret, rotation also requires
+updating Fleet's webhook signature configuration at the same time.
 | `SMTPPassword` | `SMTP_PASSWORD` |
 | `SlackWebhookURL` | `SLACK_WEBHOOK_URL` |
 | `WebhookSecret` | `WEBHOOK_SECRET` |
