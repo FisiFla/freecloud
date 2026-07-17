@@ -51,8 +51,10 @@ func ParseMappingLine(line string) (MappingRow, error) {
 const MaxMappingCSVRows = 5000
 
 // ParseMappingCSV parses multi-line CSV of mapping rows (skips blank/# comments).
+// Rejects duplicate fleet_team_id values (last-wins would silently clobber).
 func ParseMappingCSV(body string) ([]MappingRow, error) {
 	var out []MappingRow
+	seen := map[int]int{} // fleet_team_id → first line number
 	for i, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -62,6 +64,10 @@ func ParseMappingCSV(body string) ([]MappingRow, error) {
 		if err != nil {
 			return nil, fmt.Errorf("line %d: %w", i+1, err)
 		}
+		if prev, ok := seen[row.FleetTeamID]; ok {
+			return nil, fmt.Errorf("line %d: duplicate fleet_team_id %d (first on line %d)", i+1, row.FleetTeamID, prev)
+		}
+		seen[row.FleetTeamID] = i + 1
 		out = append(out, row)
 		if len(out) > MaxMappingCSVRows {
 			return nil, fmt.Errorf("too many mapping rows (max %d)", MaxMappingCSVRows)
