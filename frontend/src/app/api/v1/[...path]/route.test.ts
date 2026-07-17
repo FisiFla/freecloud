@@ -197,6 +197,18 @@ describe("BFF proxy route (app/api/v1/[...path])", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects too many path segments", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+    const many = Array.from({ length: 17 }, (_, i) => `s${i}`);
+    const res = await GET(makeRequest("http://localhost/api/v1/" + many.join("/")), {
+      params: Promise.resolve({ path: many }),
+    });
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("forwards Content-Disposition so browser downloads work through the BFF", async () => {
     getTokenMock.mockResolvedValue({ accessToken: "tok" });
     global.fetch = vi.fn().mockResolvedValue(
