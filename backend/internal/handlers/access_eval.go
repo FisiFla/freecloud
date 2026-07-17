@@ -122,6 +122,16 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		// secret empty + plain deviceId: only possible in misconfigured dev;
 		// leave as-is so unit tests that inject bare host IDs still work.
+		if req.DeviceID != "" {
+			if err := ValidateHostID(req.DeviceID); err != nil {
+				h.auditAccessDecision(req.UserID, req.AppID, false, []string{"invalid device identifier"})
+				respondJSON(w, http.StatusOK, AccessEvalResponse{
+					Allow:   false,
+					Reasons: []string{"invalid device identifier"},
+				})
+				return
+			}
+		}
 	}
 
 	// Determine effective client IP for network/geo conditions.
