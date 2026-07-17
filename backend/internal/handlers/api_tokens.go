@@ -216,7 +216,7 @@ func (h *Handler) ListAPITokens(w http.ResponseWriter, r *http.Request) {
 // RevokeAPIToken handles DELETE /api/v1/api-tokens/{id}.
 func (h *Handler) RevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if !isValidUUID(id) {
+	if err := ValidateUserID(id); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid token id")
 		return
 	}
