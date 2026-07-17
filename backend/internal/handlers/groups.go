@@ -298,9 +298,6 @@ func (h *Handler) AssignRealmRoleToUser(w http.ResponseWriter, r *http.Request) 
 		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !h.requireUserInCallerOrg(w, r, userID) {
-		return
-	}
 
 	var req AssignRoleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -309,8 +306,15 @@ func (h *Handler) AssignRealmRoleToUser(w http.ResponseWriter, r *http.Request) 
 	}
 	req.RoleID = strings.TrimSpace(req.RoleID)
 	req.RoleName = strings.TrimSpace(req.RoleName)
-	if req.RoleID == "" || req.RoleName == "" {
-		respondError(w, http.StatusBadRequest, "roleId and roleName are required")
+	if err := ValidateOpaqueID(req.RoleID, "roleId"); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := ValidateOpaqueID(req.RoleName, "roleName"); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.requireUserInCallerOrg(w, r, userID) {
 		return
 	}
 
