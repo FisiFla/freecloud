@@ -103,12 +103,8 @@ func (h *Handler) requireUserInCallerOrg(w http.ResponseWriter, r *http.Request,
 // user. Route: GET /api/v1/users/{id}/devices/software (requires PermReadCompliance).
 func (h *Handler) GetDeviceSoftware(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" {
-		respondError(w, http.StatusBadRequest, "user id is required")
-		return
-	}
-	if !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "user id must be a valid UUID")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireUserInCallerOrg(w, r, userID) {
@@ -634,12 +630,15 @@ func persistDeviceCommand(ctx context.Context, h *Handler, hostID, commandType, 
 	}
 }
 
+// maxDeviceCommandHistory bounds GET device command history fan-out.
+const maxDeviceCommandHistory = 50
+
 // GetDeviceCommandHistory returns the last 50 commands issued to a device.
 // Route: GET /api/v1/devices/{id}/commands (requires PermReadCompliance).
 func (h *Handler) GetDeviceCommandHistory(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
-	if deviceID == "" {
-		respondError(w, http.StatusBadRequest, "device id is required")
+	if err := ValidateHostID(deviceID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
@@ -660,8 +659,8 @@ func (h *Handler) GetDeviceCommandHistory(w http.ResponseWriter, r *http.Request
 		 FROM device_commands
 		 WHERE host_id = $1 AND org_id = $2
 		 ORDER BY requested_at DESC
-		 LIMIT 50`,
-		deviceID, oc.OrgID,
+		 LIMIT $3`,
+		deviceID, oc.OrgID, maxDeviceCommandHistory,
 	)
 	if err != nil {
 		h.logger.Error("failed to query device commands", zap.String("device_id", deviceID), zap.Error(err))
