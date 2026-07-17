@@ -94,3 +94,37 @@ describe("requireMFA (privileged API)", () => {
     expect(body.type).toBe("totp");
   });
 });
+
+describe("getMFAStatus (privileged API)", () => {
+  const origFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    global.fetch = origFetch;
+  });
+
+  it("GETs same-origin BFF mfa-status path", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { enabled: true, methods: ["totp"] },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const { getMFAStatus } = await import("./api");
+    const res = await getMFAStatus("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    expect(res).toBeTruthy();
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe("/api/v1/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/mfa-status");
+    expect((init as RequestInit).method).toBe("GET");
+    expect(String(url).startsWith("http")).toBe(false);
+  });
+});
