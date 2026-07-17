@@ -179,12 +179,12 @@ func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UnassignUserFromGroup(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
 	groupID := chi.URLParam(r, "groupId")
-	if userID == "" || !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "valid user id is required")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if groupID == "" {
-		respondError(w, http.StatusBadRequest, "groupId is required")
+	if err := ValidateOpaqueID(groupID, "groupId"); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireUserInCallerOrg(w, r, userID) {
@@ -294,8 +294,8 @@ type AssignRoleRequest struct {
 // AssignRealmRoleToUser assigns a realm role to a user.
 func (h *Handler) AssignRealmRoleToUser(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" || !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "valid user id is required")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireUserInCallerOrg(w, r, userID) {

@@ -61,6 +61,30 @@ func ValidateTeamDescription(desc string) error {
 	return nil
 }
 
+// ValidateOpaqueID rejects empty, overlong, path-like, or control-bearing opaque IDs
+// (Keycloak group/role ids and similar path/body identifiers).
+func ValidateOpaqueID(id, field string) error {
+	id = strings.TrimSpace(id)
+	if field == "" {
+		field = "id"
+	}
+	if id == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if len(id) > 128 {
+		return fmt.Errorf("%s too long", field)
+	}
+	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
+		return fmt.Errorf("%s must not contain path separators or '..'", field)
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%s must not contain control characters", field)
+		}
+	}
+	return nil
+}
+
 // ValidateUserID rejects empty, overlong, path-like, or non-UUID user path ids.
 func ValidateUserID(id string) error {
 	id = strings.TrimSpace(id)
