@@ -50,3 +50,27 @@ func ValidateTeamDescription(desc string) error {
 	}
 	return nil
 }
+
+// ParsePositiveTeamID parses a Fleet team path segment as a positive int.
+// Rejects empty, non-digit, zero, and overlong digit strings (overflow-safe).
+func ParsePositiveTeamID(s string) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("team id is required")
+	}
+	// Cap length before multiply to avoid int wrap on long digit runs.
+	if len(s) > 9 {
+		return 0, fmt.Errorf("team id must be a positive integer")
+	}
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("team id must be a positive integer")
+		}
+		n = n*10 + int(c-'0')
+	}
+	if n <= 0 {
+		return 0, fmt.Errorf("team id must be a positive integer")
+	}
+	return n, nil
+}

@@ -203,15 +203,9 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 // AssignTeamPolicy assigns a global policy to a Fleet team.
 // Route: POST /api/v1/teams/{id}/policies (requires PermManagePolicies, audited).
 func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
-	teamIDStr := chi.URLParam(r, "id")
-	if teamIDStr == "" {
-		respondError(w, http.StatusBadRequest, "team id is required")
-		return
-	}
-
-	var teamID int
-	if _, err := parseIntParam(teamIDStr, &teamID); err != nil {
-		respondError(w, http.StatusBadRequest, "team id must be a positive integer")
+	teamID, err := ParsePositiveTeamID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireFleetTeamInCallerOrg(w, r, teamID) {
@@ -243,7 +237,7 @@ func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "fleet_team_policy_assign", "team", teamIDStr, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(actorID, "fleet_team_policy_assign", "team", fmt.Sprintf("%d", teamID), map[string]interface{}{
 			"team_id":   teamID,
 			"policy_id": req.PolicyID,
 		}); err != nil {
@@ -261,15 +255,9 @@ func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
 // MoveHostToTeam moves one or more hosts to a Fleet team (host→team→policy chain).
 // Route: POST /api/v1/teams/{id}/hosts (requires PermManageDevices, audited).
 func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
-	teamIDStr := chi.URLParam(r, "id")
-	if teamIDStr == "" {
-		respondError(w, http.StatusBadRequest, "team id is required")
-		return
-	}
-
-	var teamID int
-	if _, err := parseIntParam(teamIDStr, &teamID); err != nil {
-		respondError(w, http.StatusBadRequest, "team id must be a positive integer")
+	teamID, err := ParsePositiveTeamID(chi.URLParam(r, "id"))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireFleetTeamInCallerOrg(w, r, teamID) {
@@ -330,7 +318,7 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "fleet_host_move_team", "team", teamIDStr, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(actorID, "fleet_host_move_team", "team", fmt.Sprintf("%d", teamID), map[string]interface{}{
 			"team_id":  teamID,
 			"host_ids": req.HostIDs,
 		}); err != nil {
