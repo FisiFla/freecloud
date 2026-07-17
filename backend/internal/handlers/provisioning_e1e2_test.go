@@ -131,9 +131,12 @@ func TestValidateOutboundEndpointURL(t *testing.T) {
 			t.Errorf("url %q: got ok=%v err=%v, want ok=%v", tc.url, ok, err, tc.want)
 		}
 	}
-	// Dev allows localhost http
+	// Dev/test allow http (compose mocks) including private destinations.
 	t.Setenv("APP_ENV", "development")
 	if err := validateOutboundEndpointURL("http://localhost:9999/scim"); err != nil {
 		t.Errorf("dev localhost http should be allowed: %v", err)
+	}
+	if err := validateOutboundEndpointURL("http://10.0.0.5:8080/scim"); err != nil {
+		t.Errorf("dev private http should be allowed: %v", err)
 	}
 }

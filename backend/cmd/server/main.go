@@ -117,6 +117,18 @@ func runServer() {
 	// connection indefinitely (otherwise the HTTP write timeout drops the client
 	// while the query keeps running and leaks the connection).
 	poolCfg.ConnConfig.RuntimeParams["statement_timeout"] = "15000"
+	// Leader election holds one dedicated connection per background job while
+	// that instance is leader (session advisory lock). We currently run five
+	// electors (reconcile, snapshot, audit_retention, siem, review_schedules).
+	// pgxpool's default MaxConns is max(4, NumCPU()), which is too small: a
+	// single replica that wins every election can pin ≥5 conns and leave
+	// /readyz (and request handlers) unable to Acquire → permanent 503.
+	// Size for all leaders + headroom for HTTP/bootstrap work.
+	const leaderConnBudget = 5
+	const queryHeadroom = 11
+	if poolCfg.MaxConns < leaderConnBudget+queryHeadroom {
+		poolCfg.MaxConns = leaderConnBudget + queryHeadroom // 16
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

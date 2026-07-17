@@ -706,6 +706,37 @@ func newFilterRouter(t *testing.T) chi.Router {
 	}
 
 	db := &fakeDB{
+		// SCIMListUsers issues COUNT(*) via QueryRow before the page Query.
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if !strings.Contains(sql, "COUNT(") {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+			n := len(rows)
+			if strings.Contains(sql, "AND u.email = $") && len(args) >= 2 {
+				email, _ := args[1].(string)
+				n = 0
+				for _, row := range rows {
+					if row[1].(string) == email {
+						n = 1
+						break
+					}
+				}
+			} else if strings.Contains(sql, "ILIKE") && len(args) >= 2 {
+				// co/sw filters — approximate match for totalResults.
+				pat, _ := args[1].(string)
+				pat = strings.Trim(pat, "%")
+				n = 0
+				for _, row := range rows {
+					if strings.Contains(strings.ToLower(row[1].(string)), strings.ToLower(pat)) {
+						n++
+					}
+				}
+			}
+			return fakeRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*int)) = n
+				return nil
+			}}
+		},
 		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 			// C4/C5: SCIMListUsers is org-scoped, so the query is always
 			// `WHERE u.org_id = $1` plus, when a userName/email filter is
@@ -719,6 +750,17 @@ func newFilterRouter(t *testing.T) chi.Router {
 					}
 				}
 				return &fakeQueryRows{rows: [][]interface{}{}}, nil
+			}
+			if strings.Contains(sql, "ILIKE") && len(args) >= 2 {
+				pat, _ := args[1].(string)
+				pat = strings.Trim(pat, "%")
+				var matched [][]interface{}
+				for _, row := range rows {
+					if strings.Contains(strings.ToLower(row[1].(string)), strings.ToLower(pat)) {
+						matched = append(matched, row)
+					}
+				}
+				return &fakeQueryRows{rows: matched}, nil
 			}
 			// No filter: return all
 			return &fakeQueryRows{rows: rows}, nil
@@ -820,6 +862,15 @@ func TestSCIMConformance_Pagination_ItemsPerPage(t *testing.T) {
 	}
 
 	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if strings.Contains(sql, "COUNT(") {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*int)) = len(allRows)
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
 		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
 			// Extract LIMIT (count) and OFFSET from args. The query always has
 			// (optional email, count, offset) so count is args[len-2], offset args[len-1].
