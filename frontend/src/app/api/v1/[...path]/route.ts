@@ -63,6 +63,10 @@ function sanitizePathParts(pathParts: string[]): string | null {
       const c = seg.charCodeAt(i);
       if (c < 0x20 || c === 0x7f) return null;
     }
+    // Reject whitespace-only or leading/trailing space segments after decode.
+    if (seg !== seg.trim()) {
+      return null;
+    }
     // Bound segment length so the BFF cannot be used to smuggle huge path blobs.
     if (seg.length > 256) {
       return null;
