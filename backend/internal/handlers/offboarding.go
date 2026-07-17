@@ -25,12 +25,8 @@ type OffboardResponse struct {
 // Offboard handles user offboarding (panic button).
 func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "userId")
-	if userID == "" {
-		respondError(w, http.StatusBadRequest, "userId is required")
-		return
-	}
-	if !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "userId must be a valid UUID")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	// C2: verify the target belongs to the caller's org BEFORE any destructive
