@@ -191,7 +191,7 @@ func (h *Handler) ListCampaigns(w http.ResponseWriter, r *http.Request) {
 // Route: GET /api/v1/campaigns/{id}/items (requires PermReviewCampaigns via middleware)
 func (h *Handler) ListCampaignItems(w http.ResponseWriter, r *http.Request) {
 	campaignID := chi.URLParam(r, "id")
-	if !isValidUUID(campaignID) {
+	if err := ValidateUserID(campaignID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid campaign id")
 		return
 	}
@@ -256,8 +256,12 @@ func (h *Handler) ListCampaignItems(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DecideCampaignItem(w http.ResponseWriter, r *http.Request) {
 	campaignID := chi.URLParam(r, "id")
 	itemID := chi.URLParam(r, "itemId")
-	if !isValidUUID(campaignID) || !isValidUUID(itemID) {
-		respondError(w, http.StatusBadRequest, "invalid id")
+	if err := ValidateUserID(campaignID); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid campaign id")
+		return
+	}
+	if err := ValidateUserID(itemID); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid item id")
 		return
 	}
 	var req DecideRequest
@@ -298,7 +302,7 @@ func (h *Handler) DecideCampaignItem(w http.ResponseWriter, r *http.Request) {
 // Route: POST /api/v1/campaigns/{id}/complete (requires PermManageCampaigns)
 func (h *Handler) CompleteCampaign(w http.ResponseWriter, r *http.Request) {
 	campaignID := chi.URLParam(r, "id")
-	if !isValidUUID(campaignID) {
+	if err := ValidateUserID(campaignID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid campaign id")
 		return
 	}
