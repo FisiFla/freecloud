@@ -167,7 +167,7 @@ func (h *Handler) ListApprovalRequests(w http.ResponseWriter, r *http.Request) {
 // Permission-gated via PermApproveRequests.
 func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 	approvalID := chi.URLParam(r, "id")
-	if !isValidUUID(approvalID) {
+	if err := ValidateUserID(approvalID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
