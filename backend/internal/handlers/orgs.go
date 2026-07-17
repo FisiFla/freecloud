@@ -365,8 +365,12 @@ func (h *Handler) AddOrgMember(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
 	userID := chi.URLParam(r, "userId")
-	if !isValidUUID(orgID) || !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "invalid id")
+	if err := ValidateUserID(orgID); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid organization id")
+		return
+	}
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireOwnOrgOrSystemAdmin(w, r, orgID) {
