@@ -55,7 +55,7 @@ function sanitizePathParts(pathParts: string[]): string | null {
     } catch {
       return null;
     }
-    if (!seg || seg === "." || seg === ".." || seg.includes("/") || seg.includes("\\")) {
+    if (!seg || seg === "." || seg === ".." || seg === "..." || seg.includes("/") || seg.includes("\\")) {
       return null;
     }
     // Reject control characters (incl. NUL) that can confuse logs/proxies.
