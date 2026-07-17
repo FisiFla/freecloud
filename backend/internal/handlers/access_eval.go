@@ -135,7 +135,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.UserID == "" {
+	if err := ValidateUserID(req.UserID); err != nil {
 		h.auditAccessDecision("", req.AppID, false, []string{"missing or invalid user identifier"})
 		respondJSON(w, http.StatusOK, AccessEvalResponse{
 			Allow:   false,
