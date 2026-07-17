@@ -130,8 +130,8 @@ type AssignUserToGroupRequest struct {
 // AssignUserToGroup adds a user to a group.
 func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" || !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "valid user id is required")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireUserInCallerOrg(w, r, userID) {
