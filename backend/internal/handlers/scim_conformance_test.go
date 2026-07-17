@@ -174,7 +174,7 @@ func newUserCRUDRouter(t *testing.T) (chi.Router, *Handler, func() map[string]in
 
 	// Shared in-memory user state
 	state := map[string]interface{}{
-		"id":        "uid-abc",
+		"id":        "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
 		"email":     "alice@example.com",
 		"firstName": "Alice",
 		"lastName":  "Smith",
@@ -352,15 +352,15 @@ func TestSCIMConformance_Users_CreateReturns201(t *testing.T) {
 func TestSCIMConformance_Users_GetById(t *testing.T) {
 	r, _, _ := newUserCRUDRouter(t)
 
-	req := authedRequest(t, http.MethodGet, "/scim/v2/Users/uid-abc", nil)
+	req := authedRequest(t, http.MethodGet, "/scim/v2/Users/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	assertStatus(t, rec, http.StatusOK)
 
 	var user SCIMUser
 	mustDecode(t, rec.Body, &user)
-	if user.ID != "uid-abc" {
-		t.Errorf("expected id=uid-abc, got %q", user.ID)
+	if user.ID != "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" {
+		t.Errorf("expected id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee, got %q", user.ID)
 	}
 	if !user.Active {
 		t.Error("expected active=true")
@@ -377,7 +377,7 @@ func TestSCIMConformance_Users_PatchDeactivate(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(patch)
-	req := authedRequest(t, http.MethodPatch, "/scim/v2/Users/uid-abc", body)
+	req := authedRequest(t, http.MethodPatch, "/scim/v2/Users/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", body)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	assertStatus(t, rec, http.StatusOK)
@@ -402,7 +402,7 @@ func TestSCIMConformance_Users_PatchNoPath(t *testing.T) {
 		},
 	}
 	body, _ := json.Marshal(patch)
-	req := authedRequest(t, http.MethodPatch, "/scim/v2/Users/uid-abc", body)
+	req := authedRequest(t, http.MethodPatch, "/scim/v2/Users/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", body)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	assertStatus(t, rec, http.StatusOK)
@@ -417,7 +417,7 @@ func TestSCIMConformance_Users_PatchNoPath(t *testing.T) {
 func TestSCIMConformance_Users_DeleteDeactivates(t *testing.T) {
 	r, _, getState := newUserCRUDRouter(t)
 
-	req := authedRequest(t, http.MethodDelete, "/scim/v2/Users/uid-abc", nil)
+	req := authedRequest(t, http.MethodDelete, "/scim/v2/Users/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	assertStatus(t, rec, http.StatusNoContent)
@@ -446,7 +446,7 @@ func TestSCIMConformance_Users_GetNotFound(t *testing.T) {
 		r.Get("/scim/v2/Users/{id}", h.SCIMGetUser)
 	})
 
-	req := authedRequest(t, http.MethodGet, "/scim/v2/Users/nonexistent", nil)
+	req := authedRequest(t, http.MethodGet, "/scim/v2/Users/ffffffff-ffff-ffff-ffff-ffffffffffff", nil)
 	rec := httptest.NewRecorder()
 	r2.ServeHTTP(rec, req)
 	assertStatus(t, rec, http.StatusNotFound)
@@ -1053,7 +1053,7 @@ func TestSCIMConformance_ErrorShape_404(t *testing.T) {
 		r.Get("/scim/v2/Users/{id}", h.SCIMGetUser)
 	})
 
-	req := authedRequest(t, http.MethodGet, "/scim/v2/Users/ghost", nil)
+	req := authedRequest(t, http.MethodGet, "/scim/v2/Users/eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee", nil)
 	rec := httptest.NewRecorder()
 	r.ServeHTTP(rec, req)
 	assertStatus(t, rec, http.StatusNotFound)
