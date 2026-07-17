@@ -81,9 +81,11 @@ func TestSCIMListUsersNilDB(t *testing.T) {
 
 func TestSCIMGetUserNilDB(t *testing.T) {
 	h := setupTestHandler(t)
-	req := httptest.NewRequest(http.MethodGet, "/scim/v2/Users/some-id", nil)
+	// Valid UUID so ValidateUserID passes and nil-DB path is exercised.
+	const uid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	req := httptest.NewRequest(http.MethodGet, "/scim/v2/Users/"+uid, nil)
 	chiCtx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
-		URLParams: chi.RouteParams{Keys: []string{"id"}, Values: []string{"some-id"}},
+		URLParams: chi.RouteParams{Keys: []string{"id"}, Values: []string{uid}},
 	})
 	req = req.WithContext(chiCtx)
 	rec := httptest.NewRecorder()

@@ -47,15 +47,15 @@ func TestDryRunProvisioningInvalidAppID(t *testing.T) {
 
 func TestDryRunProvisioningInvalidBodyUserID(t *testing.T) {
 	h := setupTestHandler(t)
-	// DB is nil so the nil-DB check fires before userId validation — expect 500.
+	// ValidateUserID runs before nil-DB — expect 400 for bad userId.
 	req := httptest.NewRequest(http.MethodPost, "/",
 		strings.NewReader(`{"userId":"not-a-uuid"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = setChiURLParam(req, "appId", "00000000-0000-0000-0000-000000000001")
 	rec := httptest.NewRecorder()
 	h.DryRunProvisioning(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500 (nil DB fires before userId check), got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid userId, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
