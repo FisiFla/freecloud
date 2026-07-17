@@ -56,3 +56,10 @@ func itoa(n int) string {
 	}
 	return string(buf[i:])
 }
+
+func TestK08_ParseMappingCSV_RejectsDuplicateTeamID(t *testing.T) {
+	_, err := ParseMappingCSV("1,org-a,A\n1,org-b,B\n")
+	if err == nil {
+		t.Fatal("expected duplicate fleet_team_id error")
+	}
+}
