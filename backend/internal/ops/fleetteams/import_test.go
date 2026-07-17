@@ -34,3 +34,25 @@ func TestI08_ParseMappingCSV(t *testing.T) {
 		t.Fatalf("sql: %s", sql)
 	}
 }
+
+func TestJ08_ParseMappingCSV_MaxRows(t *testing.T) {
+	// Production: CSV above MaxMappingCSVRows is rejected.
+	var b strings.Builder
+	for i := 0; i < MaxMappingCSVRows+1; i++ {
+		b.WriteString(itoa(i+1) + ",org,n\n")
+	}
+	if _, err := ParseMappingCSV(b.String()); err == nil {
+		t.Fatal("expected max rows error")
+	}
+}
+func itoa(n int) string {
+	if n == 0 { return "0" }
+	var buf [12]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
+}
