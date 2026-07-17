@@ -76,8 +76,8 @@ below.
 | Clear passcode | ✅ |
 | Software inventory | ✅ |
 | Posture / compliance check | ✅ |
-| Fleet teams | ✅ |
-| Fleet policies | ✅ |
+| Fleet teams | ✅ Org-mapped via `fleet_team_orgs` (shared Fleet; list/mutate gated by org for non–system-admin) |
+| Fleet policies | ✅ System-admin inventory (Fleet has no per-org policies) |
 
 ### Audit & Compliance
 

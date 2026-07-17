@@ -61,6 +61,22 @@ func (r *fakeQueryRows) Scan(dest ...any) error {
 			if v, ok := row[i].(bool); ok {
 				*p = v
 			}
+		case *int:
+			switch v := row[i].(type) {
+			case int:
+				*p = v
+			case int64:
+				*p = int(v)
+			case int32:
+				*p = int(v)
+			}
+		case *int64:
+			switch v := row[i].(type) {
+			case int64:
+				*p = v
+			case int:
+				*p = int64(v)
+			}
 		}
 	}
 	return nil
