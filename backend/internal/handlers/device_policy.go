@@ -287,7 +287,8 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "hostIds must not be empty")
 		return
 	}
-	if len(req.HostIDs) > 500 {
+	// Cap batch size so a single request cannot flood Fleet/ownership checks.
+	if len(req.HostIDs) > maxHostIDsPerMove {
 		respondError(w, http.StatusBadRequest, "too many host IDs (max 500)")
 		return
 	}
@@ -331,6 +332,9 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 		"moved":  len(req.HostIDs),
 	})
 }
+
+// maxHostIDsPerMove bounds MoveHostToTeam batch size (ownership + Fleet fan-out).
+const maxHostIDsPerMove = 500
 
 // parseIntParam parses a string to a positive int. Returns an error if invalid.
 func parseIntParam(s string, out *int) (int, error) {
