@@ -185,7 +185,8 @@ func (h *Handler) ListReviewSchedules(w http.ResponseWriter, r *http.Request) {
 // Route: PATCH /api/v1/review-schedules/{id}
 func (h *Handler) UpdateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 	schedID := chi.URLParam(r, "id")
-	if !isValidUUID(schedID) {
+	if err := ValidateUserID(schedID); err != nil {
+		// schedules use UUID primary keys
 		respondError(w, http.StatusBadRequest, "invalid schedule id")
 		return
 	}
@@ -251,7 +252,7 @@ func (h *Handler) UpdateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 // Route: DELETE /api/v1/review-schedules/{id}
 func (h *Handler) DeleteReviewSchedule(w http.ResponseWriter, r *http.Request) {
 	schedID := chi.URLParam(r, "id")
-	if !isValidUUID(schedID) {
+	if err := ValidateUserID(schedID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid schedule id")
 		return
 	}
