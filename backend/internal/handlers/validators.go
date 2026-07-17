@@ -37,3 +37,16 @@ func ValidateHostID(id string) error {
 	}
 	return nil
 }
+
+// ValidateTeamDescription enforces length and printable text.
+func ValidateTeamDescription(desc string) error {
+	if len(desc) > 500 {
+		return fmt.Errorf("description must be ≤ 500 characters")
+	}
+	for _, r := range desc {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("description must not contain control characters")
+		}
+	}
+	return nil
+}
