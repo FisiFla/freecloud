@@ -128,9 +128,9 @@ func TestCrossOrgIsolation_GetUser(t *testing.T) {
 			}
 			userID, _ := args[0].(string)
 			orgID, _ := args[1].(string)
-			if userID == "target-user" && orgID == testIsoOrgA {
+			if userID == "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1" && orgID == testIsoOrgA {
 				return fakeRow{scanFn: func(dest ...any) error {
-					*(dest[0].(*string)) = "target-user"
+					*(dest[0].(*string)) = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1"
 					*(dest[1].(*string)) = "target@example.com"
 					*(dest[2].(*string)) = "First"
 					*(dest[3].(*string)) = "Last"
@@ -148,7 +148,7 @@ func TestCrossOrgIsolation_GetUser(t *testing.T) {
 	h := newIsolationHandler(db)
 
 	// Org A (the owning org) can fetch it.
-	reqA := newChiRequestWithOrg(http.MethodGet, "/api/v1/users/target-user", "id", "target-user", testIsoOrgA)
+	reqA := newChiRequestWithOrg(http.MethodGet, "/api/v1/users/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", "id", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", testIsoOrgA)
 	recA := httptest.NewRecorder()
 	h.GetUser(recA, reqA)
 	if recA.Code != http.StatusOK {
@@ -156,7 +156,7 @@ func TestCrossOrgIsolation_GetUser(t *testing.T) {
 	}
 
 	// Org B (not the owning org) gets 404 — not the user's data, not a 500.
-	reqB := newChiRequestWithOrg(http.MethodGet, "/api/v1/users/target-user", "id", "target-user", testIsoOrgB)
+	reqB := newChiRequestWithOrg(http.MethodGet, "/api/v1/users/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", "id", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1", testIsoOrgB)
 	recB := httptest.NewRecorder()
 	h.GetUser(recB, reqB)
 	if recB.Code != http.StatusNotFound {

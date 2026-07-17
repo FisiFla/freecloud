@@ -28,8 +28,8 @@ func TestGetMFAStatusOTP(t *testing.T) {
 	}
 	h := newHandlerOrgScoped(kc)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/uid-1/mfa-status", nil)
-	req = withChiParam(req, "id", "uid-1")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1/mfa-status", nil)
+	req = withChiParam(req, "id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1")
 	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.GetMFAStatus(rec, req)
@@ -54,8 +54,8 @@ func TestGetMFAStatusOTP(t *testing.T) {
 // TestGetMFAStatusNone: user has no credentials and no pending actions.
 func TestGetMFAStatusNone(t *testing.T) {
 	h := newHandlerOrgScoped(&fakeKeycloak{})
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/uid-2/mfa-status", nil)
-	req = withChiParam(req, "id", "uid-2")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2/mfa-status", nil)
+	req = withChiParam(req, "id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2")
 	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.GetMFAStatus(rec, req)
@@ -72,8 +72,8 @@ func TestGetMFAStatusPendingTOTP(t *testing.T) {
 		},
 	}
 	h := newHandlerOrgScoped(kc)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/uid-3/mfa-status", nil)
-	req = withChiParam(req, "id", "uid-3")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3/mfa-status", nil)
+	req = withChiParam(req, "id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3")
 	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.GetMFAStatus(rec, req)
@@ -101,10 +101,10 @@ func TestRequireMFATOTP(t *testing.T) {
 	h := newHandlerOrgScoped(kc)
 
 	body := `{"type":"totp"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/uid-4/require-mfa",
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4/require-mfa",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = withChiParam(req, "id", "uid-4")
+	req = withChiParam(req, "id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4")
 	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.RequireMFA(rec, req)
@@ -122,10 +122,10 @@ func TestRequireMFAWebAuthn(t *testing.T) {
 	kc := &fakeKeycloak{}
 	h := newHandlerOrgScoped(kc)
 	body := `{"type":"webauthn"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/uid-5/require-mfa",
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa5/require-mfa",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = withChiParam(req, "id", "uid-5")
+	req = withChiParam(req, "id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa5")
 	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.RequireMFA(rec, req)
@@ -138,10 +138,10 @@ func TestRequireMFAWebAuthn(t *testing.T) {
 func TestRequireMFAInvalidType(t *testing.T) {
 	h := newHandlerOrgScoped(&fakeKeycloak{})
 	body := `{"type":"sms"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/uid-6/require-mfa",
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa6/require-mfa",
 		bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = withChiParam(req, "id", "uid-6")
+	req = withChiParam(req, "id", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa6")
 	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
 	h.RequireMFA(rec, req)
