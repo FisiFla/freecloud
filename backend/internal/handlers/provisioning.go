@@ -126,7 +126,7 @@ func (h *Handler) GetProvisioningConfig(w http.ResponseWriter, r *http.Request) 
 // for "configured" detection. The plaintext is never echoed back.
 func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
-	if !isValidUUID(appID) {
+	if err := ValidateUserID(appID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid appId")
 		return
 	}
