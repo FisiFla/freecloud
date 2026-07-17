@@ -47,6 +47,9 @@ func ParseMappingLine(line string) (MappingRow, error) {
 	return MappingRow{FleetTeamID: id, OrgID: orgID, TeamName: name}, nil
 }
 
+// MaxMappingCSVRows bounds operator bulk-import CSV size.
+const MaxMappingCSVRows = 5000
+
 // ParseMappingCSV parses multi-line CSV of mapping rows (skips blank/# comments).
 func ParseMappingCSV(body string) ([]MappingRow, error) {
 	var out []MappingRow
@@ -60,6 +63,9 @@ func ParseMappingCSV(body string) ([]MappingRow, error) {
 			return nil, fmt.Errorf("line %d: %w", i+1, err)
 		}
 		out = append(out, row)
+		if len(out) > MaxMappingCSVRows {
+			return nil, fmt.Errorf("too many mapping rows (max %d)", MaxMappingCSVRows)
+		}
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no mapping rows")
