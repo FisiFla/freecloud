@@ -328,9 +328,9 @@ func TestCrossOrgIsolation_SCIM(t *testing.T) {
 			}
 			userID, _ := args[0].(string)
 			orgID, _ := args[1].(string)
-			if userID == "target-scim-user" && orgID == testIsoOrgA {
+			if userID == "cccccccc-cccc-cccc-cccc-cccccccccccc" && orgID == testIsoOrgA {
 				return fakeRow{scanFn: func(dest ...any) error {
-					*(dest[0].(*string)) = "target-scim-user"
+					*(dest[0].(*string)) = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 					*(dest[1].(*string)) = "target@example.com"
 					*(dest[2].(*string)) = "First"
 					*(dest[3].(*string)) = "Last"
@@ -359,7 +359,8 @@ func TestCrossOrgIsolation_SCIM(t *testing.T) {
 	}
 
 	// Org B cannot SCIM-GET a user that belongs to org A.
-	reqB := newChiRequestWithOrg(http.MethodGet, "/scim/v2/Users/target-scim-user", "id", "target-scim-user", testIsoOrgB)
+	const targetSCIM = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	reqB := newChiRequestWithOrg(http.MethodGet, "/scim/v2/Users/"+targetSCIM, "id", targetSCIM, testIsoOrgB)
 	recB := httptest.NewRecorder()
 	h.SCIMGetUser(recB, reqB)
 	if recB.Code != http.StatusNotFound {
