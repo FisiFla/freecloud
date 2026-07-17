@@ -128,3 +128,34 @@ describe("getMFAStatus (privileged API)", () => {
     expect(String(url).startsWith("http")).toBe(false);
   });
 });
+
+describe("getDeviceCommandHistory (privileged API)", () => {
+  const origFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    global.fetch = origFetch;
+  });
+
+  it("GETs same-origin BFF device commands path", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ success: true, data: { commands: [] } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const { getDeviceCommandHistory } = await import("./api");
+    const res = await getDeviceCommandHistory("host-1");
+    expect(res.commands).toEqual([]);
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe("/api/v1/devices/host-1/commands");
+    expect((init as RequestInit).method).toBe("GET");
+    expect(String(url).startsWith("http")).toBe(false);
+  });
+});

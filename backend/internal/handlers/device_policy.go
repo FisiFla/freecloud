@@ -134,7 +134,7 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "name is required")
 		return
 	}
-	if len(req.Name) > 120 {
+	if len(req.Name) > maxTeamDisplayNameLen {
 		respondError(w, http.StatusBadRequest, "name must be ≤ 120 characters")
 		return
 	}
@@ -335,6 +335,9 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 
 // maxHostIDsPerMove bounds MoveHostToTeam batch size (ownership + Fleet fan-out).
 const maxHostIDsPerMove = 500
+
+// maxTeamDisplayNameLen bounds CreateTeam display names (before org prefix).
+const maxTeamDisplayNameLen = 120
 
 // parseIntParam parses a string to a positive int. Returns an error if invalid.
 func parseIntParam(s string, out *int) (int, error) {
