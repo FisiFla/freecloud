@@ -7,11 +7,11 @@
 // Design: a session-scoped pg_advisory_lock is acquired on a single dedicated
 // connection (NOT the shared query pool — a session lock is tied to the
 // connection that took it, so the connection must be held open for as long
-// as leadership is held) and never explicitly released while healthy. If the
-// connection drops (crash, network partition, pool recycling it) Postgres
-// releases the lock automatically, and another instance's retry loop picks
-// it up — this is what makes failover work without a heartbeat protocol of
-// our own.
+// as leadership is held). While healthy the lock is held; on intentional
+// release or failed Ping we call pg_advisory_unlock before returning the
+// connection to the pool (Release alone does NOT drop session locks). If the
+// connection dies, Postgres releases the lock automatically so another
+// instance's retry loop can pick it up.
 package leader
 
 import (
