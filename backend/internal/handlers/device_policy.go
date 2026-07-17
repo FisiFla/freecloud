@@ -91,23 +91,28 @@ func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isSystemAdminCaller(ctx) {
 		oc := middleware.GetOrgContext(ctx)
-		if oc == nil || h.db == nil {
-			teams = []fleet.Team{}
-		} else {
-			allowed, mapErr := h.fleetTeamIDsForOrg(ctx, oc.OrgID)
-			if mapErr != nil {
-				h.logger.Error("failed to load org fleet teams", zap.Error(mapErr))
-				respondError(w, http.StatusInternalServerError, "internal error")
-				return
-			}
-			filtered := make([]fleet.Team, 0, len(teams))
-			for _, tm := range teams {
-				if allowed[tm.ID] {
-					filtered = append(filtered, tm)
-				}
-			}
-			teams = filtered
+		if oc == nil {
+			// Fail closed: never return unscoped Fleet inventory without org.
+			respondError(w, http.StatusForbidden, "forbidden: no organization context")
+			return
 		}
+		if h.db == nil {
+			respondError(w, http.StatusInternalServerError, "database not available")
+			return
+		}
+		allowed, mapErr := h.fleetTeamIDsForOrg(ctx, oc.OrgID)
+		if mapErr != nil {
+			h.logger.Error("failed to load org fleet teams", zap.Error(mapErr))
+			respondError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		filtered := make([]fleet.Team, 0, len(teams))
+		for _, tm := range teams {
+			if allowed[tm.ID] {
+				filtered = append(filtered, tm)
+			}
+		}
+		teams = filtered
 	}
 
 	respondJSON(w, http.StatusOK, ListTeamsResponse{Teams: teams})
@@ -130,6 +135,17 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "name must be ≤ 120 characters")
 		return
 	}
+	// Reject path separators / control chars so clients cannot inject a fake
+	// org UUID prefix or multi-segment Fleet names that break tenant namespacing.
+	if err := ValidateFleetTeamDisplayName(req.Name); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Description = strings.TrimSpace(req.Description)
+	if len(req.Description) > 500 {
+		respondError(w, http.StatusBadRequest, "description must be ≤ 500 characters")
+		return
+	}
 
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
@@ -141,10 +157,8 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 
 	// Namespace the Fleet team name with the org id prefix so shared-Fleet
 	// deployments do not collide across tenants on display name uniqueness.
-	fleetName := req.Name
-	if !strings.HasPrefix(fleetName, oc.OrgID+"/") {
-		fleetName = oc.OrgID + "/" + req.Name
-	}
+	// Display name never contains '/'; prefix is always server-controlled.
+	fleetName := oc.OrgID + "/" + req.Name
 
 	team, err := h.fleet.CreateTeam(ctx, fleetName, req.Description)
 	if err != nil {
@@ -260,6 +274,20 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	// Trim empties so ["", "host-1"] cannot bypass emptiness checks.
+	cleaned := make([]string, 0, len(req.HostIDs))
+	for _, id := range req.HostIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if len(id) > 256 {
+			respondError(w, http.StatusBadRequest, "host id too long")
+			return
+		}
+		cleaned = append(cleaned, id)
+	}
+	req.HostIDs = cleaned
 	if len(req.HostIDs) == 0 {
 		respondError(w, http.StatusBadRequest, "hostIds must not be empty")
 		return
@@ -377,4 +405,24 @@ func (h *Handler) requireFleetTeamInCallerOrg(w http.ResponseWriter, r *http.Req
 		return false
 	}
 	return true
+}
+
+// ValidateFleetTeamDisplayName rejects separators that would break the
+// server-controlled "{orgID}/" namespace or allow multi-segment injection.
+func ValidateFleetTeamDisplayName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("name must not contain path separators")
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("name must not contain '..'")
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("name must not contain control characters")
+		}
+	}
+	return nil
 }
