@@ -172,6 +172,11 @@ var migrations = []migration{
 		name:      "enrollment_tokens_hash",
 		statement: Migration045,
 	},
+	{
+		id:        46,
+		name:      "fleet_team_orgs",
+		statement: Migration046,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -975,6 +980,19 @@ ALTER TABLE enrollment_tokens ADD CONSTRAINT enrollment_tokens_token_hash_key UN
 CREATE INDEX IF NOT EXISTS idx_enrollment_tokens_token_hash ON enrollment_tokens(token_hash);
 
 ALTER TABLE enrollment_tokens DROP COLUMN IF EXISTS token;
+`
+
+// Migration046 maps FleetDM team IDs to FreeCloud organizations so multi-tenant
+// installs can filter team lists and gate host/policy assignment to teams owned
+// by the caller's org (shared Fleet remains global; this is app-layer scoping).
+const Migration046 = `
+CREATE TABLE IF NOT EXISTS fleet_team_orgs (
+    fleet_team_id INTEGER PRIMARY KEY,
+    org_id UUID NOT NULL REFERENCES organizations(id),
+    team_name TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_fleet_team_orgs_org_id ON fleet_team_orgs(org_id);
 `
 
 // migrationLockID is the pg_advisory_lock key guarding RunMigrations. It is a

@@ -9,8 +9,13 @@
 #   KC_ADMIN_PASSWORD    — first-boot Keycloak admin password
 #   SCIM_BEARER_TOKEN    — inbound SCIM provisioning bearer token
 #   ACCESS_EVAL_TOKEN    — posture-evaluation token (backend ↔ Keycloak SPI)
-#   FLEET_WEBHOOK_SECRET — Fleet enrollment-callback HMAC secret
+#   FLEET_WEBHOOK_SECRET — Fleet enrollment-callback HMAC (+ default device-cookie HMAC)
 #   PROVISIONING_MASTER_KEY — AES-256-GCM key for stored connector secrets
+#
+# DEVICE_COOKIE_SECRET is optional and intentionally NOT auto-generated: when
+# unset, freecloud-device-id cookies are signed with FLEET_WEBHOOK_SECRET.
+# Set DEVICE_COOKIE_SECRET in secrets.env by hand to rotate cookie signing
+# independently of the Fleet webhook.
 #
 # KEYCLOAK_CLIENT_SECRET is absent: Epic A's bootstrap engine self-manages it.
 #

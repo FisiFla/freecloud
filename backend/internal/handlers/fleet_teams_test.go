@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
@@ -21,6 +24,12 @@ func withTeamID(r *http.Request, id string) *http.Request {
 		URLParams: chi.RouteParams{Keys: []string{"id"}, Values: []string{id}},
 	})
 	return r.WithContext(chiCtx)
+}
+
+func withOrgAdminCtx(r *http.Request) *http.Request {
+	ctx := middleware.SetClaims(r.Context(), &middleware.JWTClaims{Sub: "admin", Role: middleware.RoleSuperAdmin})
+	ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{OrgID: middleware.DefaultOrgID, Role: middleware.OrgMembershipRoleAdmin})
+	return r.WithContext(ctx)
 }
 
 // ---- ListTeams ----
@@ -74,10 +83,12 @@ func TestCreateTeam_Success(t *testing.T) {
 			return &fleet.Team{ID: 10, Name: name, Description: description}, nil
 		},
 	}
+	// nil DB skips mapping insert path (org context still required).
 	h := NewHandler(nil, &fakeKeycloak{}, f, zap.NewNop())
 	body, _ := json.Marshal(CreateTeamRequest{Name: "Security", Description: "Security team"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req = withOrgAdminCtx(req)
 	rec := httptest.NewRecorder()
 	h.CreateTeam(rec, req)
 	if rec.Code != http.StatusCreated {
@@ -110,6 +121,7 @@ func TestCreateTeam_FleetError(t *testing.T) {
 	body, _ := json.Marshal(CreateTeamRequest{Name: "Ops"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req = withOrgAdminCtx(req)
 	rec := httptest.NewRecorder()
 	h.CreateTeam(rec, req)
 	if rec.Code != http.StatusBadGateway {
@@ -134,6 +146,7 @@ func TestAssignTeamPolicy_Success(t *testing.T) {
 	body, _ := json.Marshal(AssignTeamPolicyRequest{PolicyID: "pol-001"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/5/policies", bytes.NewReader(body))
 	req = withTeamID(req, "5")
+	req = withOrgAdminCtx(req)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.AssignTeamPolicy(rec, req)
@@ -150,6 +163,7 @@ func TestAssignTeamPolicy_InvalidTeamID(t *testing.T) {
 	body, _ := json.Marshal(AssignTeamPolicyRequest{PolicyID: "pol-001"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/not-a-number/policies", bytes.NewReader(body))
 	req = withTeamID(req, "not-a-number")
+	req = withOrgAdminCtx(req)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.AssignTeamPolicy(rec, req)
@@ -163,6 +177,7 @@ func TestAssignTeamPolicy_MissingPolicyID(t *testing.T) {
 	body, _ := json.Marshal(AssignTeamPolicyRequest{PolicyID: ""})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/1/policies", bytes.NewReader(body))
 	req = withTeamID(req, "1")
+	req = withOrgAdminCtx(req)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.AssignTeamPolicy(rec, req)
@@ -181,6 +196,7 @@ func TestAssignTeamPolicy_FleetError(t *testing.T) {
 	body, _ := json.Marshal(AssignTeamPolicyRequest{PolicyID: "pol-001"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/3/policies", bytes.NewReader(body))
 	req = withTeamID(req, "3")
+	req = withOrgAdminCtx(req)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.AssignTeamPolicy(rec, req)
@@ -210,6 +226,7 @@ func TestMoveHostToTeam_Success(t *testing.T) {
 	body, _ := json.Marshal(MoveHostRequest{HostIDs: []string{"host-1", "host-2"}})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/2/hosts", bytes.NewReader(body))
 	req = withTeamID(req, "2")
+	req = withOrgAdminCtx(req)
 	req.Header.Set("Content-Type", "application/json")
 	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
@@ -227,6 +244,7 @@ func TestMoveHostToTeam_EmptyHostIDs(t *testing.T) {
 	body, _ := json.Marshal(MoveHostRequest{HostIDs: []string{}})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/1/hosts", bytes.NewReader(body))
 	req = withTeamID(req, "1")
+	req = withOrgAdminCtx(req)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	h.MoveHostToTeam(rec, req)
@@ -246,6 +264,7 @@ func TestMoveHostToTeam_FleetError(t *testing.T) {
 	body, _ := json.Marshal(MoveHostRequest{HostIDs: []string{"host-a"}})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/1/hosts", bytes.NewReader(body))
 	req = withTeamID(req, "1")
+	req = withOrgAdminCtx(req)
 	req.Header.Set("Content-Type", "application/json")
 	req = withOrgContext(req)
 	rec := httptest.NewRecorder()
@@ -267,5 +286,92 @@ func TestParseIntParam(t *testing.T) {
 	}
 	if _, err := parseIntParam("0", &n); err == nil {
 		t.Error("expected error for 0")
+	}
+}
+
+func TestCreateTeam_RecordsOrgMapping(t *testing.T) {
+	const orgID = middleware.DefaultOrgID
+	var insertedTeamID int
+	var insertedOrg string
+	db := &fakeDB{
+		execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			if len(args) >= 2 {
+				if id, ok := args[0].(int); ok {
+					insertedTeamID = id
+				}
+				if o, ok := args[1].(string); ok {
+					insertedOrg = o
+				}
+			}
+			return pgconn.NewCommandTag("INSERT 0 1"), nil
+		},
+	}
+	f := &fakeFleet{
+		createTeamFn: func(ctx context.Context, name, description string) (*fleet.Team, error) {
+			if name != orgID+"/Security" {
+				t.Fatalf("expected org-prefixed fleet name, got %q", name)
+			}
+			return &fleet.Team{ID: 42, Name: name}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
+	body, _ := json.Marshal(CreateTeamRequest{Name: "Security"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withOrgAdminCtx(req)
+	rec := httptest.NewRecorder()
+	h.CreateTeam(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if insertedTeamID != 42 || insertedOrg != orgID {
+		t.Fatalf("mapping insert team=%d org=%q", insertedTeamID, insertedOrg)
+	}
+}
+
+func TestListTeams_NonAdminFiltersByOrgMapping(t *testing.T) {
+	db := &fakeDB{
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			// only team 7 is mapped to caller's org
+			return &fakeQueryRows{rows: [][]interface{}{{7}}}, nil
+		},
+	}
+	f := &fakeFleet{
+		listTeamsFn: func(ctx context.Context) ([]fleet.Team, error) {
+			return []fleet.Team{{ID: 7, Name: "ours"}, {ID: 99, Name: "theirs"}}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil)
+	ctx := middleware.SetClaims(req.Context(), &middleware.JWTClaims{Sub: "u1", Role: middleware.RoleHelpdesk})
+	ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{OrgID: middleware.DefaultOrgID, Role: "member"})
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.ListTeams(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data ListTeamsResponse `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Teams) != 1 || resp.Data.Teams[0].ID != 7 {
+		t.Fatalf("expected only team 7, got %+v", resp.Data.Teams)
+	}
+}
+
+func TestCreateTeam_NameTooLong(t *testing.T) {
+	h := setupTestHandler(t)
+	long := strings.Repeat("a", 121)
+	body, _ := json.Marshal(CreateTeamRequest{Name: long})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withOrgAdminCtx(req)
+	rec := httptest.NewRecorder()
+	h.CreateTeam(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for long name, got %d", rec.Code)
 	}
 }

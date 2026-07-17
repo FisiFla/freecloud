@@ -115,7 +115,7 @@ freecloud/
 │       └── components/
 ├── keycloak-authenticator/         # posture-check SPI (Java)
 ├── docker/                         # compose (dev, e2e, e2e-ha, prod, observability)
-├── docs/                           # ARCHITECTURE, PARITY, SECRETS, ADRs
+├── docs/                           # ARCHITECTURE, PARITY, SECRETS, ADRs, HANDLERS_OWNERSHIP
 └── Makefile                        # verify · test-db · localhost-up · prod-up
 ```
 

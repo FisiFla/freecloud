@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
@@ -72,12 +74,12 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, ListPoliciesResponse{Policies: policies})
 }
 
-// ListTeams returns all Fleet teams.
+// ListTeams returns Fleet teams visible to the caller.
 // Route: GET /api/v1/teams (requires PermReadCompliance).
 //
-// M1: Fleet teams have no per-org scoping today (future work — see the
-// package-level TODO note near MoveHostToTeam), so this is a
-// system-admin-only restriction, same rationale as ListPolicies above.
+// System admins see every Fleet team. Other callers see only teams mapped to
+// their active org in fleet_team_orgs (Migration046). Unmapped legacy teams
+// remain invisible to non–system-admins (fail-closed).
 func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -88,7 +90,24 @@ func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !isSystemAdminCaller(ctx) {
-		teams = []fleet.Team{}
+		oc := middleware.GetOrgContext(ctx)
+		if oc == nil || h.db == nil {
+			teams = []fleet.Team{}
+		} else {
+			allowed, mapErr := h.fleetTeamIDsForOrg(ctx, oc.OrgID)
+			if mapErr != nil {
+				h.logger.Error("failed to load org fleet teams", zap.Error(mapErr))
+				respondError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			filtered := make([]fleet.Team, 0, len(teams))
+			for _, tm := range teams {
+				if allowed[tm.ID] {
+					filtered = append(filtered, tm)
+				}
+			}
+			teams = filtered
+		}
 	}
 
 	respondJSON(w, http.StatusOK, ListTeamsResponse{Teams: teams})
@@ -107,21 +126,51 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "name is required")
 		return
 	}
+	if len(req.Name) > 120 {
+		respondError(w, http.StatusBadRequest, "name must be ≤ 120 characters")
+		return
+	}
 
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
-	team, err := h.fleet.CreateTeam(ctx, req.Name, req.Description)
+	// Namespace the Fleet team name with the org id prefix so shared-Fleet
+	// deployments do not collide across tenants on display name uniqueness.
+	fleetName := req.Name
+	if !strings.HasPrefix(fleetName, oc.OrgID+"/") {
+		fleetName = oc.OrgID + "/" + req.Name
+	}
+
+	team, err := h.fleet.CreateTeam(ctx, fleetName, req.Description)
 	if err != nil {
-		h.logger.Error("failed to create fleet team", zap.String("name", req.Name), zap.Error(err))
+		h.logger.Error("failed to create fleet team", zap.String("name", fleetName), zap.Error(err))
 		respondError(w, http.StatusBadGateway, "failed to create team in Fleet")
 		return
 	}
 
 	if h.db != nil {
+		if _, err := h.db.Exec(ctx,
+			`INSERT INTO fleet_team_orgs (fleet_team_id, org_id, team_name)
+			 VALUES ($1, $2, $3)
+			 ON CONFLICT (fleet_team_id) DO UPDATE
+			   SET org_id = EXCLUDED.org_id, team_name = EXCLUDED.team_name`,
+			team.ID, oc.OrgID, team.Name,
+		); err != nil {
+			h.logger.Error("failed to record fleet team org mapping", zap.Error(err))
+			// Best-effort: team exists in Fleet; surface error so caller retries
+			// rather than leaving an unmapped team silently.
+			respondError(w, http.StatusInternalServerError, "team created in Fleet but org mapping failed")
+			return
+		}
 		if err := h.writeAuditEntryBestEffort(actorID, "fleet_team_create", "team", team.Name, map[string]interface{}{
 			"team_name": team.Name,
 			"team_id":   team.ID,
+			"org_id":    oc.OrgID,
 		}); err != nil {
 			h.logger.Warn("failed to write audit log for team creation", zap.Error(err))
 		}
@@ -142,6 +191,9 @@ func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
 	var teamID int
 	if _, err := parseIntParam(teamIDStr, &teamID); err != nil {
 		respondError(w, http.StatusBadRequest, "team id must be a positive integer")
+		return
+	}
+	if !h.requireFleetTeamInCallerOrg(w, r, teamID) {
 		return
 	}
 
@@ -197,6 +249,9 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 	var teamID int
 	if _, err := parseIntParam(teamIDStr, &teamID); err != nil {
 		respondError(w, http.StatusBadRequest, "team id must be a positive integer")
+		return
+	}
+	if !h.requireFleetTeamInCallerOrg(w, r, teamID) {
 		return
 	}
 
@@ -268,4 +323,58 @@ func parseIntParam(s string, out *int) (int, error) {
 	}
 	*out = n
 	return n, nil
+}
+
+// fleetTeamIDsForOrg returns the set of Fleet team IDs owned by orgID.
+func (h *Handler) fleetTeamIDsForOrg(ctx context.Context, orgID string) (map[int]bool, error) {
+	out := map[int]bool{}
+	if h.db == nil {
+		return out, nil
+	}
+	rows, err := h.db.Query(ctx, `SELECT fleet_team_id FROM fleet_team_orgs WHERE org_id = $1`, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// requireFleetTeamInCallerOrg gates team-scoped mutations. System admins may
+// act on any team (including unmapped legacy teams). Everyone else must have a
+// fleet_team_orgs row for the active org — 404 on miss (non-leakage).
+func (h *Handler) requireFleetTeamInCallerOrg(w http.ResponseWriter, r *http.Request, teamID int) bool {
+	if isSystemAdminCaller(r.Context()) {
+		return true
+	}
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return false
+	}
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return false
+	}
+	var found int
+	err := h.db.QueryRow(r.Context(),
+		`SELECT 1 FROM fleet_team_orgs WHERE fleet_team_id = $1 AND org_id = $2`,
+		teamID, oc.OrgID,
+	).Scan(&found)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			respondError(w, http.StatusNotFound, "team not found")
+			return false
+		}
+		h.logger.Error("fleet team org check failed", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return false
+	}
+	return true
 }
