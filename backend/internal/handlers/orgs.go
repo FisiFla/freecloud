@@ -233,7 +233,7 @@ func (h *Handler) requireOwnOrgOrSystemAdmin(w http.ResponseWriter, r *http.Requ
 // ListOrgMembers handles GET /api/v1/orgs/{orgId}/members.
 func (h *Handler) ListOrgMembers(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
-	if !isValidUUID(orgID) {
+	if err := ValidateUserID(orgID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid organization id")
 		return
 	}
