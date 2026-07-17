@@ -210,8 +210,11 @@ func (h *Handler) deviceCookieSigningSecret() string {
 // Message for HMAC-SHA256: "v1|" + hostID + "|" + expUnix (decimal).
 // Exported for e2e tests that call access/evaluate with a deviceId.
 func MintDeviceCookieValue(hostID, secret string, now time.Time) (string, error) {
-	if hostID == "" || secret == "" {
+	if secret == "" {
 		return "", fmt.Errorf("hostID and secret are required")
+	}
+	if err := ValidateHostID(hostID); err != nil {
+		return "", err
 	}
 	exp := now.Add(deviceCookieTTL).Unix()
 	msg := fmt.Sprintf("v1|%s|%d", hostID, exp)
