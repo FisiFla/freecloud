@@ -249,13 +249,8 @@ func (h *Handler) CreateApp(w http.ResponseWriter, r *http.Request) {
 // AssignApp assigns a user to an app.
 func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
-	if appID == "" {
-		respondError(w, http.StatusBadRequest, "appId is required")
-		return
-	}
-
-	if h.db == nil {
-		respondError(w, http.StatusInternalServerError, "database not available")
+	if err := ValidateOpaqueID(appID, "appId"); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -265,12 +260,12 @@ func (h *Handler) AssignApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.UserID == "" {
-		respondError(w, http.StatusBadRequest, "userId is required")
+	if err := ValidateUserID(req.UserID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if !isValidUUID(req.UserID) {
-		respondError(w, http.StatusBadRequest, "userId must be a valid UUID")
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	if !h.requireAppInCallerOrg(w, r, appID) {
