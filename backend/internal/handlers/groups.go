@@ -144,8 +144,8 @@ func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.GroupID = strings.TrimSpace(req.GroupID)
-	if req.GroupID == "" {
-		respondError(w, http.StatusBadRequest, "groupId is required")
+	if err := ValidateOpaqueID(req.GroupID, "groupId"); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
