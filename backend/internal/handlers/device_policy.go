@@ -281,8 +281,8 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 		if id == "" {
 			continue
 		}
-		if len(id) > 256 {
-			respondError(w, http.StatusBadRequest, "host id too long")
+		if err := ValidateHostID(id); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		cleaned = append(cleaned, id)
