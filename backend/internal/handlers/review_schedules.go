@@ -283,6 +283,9 @@ func (h *Handler) DeleteReviewSchedule(w http.ResponseWriter, r *http.Request) {
 // schedule whose next_run_at is due. Intended to be called from a leader-gated
 // ticker so only one replica fires schedules in multi-instance deploys.
 // Returns the number of schedules that successfully created a campaign.
+// maxDueReviewSchedules bounds schedules fired per runner tick.
+const maxDueReviewSchedules = 50
+
 func (h *Handler) RunDueReviewSchedules(ctx context.Context) int {
 	if h.db == nil {
 		return 0
@@ -292,7 +295,7 @@ func (h *Handler) RunDueReviewSchedules(ctx context.Context) int {
 		FROM review_schedules
 		WHERE enabled = true AND next_run_at <= NOW()
 		ORDER BY next_run_at ASC
-		LIMIT 50`)
+		LIMIT $1`, maxDueReviewSchedules)
 	if err != nil {
 		h.logger.Error("review schedules: list due failed", zap.Error(err))
 		return 0

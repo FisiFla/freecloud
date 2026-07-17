@@ -163,3 +163,9 @@ func TestFireReviewSchedule_RaceLostNoError(t *testing.T) {
 		t.Fatalf("lost race should return nil, got %v", err)
 	}
 }
+
+func TestJ09_MaxDueReviewSchedulesConstant(t *testing.T) {
+	if maxDueReviewSchedules != 50 {
+		t.Fatalf("maxDueReviewSchedules=%d", maxDueReviewSchedules)
+	}
+}
