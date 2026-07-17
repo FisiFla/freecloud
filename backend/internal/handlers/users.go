@@ -146,8 +146,8 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 // GetUser returns a single user by keycloak_user_id with associated devices.
 func (h *Handler) GetUser(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" {
-		respondError(w, http.StatusBadRequest, "id is required")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
