@@ -145,3 +145,21 @@ func TestFireReviewScheduleCreatesCampaign(t *testing.T) {
 		t.Fatalf("scheduleUpdated=%v campaignInserted=%v", scheduleUpdated, campaignInserted)
 	}
 }
+
+func TestFireReviewSchedule_RaceLostNoError(t *testing.T) {
+	// UPDATE affects 0 rows → lost race → nil error, no campaign insert.
+	tx := &fakeTx{
+		execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			if strings.Contains(sql, "UPDATE review_schedules") {
+				return pgconn.NewCommandTag("UPDATE 0"), nil
+			}
+			t.Fatal("should not insert campaign when race lost")
+			return pgconn.CommandTag{}, nil
+		},
+	}
+	db := &fakeDB{beginFn: func(ctx context.Context) (pgx.Tx, error) { return tx, nil }}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	if err := h.fireReviewSchedule(context.Background(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Q", "weekly", middleware.DefaultOrgID, "a"); err != nil {
+		t.Fatalf("lost race should return nil, got %v", err)
+	}
+}
