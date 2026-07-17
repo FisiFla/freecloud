@@ -29,8 +29,8 @@ type RequireMFARequest struct {
 // Route: GET /api/v1/users/{id}/mfa-status
 func (h *Handler) GetMFAStatus(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" {
-		respondError(w, http.StatusBadRequest, "id is required")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireUserInCallerOrg(w, r, userID) {
