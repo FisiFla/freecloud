@@ -471,8 +471,8 @@ type RemoteClearPasscodeResponse struct {
 // Route: POST /api/v1/devices/{id}/restart (requires PermManageDevices).
 func (h *Handler) RemoteRestart(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
-	if deviceID == "" {
-		respondError(w, http.StatusBadRequest, "device id is required")
+	if err := ValidateHostID(deviceID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
