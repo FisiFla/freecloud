@@ -187,8 +187,8 @@ func (h *Handler) PortalRemoveMFAFactor(w http.ResponseWriter, r *http.Request) 
 	}
 
 	credID := chi.URLParam(r, "credId")
-	if credID == "" {
-		respondError(w, http.StatusBadRequest, "credId is required")
+	if err := ValidateOpaqueID(credID, "credId"); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
