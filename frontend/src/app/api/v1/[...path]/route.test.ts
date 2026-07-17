@@ -162,6 +162,18 @@ describe("BFF proxy route (app/api/v1/[...path])", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects encoded slash path segments after decode", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+    // %2F decodes to "/" — sanitizePathParts must reject multi-segment smuggling.
+    const res = await GET(makeRequest("http://localhost/api/v1/foo%2Fbar"), {
+      params: Promise.resolve({ path: ["foo%2Fbar"] }),
+    });
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("forwards Content-Disposition so browser downloads work through the BFF", async () => {
     getTokenMock.mockResolvedValue({ accessToken: "tok" });
     global.fetch = vi.fn().mockResolvedValue(
