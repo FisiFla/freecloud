@@ -279,7 +279,7 @@ func (h *Handler) AdminListAccessRequests(w http.ResponseWriter, r *http.Request
 // Route: PATCH /api/v1/portal/access-requests/{id} (requires PermManageUsers via middleware)
 func (h *Handler) AdminDecideAccessRequest(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	if !isValidUUID(id) {
+	if err := ValidateUserID(id); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid id")
 		return
 	}
