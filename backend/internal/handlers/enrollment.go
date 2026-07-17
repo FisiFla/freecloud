@@ -16,6 +16,9 @@ import (
 	"go.uber.org/zap"
 )
 
+// maxEnrollmentTokenLen bounds Fleet enrollment_token body field size.
+const maxEnrollmentTokenLen = 512
+
 var errEnrollmentTokenNotConsumable = errors.New("enrollment token is unknown, used, or expired")
 
 // enrollmentTokenHash returns the sha256-hex digest of a plaintext Fleet
@@ -66,6 +69,11 @@ func (h *Handler) FleetEnrollmentCallback(w http.ResponseWriter, r *http.Request
 	req.HostID = strings.TrimSpace(req.HostID)
 	if req.EnrollmentToken == "" || req.HostID == "" {
 		respondError(w, http.StatusBadRequest, "enrollment_token and host_id are required")
+		return
+	}
+	// Cap token length so a huge body field cannot balloon hash/lookup work.
+	if len(req.EnrollmentToken) > maxEnrollmentTokenLen {
+		respondError(w, http.StatusBadRequest, "enrollment_token too long")
 		return
 	}
 	if err := ValidateHostID(req.HostID); err != nil {
