@@ -55,6 +55,17 @@ The following config fields use `resolveSecret`:
 | `ProvisioningMasterKey` | `PROVISIONING_MASTER_KEY` |
 | `SCIMBearerToken` | `SCIM_BEARER_TOKEN` |
 | `AccessEvalToken` | `ACCESS_EVAL_TOKEN` |
+
+### Device identity cookie signing
+
+`FLEET_WEBHOOK_SECRET` is also the HMAC key for the `freecloud-device-id`
+cookie minted by `POST /api/v1/enrollment/device-identity` and verified by
+`POST /api/v1/access/evaluate`. Rotating the webhook secret invalidates
+outstanding device cookies (users re-enroll cookie mint before login) **and**
+requires updating Fleet's webhook signature configuration at the same time.
+
+There is no separate `DEVICE_COOKIE_SECRET` yet; reuse is intentional to avoid
+another production-required secret until rotation UX exists.
 | `SMTPPassword` | `SMTP_PASSWORD` |
 | `SlackWebhookURL` | `SLACK_WEBHOOK_URL` |
 | `WebhookSecret` | `WEBHOOK_SECRET` |
