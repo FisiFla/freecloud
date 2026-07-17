@@ -14,6 +14,9 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/snapshot"
 )
 
+// maxLockMessageLen bounds custom remote-lock messages sent to Fleet/MDM.
+const maxLockMessageLen = 500
+
 // RemoteLockResponse is returned by POST /api/v1/devices/{id}/lock.
 type RemoteLockResponse struct {
 	DeviceID string `json:"deviceId"`
@@ -518,6 +521,17 @@ func (h *Handler) RemoteLockWithMessage(w http.ResponseWriter, r *http.Request) 
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	// Cap lock message length so Fleet/MDM payloads stay bounded.
+	if len(body.Message) > maxLockMessageLen {
+		respondError(w, http.StatusBadRequest, "message must be ≤ 500 characters")
+		return
+	}
+	for _, r := range body.Message {
+		if r < 0x20 || r == 0x7f {
+			respondError(w, http.StatusBadRequest, "message must not contain control characters")
+			return
+		}
 	}
 
 	actorID := middleware.GetActorID(r.Context())
