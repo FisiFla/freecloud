@@ -29,8 +29,8 @@ type PatchUserRequest struct {
 // PatchUser updates mutable user profile fields in Keycloak + local DB.
 func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" || !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "valid user id is required")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -189,8 +189,8 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 // ResetPassword triggers a Keycloak password reset action email for a user.
 func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" || !isValidUUID(userID) {
-		respondError(w, http.StatusBadRequest, "valid user id is required")
+	if err := ValidateUserID(userID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
