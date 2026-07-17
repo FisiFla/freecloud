@@ -102,6 +102,11 @@ graph LR
   under a Postgres advisory lock; the API process only waits for the schema
   to be current (`WaitForSchema`). Multi-instance HA is described in
   [ADR 0004](adr/0004-multi-instance-ha.md) (which supersedes ADR 0003).
+- Background jobs (reconcile, snapshot, audit retention, SIEM, review
+  schedules) use **session-scoped** advisory locks via `internal/leader`. Each
+  leader holds one dedicated pool connection for the lock lifetime. The
+  server sets `MaxConns` high enough for all electors plus request headroom
+  (default floor 16) so `/readyz` cannot be starved by leadership.
 
 ### Caddy (production only)
 

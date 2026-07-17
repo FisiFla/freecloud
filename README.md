@@ -98,32 +98,25 @@ cd frontend && npm install && npm run dev
 ```
 freecloud/
 ├── backend/
-│   ├── cmd/server/main.go          # Entry point
-│   ├── internal/
-│   │   ├── config/config.go        # Environment config
-│   │   ├── db/schema.go            # Database migrations
-│   │   ├── keycloak/client.go      # Keycloak API client
-│   │   ├── fleet/client.go         # FleetDM API client
-│   │   ├── handlers/               # HTTP handlers
-│   │   │   ├── onboarding.go
-│   │   │   ├── device_check.go
-│   │   │   ├── offboarding.go
-│   │   │   ├── apps.go
-│   │   │   └── routes.go
-│   │   └── middleware/audit.go     # Audit middleware
+│   ├── cmd/server/                 # server + migrate subcommand
+│   └── internal/
+│       ├── handlers/               # HTTP API (onboard, SCIM, access eval, …)
+│       ├── middleware/             # JWT, API tokens, org context, rate limit
+│       ├── leader/                 # pg_advisory_lock job leadership (HA)
+│       ├── config/                 # env + fail-closed Validate + secrets
+│       ├── db/                     # migrations, WaitForSchema, advisory locks
+│       ├── keycloak/ · fleet/      # upstream clients
+│       ├── provisioning/           # outbound SCIM / Slack / GitHub
+│       └── e2e/                    # -tags=e2e live-stack tests
 ├── frontend/
-│   ├── src/app/
-│   │   ├── layout.tsx              # Root layout with sidebar
-│   │   ├── page.tsx                # Dashboard home
-│   │   ├── employees/              # Employee management
-│   │   ├── apps/                   # App Catalog
-│   │   ├── audit-log/              # Audit Log viewer
-│   │   └── settings/               # System settings
-│   └── src/components/             # Reusable UI components
-├── docker/
-│   └── docker-compose.yml          # Dev infrastructure
-├── Makefile
-└── README.md
+│   └── src/
+│       ├── app/                    # App Router pages + BFF proxy api/v1/[...path]
+│       ├── lib/api.ts              # same-origin API client (no browser tokens)
+│       └── components/
+├── keycloak-authenticator/         # posture-check SPI (Java)
+├── docker/                         # compose (dev, e2e, e2e-ha, prod, observability)
+├── docs/                           # ARCHITECTURE, PARITY, SECRETS, ADRs
+└── Makefile                        # verify · test-db · localhost-up · prod-up
 ```
 
 ## API Endpoints

@@ -13,6 +13,12 @@ alert rules) and **Grafana** (pre-provisioned dashboard).
 | `freecloud_reconcile_orphans_in_keycloak` | Gauge | Users in Keycloak with no local DB record (last reconcile run) |
 | `freecloud_reconcile_orphans_in_db` | Gauge | DB users with no Keycloak record (last reconcile run) |
 | `freecloud_reconcile_last_run_timestamp_seconds` | Gauge | Unix timestamp of the last reconciliation run |
+| `freecloud_leader_election_is_leader` | Gauge | `1` if this process holds the named job lock, else `0` (label: `job`) |
+
+Leader-election jobs (label values): `reconcile`, `snapshot`, `audit_retention`,
+`siem`, `review_schedules`. In a healthy multi-replica deploy, for each job
+exactly one replica should report `1`. Zero across all replicas means no
+background work for that job; two `1`s for the same job indicates a lock bug.
 
 The backend scrape target is `GET /metrics` (Prometheus exposition format,
 unauthenticated). Restrict it at the network/reverse-proxy layer if the API is
@@ -31,6 +37,8 @@ Panels:
 - **Backend / Keycloak / Fleet / Readyz health** — stat panels with color coding
 - **Reconciliation drift gauges** — orphan counts in both directions
 - **Last reconciliation run** — time since the last successful job run
+- **Leader election** — optional: graph `freecloud_leader_election_is_leader` by
+  `job` / `instance` (panel not pre-provisioned yet; scrape + PromQL is enough)
 
 ## Alert rules
 

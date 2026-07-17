@@ -181,6 +181,104 @@ func TestE2E_PostureEnforcement_CompliantDeviceAllowed(t *testing.T) {
 	do(t, "DELETE", "/scim/v2/Users/"+created.ID, scimHeaders(), nil)
 }
 
+// TestE2E_PostureEnforcement_MintDeviceCookieThenEvaluate proves the real
+// browser-shaped path: enroll → POST /enrollment/device-identity (Origin +
+// JSON) → use the signed freecloud-device-id cookie value as deviceId on
+// access/evaluate. This is what the Keycloak SPI forwards after login.
+func TestE2E_PostureEnforcement_MintDeviceCookieThenEvaluate(t *testing.T) {
+	waitReady(t, 30*time.Second)
+
+	email := fmt.Sprintf("e2e-posture-cookie-%d@example.com", time.Now().UnixNano())
+	createBody := map[string]interface{}{
+		"schemas":  []string{"urn:ietf:params:scim:schemas:core:2.0:User"},
+		"userName": email,
+		"name":     map[string]string{"givenName": "Cookie", "familyName": "Path"},
+		"active":   true,
+	}
+	status, resp := do(t, "POST", "/scim/v2/Users", scimHeaders(), createBody)
+	if status != 201 {
+		t.Fatalf("create SCIM user: expected 201, got %d: %s", status, resp)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(resp, &created); err != nil || created.ID == "" {
+		t.Fatalf("parse user create: %v (body: %s)", err, resp)
+	}
+	defer do(t, "DELETE", "/scim/v2/Users/"+created.ID, scimHeaders(), nil)
+
+	tokenBody := map[string]string{"userId": created.ID}
+	status, resp = do(t, "POST", "/api/v1/e2e/enrollment-token", scimHeaders(), tokenBody)
+	if status != 200 {
+		t.Fatalf("create enrollment token: expected 200, got %d: %s", status, resp)
+	}
+	var tokenResp struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &tokenResp); err != nil || tokenResp.Data.Token == "" {
+		t.Fatalf("parse token response: %v (body: %s)", err, resp)
+	}
+	enrollToken := tokenResp.Data.Token
+
+	hostID := "host-001"
+	enrollPayload, _ := json.Marshal(map[string]string{
+		"enrollment_token": enrollToken,
+		"host_id":          hostID,
+		"hostname":         hostID + ".cookie.local",
+		"os_version":       "macOS 15.0",
+	})
+	sig := hmacSig(t, *flagWebhookSecret, enrollPayload)
+	status, resp = do(t, "POST", "/api/v1/fleet/enrollment-callback",
+		map[string]string{"X-Fleet-Signature": sig},
+		json.RawMessage(enrollPayload))
+	if status != 200 {
+		t.Fatalf("enrollment callback: expected 200, got %d: %s", status, resp)
+	}
+
+	// Mint cookie the way a trusted dashboard origin would (CORS_ORIGIN in e2e compose).
+	status, resp, cookies := doFull(t, "POST", "/api/v1/enrollment/device-identity",
+		map[string]string{"Origin": "http://localhost:3000"},
+		map[string]string{"enrollmentToken": enrollToken})
+	if status != 200 {
+		t.Fatalf("device-identity mint: expected 200, got %d: %s", status, resp)
+	}
+	var cookieVal string
+	for _, c := range cookies {
+		if c.Name == "freecloud-device-id" {
+			cookieVal = c.Value
+			break
+		}
+	}
+	if cookieVal == "" {
+		t.Fatalf("device-identity mint: freecloud-device-id cookie missing; body=%s cookies=%v", resp, cookies)
+	}
+	if !strings.HasPrefix(cookieVal, "v1.") {
+		t.Fatalf("device-identity mint: expected signed v1 cookie, got %q", cookieVal)
+	}
+
+	// Evaluate using the cookie value (what SPI forwards as deviceId).
+	evalBody := map[string]string{
+		"userId":   created.ID,
+		"deviceId": cookieVal,
+	}
+	status, resp = do(t, "POST", "/api/v1/access/evaluate", accessEvalHeaders(), evalBody)
+	if status != 200 {
+		t.Fatalf("access/evaluate (minted cookie): expected 200, got %d: %s", status, resp)
+	}
+	var env struct {
+		Data accessEvalResp `json:"data"`
+	}
+	if err := json.Unmarshal(resp, &env); err != nil {
+		t.Fatalf("parse response: %v (body: %s)", err, resp)
+	}
+	if !env.Data.Allow {
+		t.Fatalf("minted device cookie for compliant host: expected allow, got deny (reasons: %v)", env.Data.Reasons)
+	}
+	t.Logf("minted cookie → allow (reasons: %v)", env.Data.Reasons)
+}
+
 // TestE2E_PostureEnforcement_NonCompliantDeviceDenied proves that a device whose
 // posture returns a violation is denied with a posture reason (not "not enrolled").
 //

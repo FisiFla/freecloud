@@ -5,6 +5,14 @@ on:
   schedule:
     # Nightly at 02:00 UTC
     - cron: '0 2 * * *'
+  # Single-replica e2e smoke on PRs that touch the stack. HA job stays
+  # nightly/dispatch-only (see e2e-ha `if` below) to keep PR wall-clock down.
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'docker/**'
+      - 'keycloak-authenticator/**'
+      - '.github/workflows/e2e.yml'
 
 permissions:
   contents: read
@@ -123,9 +131,10 @@ jobs:
   # docker-compose.e2e-ha.yml overlay (second backend replica + LB), proving
   # migrations-once / shared-rate-limit / single-leader / bootstrap-once
   # across two replicas. Kept as a separate job (not folded into `e2e` above)
-  # so the single-replica path's runtime/flakiness is unaffected; dispatched
-  # the same way (workflow_dispatch + nightly schedule), not on PRs.
+  # so the single-replica path's runtime/flakiness is unaffected. Nightly +
+  # workflow_dispatch only — skip on pull_request.
   e2e-ha:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: build-kc-spi

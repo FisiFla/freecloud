@@ -67,6 +67,13 @@ func signedDeviceID(t *testing.T, hostID string) string {
 
 func do(t *testing.T, method, path string, headers map[string]string, body interface{}) (int, []byte) {
 	t.Helper()
+	status, respBody, _ := doFull(t, method, path, headers, body)
+	return status, respBody
+}
+
+// doFull is like do but also returns response cookies (for device-identity mint).
+func doFull(t *testing.T, method, path string, headers map[string]string, body interface{}) (int, []byte, []*http.Cookie) {
+	t.Helper()
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -89,7 +96,7 @@ func do(t *testing.T, method, path string, headers map[string]string, body inter
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, respBody
+	return resp.StatusCode, respBody, resp.Cookies()
 }
 
 func scimHeaders() map[string]string {
