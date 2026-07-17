@@ -24,16 +24,20 @@ const defaultKeycloakURL = "http://localhost:8081"
 
 // Config holds application configuration loaded from environment variables.
 type Config struct {
-	Port                  string
-	DatabaseURL           string
-	KeycloakURL           string
-	KeycloakRealm         string
-	KeycloakClientID      string
-	KeycloakClientSecret  string
-	KeycloakAudience      string
-	FleetURL              string
-	FleetAPIToken         string
-	FleetWebhookSecret    string
+	Port                 string
+	DatabaseURL          string
+	KeycloakURL          string
+	KeycloakRealm        string
+	KeycloakClientID     string
+	KeycloakClientSecret string
+	KeycloakAudience     string
+	FleetURL             string
+	FleetAPIToken        string
+	FleetWebhookSecret   string
+	// DeviceCookieSecret HMAC-signs freecloud-device-id cookies. Optional:
+	// when empty, DeviceCookieSigningSecret() falls back to FleetWebhookSecret
+	// so production does not require a new secret until operators opt in.
+	DeviceCookieSecret    string
 	ProvisioningMasterKey string
 	// SCIMBearerToken authenticates inbound SCIM 2.0 provisioning requests.
 	// Must be a high-entropy secret (e.g. 32+ random bytes hex-encoded).
@@ -129,6 +133,7 @@ func Load() *Config {
 		FleetURL:              getEnv("FLEET_URL", "http://localhost:8082"),
 		FleetAPIToken:         resolveSecret("FLEET_API_TOKEN", ""),
 		FleetWebhookSecret:    resolveSecret("FLEET_WEBHOOK_SECRET", ""),
+		DeviceCookieSecret:    resolveSecret("DEVICE_COOKIE_SECRET", ""),
 		ProvisioningMasterKey: resolveSecret("PROVISIONING_MASTER_KEY", ""),
 		SCIMBearerToken:       resolveSecret("SCIM_BEARER_TOKEN", ""),
 		AccessEvalToken:       resolveSecret("ACCESS_EVAL_TOKEN", ""),
@@ -284,6 +289,18 @@ func (c *Config) Validate() error {
 func IsDevOrE2E() bool {
 	env := os.Getenv("APP_ENV")
 	return env == "development" || env == "test"
+}
+
+// DeviceCookieSigningSecret returns the HMAC key for freecloud-device-id.
+// Prefer DEVICE_COOKIE_SECRET when set; otherwise FLEET_WEBHOOK_SECRET.
+func (c *Config) DeviceCookieSigningSecret() string {
+	if c == nil {
+		return ""
+	}
+	if c.DeviceCookieSecret != "" {
+		return c.DeviceCookieSecret
+	}
+	return c.FleetWebhookSecret
 }
 
 // parseBool parses a boolean environment variable. Returns false on invalid values.

@@ -150,15 +150,21 @@ graph LR
 ### Conditional Access (Device Posture)
 
 1. User attempts to sign in to a protected application via Keycloak SSO.
-2. A Keycloak Authenticator SPI calls `POST /api/v1/access/evaluate` (authenticated
-   with `ACCESS_EVAL_TOKEN`).
-3. Backend fetches the user's device posture from FleetDM and loads the per-app
-   access policy from Postgres.
-4. Backend evaluates: enrolled device required, disk encryption, and no critical
-   vulnerabilities.
-5. Returns `{ allowed: true }` or `{ allowed: false, failures: [...] }`.
+2. A Keycloak Authenticator SPI reads the browser's `freecloud-device-id` cookie
+   (HMAC-signed v1 value; not a bare Fleet host ID) and calls
+   `POST /api/v1/access/evaluate` (authenticated with `ACCESS_EVAL_TOKEN`).
+3. Backend verifies the cookie MAC (`DEVICE_COOKIE_SECRET` or fallback
+   `FLEET_WEBHOOK_SECRET`), resolves the host ID, fetches posture from FleetDM,
+   and loads the per-app access policy from Postgres.
+4. Backend evaluates: enrolled device, secure baseline (firewall / disk / vulns),
+   and optional time / network / geo conditions.
+5. Returns `{ allow: true }` or `{ allow: false, reasons: [...] }`.
 6. Keycloak grants or denies the session; the frontend shows the access-blocked
    page on denial.
+
+Cookie mint path: after enrollment, the dashboard origin calls
+`POST /api/v1/enrollment/device-identity` with the enrollment token (Origin +
+JSON CSRF guards); the response sets the signed HttpOnly cookie.
 
 ### Device Enrollment Callback
 

@@ -37,8 +37,8 @@ Panels:
 - **Backend / Keycloak / Fleet / Readyz health** — stat panels with color coding
 - **Reconciliation drift gauges** — orphan counts in both directions
 - **Last reconciliation run** — time since the last successful job run
-- **Leader election** — optional: graph `freecloud_leader_election_is_leader` by
-  `job` / `instance` (panel not pre-provisioned yet; scrape + PromQL is enough)
+- **Leader election** — timeseries of `freecloud_leader_election_is_leader` by
+  `job` / `instance`
 
 ## Alert rules
 
@@ -54,6 +54,7 @@ Panels:
 | `ReconciliationDriftKeycloak` | warning | Keycloak orphans > 0 for > 30 min |
 | `ReconciliationDriftDB` | warning | DB orphans > 0 for > 30 min |
 | `ReconciliationJobStale` | warning | Last run timestamp > 1 hour ago |
+| `LeaderlessBackgroundJob` | warning | `sum by (job) (freecloud_leader_election_is_leader) == 0` for 15m |
 
 ## Running the observability stack
 

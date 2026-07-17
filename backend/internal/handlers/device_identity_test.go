@@ -265,3 +265,25 @@ func TestSafePrefix(t *testing.T) {
 		}
 	}
 }
+
+func TestDeviceCookieSigningSecretPrefersDedicatedSecret(t *testing.T) {
+	h := NewHandler(nil, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	h.SetFleetWebhookSecret("fleet-secret")
+	if got := h.deviceCookieSigningSecret(); got != "fleet-secret" {
+		t.Fatalf("fallback: got %q", got)
+	}
+	h.SetDeviceCookieSecret("cookie-secret")
+	if got := h.deviceCookieSigningSecret(); got != "cookie-secret" {
+		t.Fatalf("dedicated: got %q", got)
+	}
+	val, err := MintDeviceCookieValue("host-1", h.deviceCookieSigningSecret(), time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ParseAndVerifyDeviceCookie(val, "fleet-secret", time.Now().UTC()); ok {
+		t.Fatal("fleet secret must not verify cookie signed with dedicated secret")
+	}
+	if host, ok := ParseAndVerifyDeviceCookie(val, "cookie-secret", time.Now().UTC()); !ok || host != "host-1" {
+		t.Fatalf("dedicated secret verify failed: ok=%v host=%q", ok, host)
+	}
+}

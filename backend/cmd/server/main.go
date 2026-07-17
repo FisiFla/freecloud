@@ -353,6 +353,7 @@ func runServer() {
 	// Create handler
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
 	handler.SetFleetWebhookSecret(cfg.FleetWebhookSecret)
+	handler.SetDeviceCookieSecret(cfg.DeviceCookieSecret)
 	handler.SetSCIMBearerToken(cfg.SCIMBearerToken)
 	handler.SetAccessEvalToken(cfg.AccessEvalToken)
 	handler.SetReconciler(rec)

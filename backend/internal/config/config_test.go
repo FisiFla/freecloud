@@ -178,6 +178,21 @@ func TestValidateProductionMissingAccessEvalToken(t *testing.T) {
 	}
 }
 
+func TestDeviceCookieSigningSecretFallback(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("FLEET_WEBHOOK_SECRET", "fleet-secret")
+	t.Setenv("DEVICE_COOKIE_SECRET", "")
+	cfg := Load()
+	if got := cfg.DeviceCookieSigningSecret(); got != "fleet-secret" {
+		t.Fatalf("empty DEVICE_COOKIE_SECRET: want fleet webhook secret, got %q", got)
+	}
+	t.Setenv("DEVICE_COOKIE_SECRET", "cookie-only")
+	cfg = Load()
+	if got := cfg.DeviceCookieSigningSecret(); got != "cookie-only" {
+		t.Fatalf("set DEVICE_COOKIE_SECRET: want dedicated secret, got %q", got)
+	}
+}
+
 // B1 (v1.7 HA): REDIS_URL must be required in production so a multi-replica
 // deployment can never silently fall back to per-replica in-memory rate
 // limiting (see docs/adr/0004-multi-instance-ha.md).

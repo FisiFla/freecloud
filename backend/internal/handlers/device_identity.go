@@ -193,9 +193,13 @@ func (h *Handler) SetDeviceIdentityCookie(w http.ResponseWriter, r *http.Request
 }
 
 // deviceCookieSigningSecret returns the HMAC key for freecloud-device-id.
-// Prefer FLEET_WEBHOOK_SECRET (already required in production and injected on
-// the handler); empty means signing/verification is unavailable.
+// Prefer a dedicated deviceCookieSecret when configured; otherwise fall back
+// to fleetWebhookSecret so existing deploys keep working without a new env.
+// Empty means signing/verification is unavailable.
 func (h *Handler) deviceCookieSigningSecret() string {
+	if h.deviceCookieSecret != "" {
+		return h.deviceCookieSecret
+	}
 	return h.fleetWebhookSecret
 }
 

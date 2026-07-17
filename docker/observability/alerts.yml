@@ -115,3 +115,21 @@ groups:
           description: >
             The last successful reconciliation run was more than 1 hour ago.
             The job may be stuck or disabled unexpectedly.
+
+      # ── Leader election (HA) ───────────────────────────────────────────────
+
+      # Fires when every scraped backend reports is_leader=0 for a job label.
+      # Does not fire if the metric series is absent (covered by BackendDown).
+      - alert: LeaderlessBackgroundJob
+        expr: >
+          sum by (job) (freecloud_leader_election_is_leader) == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No FreeCloud replica is leader for job {{ $labels.job }}"
+          description: >
+            freecloud_leader_election_is_leader sums to 0 for job
+            {{ $labels.job }} for 15 minutes. Background work for that job
+            is not running. Check advisory locks, DB pool exhaustion, and
+            replica health.
