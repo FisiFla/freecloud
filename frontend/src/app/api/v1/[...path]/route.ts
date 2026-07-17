@@ -54,6 +54,10 @@ function sanitizePathParts(pathParts: string[]): string | null {
     if (!seg || seg === "." || seg === ".." || seg.includes("/") || seg.includes("\\")) {
       return null;
     }
+    // Bound segment length so the BFF cannot be used to smuggle huge path blobs.
+    if (seg.length > 256) {
+      return null;
+    }
     // Reject encoded-dot tricks that survived a single decode.
     const lower = seg.toLowerCase();
     if (lower === "%2e" || lower === "%2e%2e") return null;
