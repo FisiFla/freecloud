@@ -373,8 +373,8 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 
 	case "offboard":
 		userID := str("userId")
-		if userID == "" {
-			return fmt.Errorf("missing userId in offboard payload")
+		if err := ValidateUserID(userID); err != nil {
+			return fmt.Errorf("invalid userId in offboard payload: %w", err)
 		}
 		// C2: the approval-request payload carries a caller-supplied userId —
 		// verify it belongs to the approver's own org before touching Keycloak
