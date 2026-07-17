@@ -675,3 +675,33 @@ func TestListTeams_SortedByID(t *testing.T) {
 		t.Fatalf("expected sorted IDs 10,20,30 got %+v", resp.Data.Teams)
 	}
 }
+
+func TestRequireFleetTeam_SystemAdminBypassesMapping(t *testing.T) {
+	// System admin must not hit fleet_team_orgs SELECT for ownership.
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if strings.Contains(sql, "fleet_team_orgs") {
+				t.Fatal("system admin must not query fleet_team_orgs for ownership")
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	assigned := false
+	f := &fakeFleet{
+		assignPolicyToTeamFn: func(ctx context.Context, teamID int, policyID string) error {
+			assigned = true
+			return nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
+	body, _ := json.Marshal(AssignTeamPolicyRequest{PolicyID: "pol"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/999/policies", bytes.NewReader(body))
+	req = withTeamID(req, "999")
+	req = withOrgAdminCtx(req) // super-admin
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.AssignTeamPolicy(rec, req)
+	if rec.Code != http.StatusOK || !assigned {
+		t.Fatalf("system admin bypass: code=%d assigned=%v body=%s", rec.Code, assigned, rec.Body.String())
+	}
+}
