@@ -47,13 +47,12 @@ func TestI10_RemoteLockWithMessage_RejectsLongMessage(t *testing.T) {
 	// Production: message length gate before Fleet IssueLockWithMessage.
 	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
-	body, _ := json.Marshal(map[string]string{"message": string(make([]byte, maxLockMessageLen+1))})
-	// fill with 'x' (make gives NUL which would trip control-char first)
+	// Use printable 'x' — NUL would trip control-char reject before length.
 	msg := make([]byte, maxLockMessageLen+1)
 	for i := range msg {
 		msg[i] = 'x'
 	}
-	body, _ = json.Marshal(map[string]string{"message": string(msg)})
+	body, _ := json.Marshal(map[string]string{"message": string(msg)})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/h1/lock-message", bytes.NewReader(body))
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("id", "h1")
