@@ -142,6 +142,10 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Description = strings.TrimSpace(req.Description)
+	if err := ValidateTeamDescription(req.Description); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if len(req.Description) > 500 {
 		respondError(w, http.StatusBadRequest, "description must be ≤ 500 characters")
 		return
