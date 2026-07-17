@@ -301,8 +301,8 @@ func (h *Handler) AddOrgMember(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var valErrs []ValidationError
-	if !isValidUUID(req.UserID) {
-		valErrs = append(valErrs, ValidationError{Field: "userId", Message: "userId must be a valid UUID"})
+	if err := ValidateUserID(req.UserID); err != nil {
+		valErrs = append(valErrs, ValidationError{Field: "userId", Message: err.Error()})
 	}
 	if req.Role != "org-admin" && req.Role != "member" {
 		valErrs = append(valErrs, ValidationError{Field: "role", Message: "role must be org-admin or member"})
