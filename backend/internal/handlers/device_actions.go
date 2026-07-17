@@ -33,8 +33,9 @@ func (h *Handler) requireDeviceInCallerOrg(w http.ResponseWriter, r *http.Reques
 // Route: POST /api/v1/devices/{id}/lock (requires PermManageDevices).
 func (h *Handler) RemoteLock(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
-	if deviceID == "" {
-		respondError(w, http.StatusBadRequest, "device id is required")
+	// Same host-id grammar as MoveHostToTeam — reject path/control/hidden ids early.
+	if err := ValidateHostID(deviceID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
