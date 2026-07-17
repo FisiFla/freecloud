@@ -38,6 +38,32 @@ To rotate, delete `.secrets/secrets.env` and run `make prod-up` again. The
 `KEYCLOAK_CLIENT_SECRET` is self-managed by the Epic A bootstrap and is not
 stored in `.secrets/secrets.env`.
 
+### Optional: `DEVICE_COOKIE_SECRET`
+
+Set in `.secrets/secrets.env` or the environment to HMAC-sign device-identity
+cookies independently of `FLEET_WEBHOOK_SECRET`. Unset = fall back to the
+Fleet webhook secret (see `docs/SECRETS.md`).
+
+### Fleet teams multi-tenant mapping (`fleet_team_orgs`)
+
+New teams created via FreeCloud are recorded in `fleet_team_orgs` and
+namespaced `{org_id}/{name}` in Fleet. Non–system-admins only list/mutate
+mapped teams.
+
+**Backfill unmapped legacy Fleet teams** into the Default Org (operator SQL,
+run against FreeCloud Postgres after Migration046):
+
+```sql
+-- Example: map known Fleet team IDs into the default organization.
+-- Replace (1),(2) with real Fleet team IDs from your Fleet UI/API.
+INSERT INTO fleet_team_orgs (fleet_team_id, org_id, team_name)
+VALUES
+  (1, '00000000-0000-0000-0000-000000000001', 'legacy-team-1'),
+  (2, '00000000-0000-0000-0000-000000000001', 'legacy-team-2')
+ON CONFLICT (fleet_team_id) DO UPDATE
+  SET org_id = EXCLUDED.org_id, team_name = EXCLUDED.team_name;
+```
+
 ### Fleet, SMTP, and Identity Providers
 
 These are configured **in-app** after first login — not via environment variables:

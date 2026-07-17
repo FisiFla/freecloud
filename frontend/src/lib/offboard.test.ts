@@ -42,6 +42,8 @@ describe("offboardUser (privileged API)", () => {
     const [url, init] = fetchSpy.mock.calls[0];
     expect(String(url)).toContain("/api/v1/offboard/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
     expect((init as RequestInit).method).toBe("POST");
+    // BFF same-origin path — must not hit an absolute NEXT_PUBLIC_API_URL host.
+    expect(String(url).startsWith("http")).toBe(false);
   });
 
   it("throws ApiError when backend returns non-success", async () => {

@@ -375,3 +375,104 @@ func TestCreateTeam_NameTooLong(t *testing.T) {
 		t.Errorf("expected 400 for long name, got %d", rec.Code)
 	}
 }
+
+func TestAssignTeamPolicy_ForeignOrgForbidden(t *testing.T) {
+	// Non–system-admin with no fleet_team_orgs row → 404 (not leak).
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	f := &fakeFleet{
+		assignPolicyToTeamFn: func(ctx context.Context, teamID int, policyID string) error {
+			t.Fatal("Fleet AssignPolicyToTeam must not be called for foreign team")
+			return nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
+	body, _ := json.Marshal(AssignTeamPolicyRequest{PolicyID: "pol-x"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/99/policies", bytes.NewReader(body))
+	req = withTeamID(req, "99")
+	ctx := middleware.SetClaims(req.Context(), &middleware.JWTClaims{Sub: "u1", Role: middleware.RoleHelpdesk})
+	ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{OrgID: middleware.DefaultOrgID, Role: "member"})
+	req = req.WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.AssignTeamPolicy(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unmapped team, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMoveHostToTeam_ForeignOrgForbidden(t *testing.T) {
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	f := &fakeFleet{
+		moveHostToTeamFn: func(ctx context.Context, teamID int, hostIDs []string) error {
+			t.Fatal("Fleet MoveHostToTeam must not be called for foreign team")
+			return nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
+	body, _ := json.Marshal(MoveHostRequest{HostIDs: []string{"host-1"}})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/99/hosts", bytes.NewReader(body))
+	req = withTeamID(req, "99")
+	ctx := middleware.SetClaims(req.Context(), &middleware.JWTClaims{Sub: "u1", Role: middleware.RoleHelpdesk})
+	ctx = middleware.SetOrgContext(ctx, &middleware.OrgContext{OrgID: middleware.DefaultOrgID, Role: "member"})
+	req = req.WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.MoveHostToTeam(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unmapped team, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestListTeams_SystemAdminSeesUnmapped(t *testing.T) {
+	// System admin must not be filtered by fleet_team_orgs.
+	db := &fakeDB{
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			t.Fatal("system admin ListTeams must not query fleet_team_orgs filter path")
+			return &fakeQueryRows{}, nil
+		},
+	}
+	f := &fakeFleet{
+		listTeamsFn: func(ctx context.Context) ([]fleet.Team, error) {
+			return []fleet.Team{{ID: 1, Name: "a"}, {ID: 2, Name: "b"}}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil)
+	req = req.WithContext(middleware.SetClaims(req.Context(), &middleware.JWTClaims{Sub: "admin", Role: middleware.RoleSuperAdmin}))
+	rec := httptest.NewRecorder()
+	h.ListTeams(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp struct {
+		Data ListTeamsResponse `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Teams) != 2 {
+		t.Fatalf("system admin should see all teams, got %d", len(resp.Data.Teams))
+	}
+}
+
+func TestCreateTeam_NoOrgContext(t *testing.T) {
+	h := setupTestHandler(t)
+	body, _ := json.Marshal(CreateTeamRequest{Name: "X"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	// claims without org context
+	req = req.WithContext(middleware.SetClaims(req.Context(), &middleware.JWTClaims{Sub: "admin", Role: middleware.RoleSuperAdmin}))
+	rec := httptest.NewRecorder()
+	h.CreateTeam(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 without org context, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
