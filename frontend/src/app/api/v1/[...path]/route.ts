@@ -40,9 +40,13 @@ const PUBLIC_BACKEND_PATHS = new Set([
   "/setup/status",
 ]);
 
+/** Max path segments under /api/v1 (defense against oversized BFF fan-out). */
+const MAX_PATH_SEGMENTS = 16;
+
 /** Reject path segments that could escape /api/v1 via .. or empty components. */
 function sanitizePathParts(pathParts: string[]): string | null {
   if (pathParts.length === 0) return null;
+  if (pathParts.length > MAX_PATH_SEGMENTS) return null;
   const decoded: string[] = [];
   for (const part of pathParts) {
     let seg: string;
