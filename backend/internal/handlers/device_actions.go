@@ -504,8 +504,8 @@ func (h *Handler) RemoteRestart(w http.ResponseWriter, r *http.Request) {
 // Route: POST /api/v1/devices/{id}/lock-message (requires PermManageDevices).
 func (h *Handler) RemoteLockWithMessage(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
-	if deviceID == "" {
-		respondError(w, http.StatusBadRequest, "device id is required")
+	if err := ValidateHostID(deviceID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
@@ -550,8 +550,8 @@ func (h *Handler) RemoteLockWithMessage(w http.ResponseWriter, r *http.Request) 
 // Route: POST /api/v1/devices/{id}/clear-passcode (requires PermManageDevices).
 func (h *Handler) RemoteClearPasscode(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "id")
-	if deviceID == "" {
-		respondError(w, http.StatusBadRequest, "device id is required")
+	if err := ValidateHostID(deviceID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if !h.requireDeviceInCallerOrg(w, r, deviceID) {
