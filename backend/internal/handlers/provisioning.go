@@ -650,12 +650,9 @@ func validateOutboundEndpointURL(raw string) error {
 	case "https":
 		// always ok
 	case "http":
+		// HTTP only in development/test (compose mocks rarely terminate TLS).
 		if !devOrTest {
 			return fmt.Errorf("endpointUrl must use https")
-		}
-		// allow http only for localhost-style hosts in dev/test
-		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-			return fmt.Errorf("endpointUrl http is only allowed for localhost in development/test")
 		}
 	default:
 		return fmt.Errorf("endpointUrl scheme must be https")
@@ -695,11 +692,11 @@ func validateOutboundEndpointURL(raw string) error {
 
 func isBlockedOutboundIP(ip net.IP) bool {
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		// Allow loopback only when APP_ENV is development/test (http localhost
-		// path above). For resolved IPs, still block loopback outside dev —
-		// and even in dev block non-loopback private ranges.
+		// In development/test, allow loopback and RFC1918 so compose services
+		// (scim-mock-e2e, etc.) can be used as provisioning endpoints. Outside
+		// those envs, all private/link-local destinations are blocked.
 		devOrTest := os.Getenv("APP_ENV") == "development" || os.Getenv("APP_ENV") == "test"
-		if devOrTest && ip.IsLoopback() {
+		if devOrTest && (ip.IsLoopback() || ip.IsPrivate()) {
 			return false
 		}
 		return true
