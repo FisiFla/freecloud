@@ -20,7 +20,7 @@ func ValidatePolicyID(id string) error {
 	return nil
 }
 
-// ValidateHostID rejects empty, overlong, path-like, or hidden host IDs.
+// ValidateHostID rejects empty, overlong, path-like, hidden, or control-bearing host IDs.
 func ValidateHostID(id string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -34,6 +34,11 @@ func ValidateHostID(id string) error {
 	}
 	if strings.HasPrefix(id, ".") {
 		return fmt.Errorf("host id must not start with '.'")
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("host id must not contain control characters")
+		}
 	}
 	return nil
 }
