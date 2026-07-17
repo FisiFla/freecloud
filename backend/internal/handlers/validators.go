@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// ValidatePolicyID rejects empty, overlong, or path-like Fleet policy IDs.
+// ValidatePolicyID rejects empty, overlong, path-like, or control-bearing Fleet policy IDs.
 func ValidatePolicyID(id string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -16,6 +16,11 @@ func ValidatePolicyID(id string) error {
 	}
 	if strings.ContainsAny(id, `/\`) || strings.Contains(id, "..") {
 		return fmt.Errorf("policyId must not contain path separators or '..'")
+	}
+	for _, r := range id {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("policyId must not contain control characters")
+		}
 	}
 	return nil
 }
