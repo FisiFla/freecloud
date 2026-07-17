@@ -36,14 +36,14 @@ type fakeRows struct {
 	err  error
 }
 
-func (r *fakeRows) Next() bool                                  { return r.idx < len(r.rows) }
-func (r *fakeRows) Err() error                                  { return r.err }
-func (r *fakeRows) Close()                                      {}
-func (r *fakeRows) CommandTag() pgconn.CommandTag               { return pgconn.CommandTag{} }
+func (r *fakeRows) Next() bool                                   { return r.idx < len(r.rows) }
+func (r *fakeRows) Err() error                                   { return r.err }
+func (r *fakeRows) Close()                                       {}
+func (r *fakeRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (r *fakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
-func (r *fakeRows) Values() ([]any, error)                      { return nil, nil }
-func (r *fakeRows) RawValues() [][]byte                         { return nil }
-func (r *fakeRows) Conn() *pgx.Conn                             { return nil }
+func (r *fakeRows) Values() ([]any, error)                       { return nil, nil }
+func (r *fakeRows) RawValues() [][]byte                          { return nil }
+func (r *fakeRows) Conn() *pgx.Conn                              { return nil }
 func (r *fakeRows) Scan(dest ...any) error {
 	if r.idx >= len(r.rows) {
 		return errors.New("no more rows")
@@ -269,5 +269,37 @@ func TestPoll_CursorReadError(t *testing.T) {
 	s.poll(context.Background()) // should not panic
 	if sink.calls.Load() != 0 {
 		t.Error("expected no sink calls on cursor read error")
+	}
+}
+
+func TestStreamer_LeaderGateSkipsPoll(t *testing.T) {
+	// When isLeader returns false, Start must not advance the cursor / send.
+	sink := &fakeSink{}
+	queryCalled := atomic.Bool{}
+	pool := &fakePool{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			queryCalled.Store(true)
+			return fakeRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*int64)) = 0
+				return nil
+			}}
+		},
+		queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+			queryCalled.Store(true)
+			return &fakeRows{}, nil
+		},
+	}
+	s := New(pool, sink, zaptest.NewLogger(t))
+	s.SetLeaderGate(func() bool { return false })
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Start(ctx, 15*time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+	if queryCalled.Load() {
+		t.Fatal("expected no DB poll while not leader")
+	}
+	if sink.calls.Load() != 0 {
+		t.Fatalf("expected 0 sink sends, got %d", sink.calls.Load())
 	}
 }
