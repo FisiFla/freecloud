@@ -399,6 +399,7 @@ func (h *Handler) StartReviewScheduleRunner(ctx context.Context, interval time.D
 				return
 			case <-ticker.C:
 				if isLeader != nil && !isLeader() {
+					h.logger.Debug("review schedules: skipping tick, not leader")
 					continue
 				}
 				n := h.RunDueReviewSchedules(ctx)
