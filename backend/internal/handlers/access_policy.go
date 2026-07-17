@@ -40,8 +40,8 @@ type AppAccessPolicy struct {
 // Returns the zero-value policy (no requirements) if none has been set.
 func (h *Handler) GetAppAccessPolicy(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
-	if appID == "" {
-		respondError(w, http.StatusBadRequest, "appId is required")
+	if err := ValidateOpaqueID(appID, "appId"); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -104,8 +104,8 @@ type UpsertAppAccessPolicyRequest struct {
 // UpsertAppAccessPolicy creates or replaces the posture policy for an app.
 func (h *Handler) UpsertAppAccessPolicy(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
-	if appID == "" {
-		respondError(w, http.StatusBadRequest, "appId is required")
+	if err := ValidateOpaqueID(appID, "appId"); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
