@@ -58,3 +58,39 @@ describe("offboardUser (privileged API)", () => {
     await expect(offboardUser("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")).rejects.toBeInstanceOf(ApiError);
   });
 });
+
+describe("requireMFA (privileged API)", () => {
+  const origFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    global.fetch = origFetch;
+  });
+
+  it("POSTs same-origin BFF path with MFA type body", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          success: true,
+          data: { userId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", action: "require", set: true },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const { requireMFA } = await import("./api");
+    const res = await requireMFA("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "totp");
+    expect(res.set).toBe(true);
+
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(String(url)).toBe("/api/v1/users/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa/require-mfa");
+    expect((init as RequestInit).method).toBe("POST");
+    expect(String(url).startsWith("http")).toBe(false);
+    const body = JSON.parse(String((init as RequestInit).body));
+    expect(body.type).toBe("totp");
+  });
+});

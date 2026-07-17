@@ -138,6 +138,19 @@ describe("BFF proxy route (app/api/v1/[...path])", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects double-encoded path traversal segments", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    // %2e%2e decodes to ".." — sanitizePathParts must reject after decode.
+    const res = await GET(makeRequest("http://localhost/api/v1/%2e%2e/metrics"), {
+      params: Promise.resolve({ path: ["%2e%2e", "metrics"] }),
+    });
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("forwards Content-Disposition so browser downloads work through the BFF", async () => {
     getTokenMock.mockResolvedValue({ accessToken: "tok" });
     global.fetch = vi.fn().mockResolvedValue(
