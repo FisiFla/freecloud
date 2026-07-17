@@ -334,3 +334,9 @@ func TestStreamer_LeaderGateRunsPollWhenLeader(t *testing.T) {
 		t.Fatal("expected at least one sink send while leader")
 	}
 }
+
+func TestJ06_PollBatchSizeConstant(t *testing.T) {
+	if pollBatchSize != 100 {
+		t.Fatalf("pollBatchSize=%d want 100", pollBatchSize)
+	}
+}
