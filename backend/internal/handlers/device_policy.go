@@ -217,8 +217,8 @@ func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.PolicyID = strings.TrimSpace(req.PolicyID)
-	if req.PolicyID == "" {
-		respondError(w, http.StatusBadRequest, "policyId is required")
+	if err := ValidatePolicyID(req.PolicyID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
