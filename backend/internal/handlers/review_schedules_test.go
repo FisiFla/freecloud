@@ -9,6 +9,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 func chiCtxWithIDParam(r *http.Request, val string) *http.Request {
@@ -99,5 +104,44 @@ func TestNextRunFromCadence(t *testing.T) {
 		if !got.After(now) {
 			t.Errorf("cadence %q: next run %v not after now", c, got)
 		}
+	}
+}
+
+func TestFireReviewScheduleCreatesCampaign(t *testing.T) {
+	// Production path: fireReviewSchedule advances schedule + inserts campaign in one tx.
+	var campaignInserted bool
+	var scheduleUpdated bool
+	tx := &fakeTx{
+		execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			if strings.Contains(sql, "UPDATE review_schedules") {
+				scheduleUpdated = true
+				return pgconn.NewCommandTag("UPDATE 1"), nil
+			}
+			if strings.Contains(sql, "INSERT INTO review_items") {
+				return pgconn.NewCommandTag("INSERT 0 0"), nil
+			}
+			return pgconn.NewCommandTag("INSERT 0 1"), nil
+		},
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if strings.Contains(sql, "INSERT INTO review_campaigns") {
+				campaignInserted = true
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*string)) = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+					return nil
+				}}
+			}
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	db := &fakeDB{
+		beginFn: func(ctx context.Context) (pgx.Tx, error) { return tx, nil },
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	err := h.fireReviewSchedule(context.Background(), "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Q1", "monthly", middleware.DefaultOrgID, "actor-1")
+	if err != nil {
+		t.Fatalf("fireReviewSchedule: %v", err)
+	}
+	if !scheduleUpdated || !campaignInserted {
+		t.Fatalf("scheduleUpdated=%v campaignInserted=%v", scheduleUpdated, campaignInserted)
 	}
 }
