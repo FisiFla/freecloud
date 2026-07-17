@@ -550,8 +550,8 @@ func (h *Handler) ListAuditLogs(w http.ResponseWriter, r *http.Request) {
 // GET /api/v1/apps/{appId}/saml/idp-url — requires PermReadApps.
 func (h *Handler) GetSAMLIdPInitiatedURL(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
-	if appID == "" {
-		respondError(w, http.StatusBadRequest, "appId is required")
+	if err := ValidateOpaqueID(appID, "appId"); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if h.db == nil {
