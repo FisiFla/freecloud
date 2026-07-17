@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -114,6 +115,8 @@ func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 		}
 		teams = filtered
 	}
+	// Stable order for clients/tests regardless of Fleet API ordering.
+	sort.Slice(teams, func(i, j int) bool { return teams[i].ID < teams[j].ID })
 
 	respondJSON(w, http.StatusOK, ListTeamsResponse{Teams: teams})
 }

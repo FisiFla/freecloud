@@ -650,3 +650,28 @@ func TestListTeams_NonAdminNoOrgForbidden(t *testing.T) {
 		t.Fatalf("expected 403 without org context, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestListTeams_SortedByID(t *testing.T) {
+	f := &fakeFleet{
+		listTeamsFn: func(ctx context.Context) ([]fleet.Team, error) {
+			return []fleet.Team{{ID: 30, Name: "c"}, {ID: 10, Name: "a"}, {ID: 20, Name: "b"}}, nil
+		},
+	}
+	h := NewHandler(nil, &fakeKeycloak{}, f, zap.NewNop())
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil)
+	req = req.WithContext(middleware.SetClaims(req.Context(), &middleware.JWTClaims{Sub: "admin", Role: middleware.RoleSuperAdmin}))
+	rec := httptest.NewRecorder()
+	h.ListTeams(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Data ListTeamsResponse `json:"data"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Data.Teams) != 3 || resp.Data.Teams[0].ID != 10 || resp.Data.Teams[1].ID != 20 || resp.Data.Teams[2].ID != 30 {
+		t.Fatalf("expected sorted IDs 10,20,30 got %+v", resp.Data.Teams)
+	}
+}
