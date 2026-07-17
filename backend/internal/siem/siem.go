@@ -144,6 +144,9 @@ func (s *Streamer) SetLeaderGate(isLeader func() bool) {
 	s.isLeader = isLeader
 }
 
+// pollBatchSize caps audit rows fetched per SIEM poll tick.
+const pollBatchSize = 100
+
 // poll reads the cursor, fetches new audit_log rows (by seq), sends them to
 // the sink, and advances the cursor on success. FAIL-SOFT: a send error
 // leaves the cursor unchanged so the next poll retries.
@@ -161,7 +164,7 @@ func (s *Streamer) poll(ctx context.Context) {
 		FROM audit_logs
 		WHERE seq > $1
 		ORDER BY seq ASC
-		LIMIT 100`, lastSeq)
+		LIMIT $2`, lastSeq, pollBatchSize)
 	if err != nil {
 		s.logger.Warn("siem: failed to query audit_logs", zap.Error(err))
 		return
