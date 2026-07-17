@@ -194,7 +194,7 @@ func (h *Handler) SCIMOrgBearerMiddleware(db scimOrgTokenDB) func(http.Handler) 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			pathOrgID := chi.URLParam(r, "orgID")
-			if !isValidUUID(pathOrgID) {
+			if err := ValidateUserID(pathOrgID); err != nil {
 				scimRespondError(w, http.StatusNotFound, "unknown organization", "")
 				return
 			}
@@ -376,7 +376,7 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 // SCIMGetUser handles GET /scim/v2/Users/{id}
 func (h *Handler) SCIMGetUser(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" {
+	if err := ValidateUserID(userID); err != nil {
 		scimRespondError(w, http.StatusBadRequest, "id is required", "invalidValue")
 		return
 	}
@@ -561,7 +561,7 @@ func (h *Handler) SCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 // SCIMPatchUser handles PATCH /scim/v2/Users/{id}
 func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" {
+	if err := ValidateUserID(userID); err != nil {
 		scimRespondError(w, http.StatusBadRequest, "id is required", "invalidValue")
 		return
 	}
@@ -760,7 +760,7 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 // SCIMDeleteUser handles DELETE /scim/v2/Users/{id} — maps to the offboard flow.
 func (h *Handler) SCIMDeleteUser(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
-	if userID == "" {
+	if err := ValidateUserID(userID); err != nil {
 		scimRespondError(w, http.StatusBadRequest, "id is required", "invalidValue")
 		return
 	}
@@ -943,7 +943,7 @@ func (h *Handler) SCIMListGroups(w http.ResponseWriter, r *http.Request) {
 // SCIMGetGroup handles GET /scim/v2/Groups/{id}
 func (h *Handler) SCIMGetGroup(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "id")
-	if groupID == "" {
+	if err := ValidateOpaqueID(groupID, "id"); err != nil {
 		scimRespondError(w, http.StatusBadRequest, "id is required", "invalidValue")
 		return
 	}
@@ -1092,7 +1092,7 @@ func (h *Handler) scimFilterUserIDsInOrg(ctx context.Context, groupID, orgID str
 // Supports: displayName replace, members add/remove.
 func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "id")
-	if groupID == "" {
+	if err := ValidateOpaqueID(groupID, "id"); err != nil {
 		scimRespondError(w, http.StatusBadRequest, "id is required", "invalidValue")
 		return
 	}
@@ -1267,7 +1267,7 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 // SCIMDeleteGroup handles DELETE /scim/v2/Groups/{id}
 func (h *Handler) SCIMDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "id")
-	if groupID == "" {
+	if err := ValidateOpaqueID(groupID, "id"); err != nil {
 		scimRespondError(w, http.StatusBadRequest, "id is required", "invalidValue")
 		return
 	}
