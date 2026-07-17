@@ -68,6 +68,10 @@ func (h *Handler) FleetEnrollmentCallback(w http.ResponseWriter, r *http.Request
 		respondError(w, http.StatusBadRequest, "enrollment_token and host_id are required")
 		return
 	}
+	if err := ValidateHostID(req.HostID); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
