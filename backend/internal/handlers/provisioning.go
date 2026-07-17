@@ -65,7 +65,8 @@ type ProvisioningStateEntry struct {
 // GetProvisioningConfig returns the provisioning config for an app.
 func (h *Handler) GetProvisioningConfig(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
-	if !isValidUUID(appID) {
+	if err := ValidateUserID(appID); err != nil {
+		// app ids are UUID PKs
 		respondError(w, http.StatusBadRequest, "invalid appId")
 		return
 	}
