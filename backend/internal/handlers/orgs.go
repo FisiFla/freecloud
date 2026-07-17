@@ -282,7 +282,7 @@ type AddOrgMemberRequest struct {
 // AddOrgMember handles POST /api/v1/orgs/{orgId}/members.
 func (h *Handler) AddOrgMember(w http.ResponseWriter, r *http.Request) {
 	orgID := chi.URLParam(r, "orgId")
-	if !isValidUUID(orgID) {
+	if err := ValidateUserID(orgID); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid organization id")
 		return
 	}
