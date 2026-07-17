@@ -241,6 +241,7 @@ func (s *Streamer) Start(ctx context.Context, interval time.Duration) {
 				return
 			case <-ticker.C:
 				if s.isLeader != nil && !s.isLeader() {
+					s.logger.Debug("siem: skipping poll, not leader")
 					continue
 				}
 				s.poll(ctx)

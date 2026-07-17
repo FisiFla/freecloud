@@ -303,3 +303,34 @@ func TestStreamer_LeaderGateSkipsPoll(t *testing.T) {
 		t.Fatalf("expected 0 sink sends, got %d", sink.calls.Load())
 	}
 }
+
+func TestStreamer_LeaderGateRunsPollWhenLeader(t *testing.T) {
+	sink := &fakeSink{}
+	now := time.Now()
+	pool := &fakePool{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*int64)) = 0
+				return nil
+			}}
+		},
+		queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+			return &fakeRows{rows: [][]any{
+				{int64(1), "id", "a", "act", "t", "tid", "{}", now},
+			}}, nil
+		},
+		execFn: func(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+			return pgconn.CommandTag{}, nil
+		},
+	}
+	s := New(pool, sink, zaptest.NewLogger(t))
+	s.SetLeaderGate(func() bool { return true })
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Start(ctx, 15*time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+	if sink.calls.Load() < 1 {
+		t.Fatal("expected at least one sink send while leader")
+	}
+}
