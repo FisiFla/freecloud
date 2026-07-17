@@ -220,6 +220,17 @@ describe("BFF proxy route (app/api/v1/[...path])", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects path segments with leading or trailing whitespace", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy as unknown as typeof fetch;
+    const res = await GET(makeRequest("http://localhost/api/v1/users"), {
+      params: Promise.resolve({ path: [" users"] }),
+    });
+    expect(res.status).toBe(400);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("forwards Content-Disposition so browser downloads work through the BFF", async () => {
     getTokenMock.mockResolvedValue({ accessToken: "tok" });
     global.fetch = vi.fn().mockResolvedValue(
