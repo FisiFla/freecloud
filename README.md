@@ -237,6 +237,7 @@ APP_ENV=production ALLOW_DEV_SETUP=true CREATE_DEMO_USER=false make kc-setup
 - [docs/QUICKSTART.md](docs/QUICKSTART.md) — zero-to-running in under 5 minutes.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — system design, data flows, and security model.
 - [docs/API.md](docs/API.md) — full REST API reference and environment variable table.
+- [docs/PILOT_GO_LIVE.md](docs/PILOT_GO_LIVE.md) — pilot go-live checklist and tenant limits.
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — production deployment, environment
   reference, upgrades, and troubleshooting.
 - [docs/BACKUP_RESTORE.md](docs/BACKUP_RESTORE.md) — backup scripts, restore
