@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -33,6 +34,36 @@ type Software struct {
 // enrollCounter makes each issued enrollment token (and simulated host) unique
 // so repeated onboardings don't collide on the token primary key.
 var enrollCounter int64
+
+// In-memory Fleet teams for CreateTeam → ListTeams multi-tenant e2e.
+var (
+	teamMu     sync.Mutex
+	teamNextID = 1
+	teams      = []map[string]interface{}{
+		{"id": 1, "name": "Default", "description": "Default team"},
+	}
+)
+
+func listTeams() []map[string]interface{} {
+	teamMu.Lock()
+	defer teamMu.Unlock()
+	out := make([]map[string]interface{}, len(teams))
+	copy(out, teams)
+	return out
+}
+
+func createTeam(name, description string) map[string]interface{} {
+	teamMu.Lock()
+	defer teamMu.Unlock()
+	teamNextID++
+	tm := map[string]interface{}{
+		"id":          teamNextID,
+		"name":        name,
+		"description": description,
+	}
+	teams = append(teams, tm)
+	return tm
+}
 
 func main() {
 	http.HandleFunc("/api/v1/fleet/", func(w http.ResponseWriter, r *http.Request) {
@@ -103,16 +134,20 @@ func main() {
 			}
 
 		case path == "/teams" || path == "/teams/":
+			// Persist teams so CreateTeam → ListTeams e2e (fleet_team_orgs) works.
 			if r.Method == "GET" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"teams": []map[string]interface{}{
-						{"id": 1, "name": "Default", "description": "Default team"},
-					},
-				})
+				json.NewEncoder(w).Encode(map[string]interface{}{"teams": listTeams()})
 			} else if r.Method == "POST" {
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"team": map[string]interface{}{"id": 2, "name": "e2e-team"},
-				})
+				var body struct {
+					Name        string `json:"name"`
+					Description string `json:"description"`
+				}
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				if body.Name == "" {
+					body.Name = "e2e-team"
+				}
+				tm := createTeam(body.Name, body.Description)
+				json.NewEncoder(w).Encode(map[string]interface{}{"team": tm})
 			} else {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 			}
