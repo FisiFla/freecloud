@@ -19,6 +19,12 @@ function isStaticPath(pathname: string): boolean {
   return pathname.startsWith("/_next/") || pathname === "/favicon.ico";
 }
 
+// Nonce-based CSP (see next.config.js comment: "tighten to nonces in a later
+// pass" — this is that pass). The policy builder lives in src/lib/csp.ts
+// (dependency-free, unit-tested); the nonce is generated below and exposed
+// as `x-nonce` for layout.tsx.
+import { buildCsp } from "@/lib/csp";
+
 // checkProvisioned calls the backend setup-status endpoint.
 // Fails open (returns true = provisioned) on network errors so that
 // connectivity issues do not redirect every user to /setup.
@@ -58,23 +64,33 @@ export default auth(async (request: NextAuthRequest) => {
     return NextResponse.next();
   }
 
+  // Nonce-based CSP for every HTML page response. The nonce is also exposed
+  // via the `x-nonce` response header so layout.tsx can apply it to the
+  // inline dark-mode script.
+  const nonce = crypto.randomUUID();
+  const cspResponse = (res: NextResponse): NextResponse => {
+    res.headers.set("Content-Security-Policy", buildCsp(nonce));
+    res.headers.set("x-nonce", nonce);
+    return res;
+  };
+
   // /setup path — if already provisioned, redirect to home.
   if (pathname === "/setup" || pathname.startsWith("/setup/")) {
     const provisioned = await checkProvisioned();
     if (provisioned) {
-      return NextResponse.redirect(new URL("/", request.url));
+      return cspResponse(NextResponse.redirect(new URL("/", request.url)));
     }
-    return NextResponse.next();
+    return cspResponse(NextResponse.next());
   }
 
   if (isPublicPath(pathname)) {
-    return NextResponse.next();
+    return cspResponse(NextResponse.next());
   }
 
   // Not yet provisioned — send everyone to /setup regardless of auth state.
   const provisioned = await checkProvisioned();
   if (!provisioned) {
-    return NextResponse.redirect(new URL("/setup", request.url));
+    return cspResponse(NextResponse.redirect(new URL("/setup", request.url)));
   }
 
   // The actual fix: no session → bounce to /signin instead of letting the
@@ -82,10 +98,10 @@ export default auth(async (request: NextAuthRequest) => {
   if (!request.auth) {
     const signInUrl = new URL("/signin", request.url);
     signInUrl.searchParams.set("callbackUrl", pathname);
-    return NextResponse.redirect(signInUrl);
+    return cspResponse(NextResponse.redirect(signInUrl));
   }
 
-  return NextResponse.next();
+  return cspResponse(NextResponse.next());
 });
 
 export const config = {

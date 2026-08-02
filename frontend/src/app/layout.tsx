@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { headers } from "next/headers";
 import "./globals.css";
 import Sidebar from "@/components/Sidebar";
 import { Providers } from "./providers";
@@ -15,15 +16,20 @@ export const metadata: Metadata = {
   description: "FreeCloud Dashboard",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // The middleware (src/proxy.ts) generates a per-request CSP nonce and
+  // exposes it as `x-nonce`; apply it to the inline dark-mode script so the
+  // strict production CSP (no 'unsafe-inline') still allows it.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
         <script
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html: `(function(){try{const d=localStorage.getItem('fc-dark-mode');if(d==='true'){document.documentElement.classList.add('dark')}else if(d==='false'){document.documentElement.classList.remove('dark')}else if(window.matchMedia('(prefers-color-scheme:dark)').matches){document.documentElement.classList.add('dark')}}catch(e){}})()`,
           }}
