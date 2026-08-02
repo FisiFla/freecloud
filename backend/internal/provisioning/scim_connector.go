@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/FisiFla/freecloud/backend/internal/httpx"
 )
 
 // SCIMConnector is a generic SCIM 2.0 outbound connector. It POSTs/PATCHes
@@ -33,12 +35,12 @@ func (s *SCIMConnector) Name() string { return "scim" }
 
 // scimUser is the SCIM 2.0 User resource payload.
 type scimUser struct {
-	Schemas    []string   `json:"schemas"`
-	UserName   string     `json:"userName"`
-	Name       scimName   `json:"name"`
+	Schemas    []string    `json:"schemas"`
+	UserName   string      `json:"userName"`
+	Name       scimName    `json:"name"`
 	Emails     []scimEmail `json:"emails"`
-	Department string     `json:"department,omitempty"`
-	Active     bool       `json:"active"`
+	Department string      `json:"department,omitempty"`
+	Active     bool        `json:"active"`
 }
 
 type scimName struct {
@@ -83,7 +85,7 @@ func (s *SCIMConnector) ProvisionUser(ctx context.Context, user ProvisionableUse
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
 		return "", fmt.Errorf("scim: provision user returned %d: %s", resp.StatusCode, string(raw))
 	}
 
@@ -118,7 +120,7 @@ func (s *SCIMConnector) DeprovisionUser(ctx context.Context, remoteID string) er
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
 		return fmt.Errorf("scim: deprovision returned %d: %s", resp.StatusCode, string(raw))
 	}
 	return nil
@@ -149,7 +151,7 @@ func (s *SCIMConnector) UpdateUser(ctx context.Context, remoteID string, user Pr
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
 		return fmt.Errorf("scim: update user returned %d: %s", resp.StatusCode, string(raw))
 	}
 	return nil

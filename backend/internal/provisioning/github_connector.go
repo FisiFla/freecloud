@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/FisiFla/freecloud/backend/internal/httpx"
 )
 
 // GitHubConnector provisions users by adding/removing them from a GitHub organization.
@@ -65,7 +67,7 @@ func (g *GitHubConnector) ProvisionUser(ctx context.Context, user ProvisionableU
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
 		return "", fmt.Errorf("github: add org member returned %d: %s", resp.StatusCode, string(raw))
 	}
 	return username, nil
@@ -81,7 +83,7 @@ func (g *GitHubConnector) DeprovisionUser(ctx context.Context, remoteID string) 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
 		return fmt.Errorf("github: remove org member returned %d: %s", resp.StatusCode, string(raw))
 	}
 	return nil

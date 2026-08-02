@@ -21,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/FisiFla/freecloud/backend/internal/httpx"
 	"github.com/FisiFla/freecloud/backend/internal/ops/fleetteams"
 )
 
@@ -43,7 +44,7 @@ func main() {
 		defer f.Close()
 		r = f
 	}
-	body, err := io.ReadAll(r)
+	body, err := httpx.ReadAllBounded(r, 0)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
