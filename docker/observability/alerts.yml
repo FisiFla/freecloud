@@ -133,3 +133,51 @@ groups:
             {{ $labels.job }} for 15 minutes. Background work for that job
             is not running. Check advisory locks, DB pool exhaustion, and
             replica health.
+
+      # ── Review schedule runner ─────────────────────────────────────────────
+
+      # Fires when no leader_ran tick happened in 4x the cadence window.
+      # A healthy runner increments freecloud_review_schedule_ticks_total
+      # with outcome="leader_ran" on every interval tick.
+      - alert: ReviewScheduleRunnerStalled
+        expr: >
+          (
+            increase(freecloud_review_schedule_ticks_total{outcome="leader_ran"}[15m])
+          ) == 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Review schedule runner has not executed a tick in 30 minutes"
+          description: >
+            freecloud_review_schedule_ticks_total{outcome="leader_ran"} did not
+            increase over the last 30 minutes. Due access-review campaigns are
+            not being created. Check StartReviewScheduleRunner wiring, the
+            leader election, and backend logs.
+
+      # Fires when the runner skips ticks because no replica holds leadership.
+      # A small skip rate is normal in multi-replica; a 100% skip rate for
+      # >1h means either no leader or a broken isLeader() gate.
+      - alert: ReviewScheduleRunnerSkipping
+        expr: >
+          (
+            sum by (job) (
+              increase(freecloud_review_schedule_ticks_total{outcome="skipped_not_leader"}[15m])
+            )
+          ) > 0
+            and
+            (
+              sum by (job) (
+                increase(freecloud_review_schedule_ticks_total{outcome="leader_ran"}[15m])
+              )
+            ) == 0
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Review schedule runner only skipping — no replica runs it"
+          description: >
+            For job {{ $labels.job }}, every tick for the last hour was
+            outcome="skipped_not_leader" with zero leader_ran ticks. No
+            replica holds leadership (or the isLeader() gate is broken).
+            Campaign firing is stalled.
