@@ -395,6 +395,7 @@ func (h *Handler) fireReviewSchedule(ctx context.Context, scheduleID, name, cade
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
+	IncReviewScheduleFired()
 	h.logger.Info("review schedules: created campaign",
 		zap.String("schedule_id", scheduleID),
 		zap.String("campaign_id", campaignID),
@@ -418,9 +419,11 @@ func (h *Handler) StartReviewScheduleRunner(ctx context.Context, interval time.D
 				return
 			case <-ticker.C:
 				if isLeader != nil && !isLeader() {
+					IncReviewScheduleTick("skipped_not_leader")
 					h.logger.Debug("review schedules: skipping tick, not leader")
 					continue
 				}
+				IncReviewScheduleTick("leader_ran")
 				n := h.RunDueReviewSchedules(ctx)
 				if n > 0 {
 					h.logger.Info("review schedules: fired due schedules", zap.Int("count", n))
