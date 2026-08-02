@@ -10,7 +10,7 @@ import { NextRequest } from "next/server";
 const { getTokenMock } = vi.hoisted(() => ({ getTokenMock: vi.fn() }));
 vi.mock("next-auth/jwt", () => ({ getToken: getTokenMock }));
 
-import { GET, POST } from "./route";
+import { GET, POST, readBoundedBody } from "./route";
 
 function makeRequest(url: string, init?: RequestInit): NextRequest {
   return new NextRequest(new Request(url, init));
@@ -261,5 +261,54 @@ describe("BFF proxy route (app/api/v1/[...path])", () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.get("content-disposition")).toBe('attachment; filename="audit.csv"');
+  });
+
+  it("returns 502 when the backend response exceeds the BFF size bound", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    // ~1 MiB of payload with a tiny env-tuned cap exercises the abort path
+    // without allocating 50 MiB.
+    process.env.BFF_MAX_RESPONSE_BYTES = "1024";
+    try {
+      const big = "x".repeat(1024 * 1024);
+      const fetchSpy = vi.fn().mockResolvedValue(
+        new Response(big, { status: 200, headers: { "content-type": "application/json" } }),
+      );
+      global.fetch = fetchSpy as unknown as typeof fetch;
+
+      const req = makeRequest("http://localhost/api/v1/users");
+      const res = await GET(req, { params: Promise.resolve({ path: ["users"] }) });
+
+      expect(res.status).toBe(502);
+      const body = await res.json();
+      expect(body.error).toContain("too large");
+    } finally {
+      delete process.env.BFF_MAX_RESPONSE_BYTES;
+    }
+  });
+});
+
+describe("readBoundedBody", () => {
+  it("returns the full body when under the limit", async () => {
+    const res = new Response("hello world");
+    const out = await readBoundedBody(res, 1024);
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(new TextDecoder().decode(out.bytes)).toBe("hello world");
+    }
+  });
+
+  it("aborts (ok:false) when the body exceeds the limit", async () => {
+    const res = new Response("this is way too long for a 4-byte limit");
+    const out = await readBoundedBody(res, 4);
+    expect(out.ok).toBe(false);
+  });
+
+  it("handles an empty body", async () => {
+    const res = new Response(null, { status: 204 });
+    const out = await readBoundedBody(res, 1024);
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      expect(out.bytes.byteLength).toBe(0);
+    }
   });
 });
