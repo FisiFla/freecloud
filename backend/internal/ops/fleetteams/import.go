@@ -2,9 +2,12 @@
 package fleetteams
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // MappingRow is one fleet_team_orgs backfill record (operator tooling).
@@ -87,4 +90,25 @@ func SQLInsert(row MappingRow) string {
 		strings.ReplaceAll(row.OrgID, "'", "''"),
 		strings.ReplaceAll(row.TeamName, "'", "''"),
 	)
+}
+
+// ApplyMappingsTx applies fleet_team_orgs mappings inside the given
+// transaction using parameterized upserts (no string interpolation into SQL).
+// It returns the number of rows applied. The caller is responsible for
+// Begin/Commit/Rollback so the whole backfill stays atomic.
+func ApplyMappingsTx(ctx context.Context, tx pgx.Tx, rows []MappingRow) (int, error) {
+	const upsert = `INSERT INTO fleet_team_orgs (fleet_team_id, org_id, team_name)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (fleet_team_id)
+		DO UPDATE SET org_id = EXCLUDED.org_id, team_name = EXCLUDED.team_name`
+	for i, row := range rows {
+		tag, err := tx.Exec(ctx, upsert, row.FleetTeamID, row.OrgID, row.TeamName)
+		if err != nil {
+			return i, fmt.Errorf("apply row %d (fleet_team_id %d): %w", i+1, row.FleetTeamID, err)
+		}
+		if tag.RowsAffected() == 0 {
+			return i, fmt.Errorf("apply row %d (fleet_team_id %d): no rows affected", i+1, row.FleetTeamID)
+		}
+	}
+	return len(rows), nil
 }
