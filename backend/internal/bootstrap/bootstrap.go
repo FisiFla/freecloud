@@ -7,13 +7,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Nerzal/gocloak/v13"
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/httpx"
 )
 
 // Config holds parameters for bootstrapping Keycloak.
@@ -471,7 +472,7 @@ func ensurePostureFlow(ctx context.Context, gc *gocloak.GoCloak, token string, c
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusConflict {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := httpx.ReadAllBounded(resp.Body, 0)
 		return fmt.Errorf("bootstrap: copy browser flow: status %d: %s", resp.StatusCode, string(b))
 	}
 	logger.Info("bootstrap: copied browser flow", zap.String("alias", cfg.PostureFlowAlias))
@@ -587,7 +588,7 @@ func lowerExecutionPriority(ctx context.Context, cfg Config, token, executionID 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := httpx.ReadAllBounded(resp.Body, 0)
 		return fmt.Errorf("lower-priority: status %d: %s", resp.StatusCode, string(b))
 	}
 	return nil
