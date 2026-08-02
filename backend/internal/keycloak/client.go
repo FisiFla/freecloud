@@ -17,6 +17,26 @@ import (
 	"go.uber.org/zap"
 )
 
+// maxKeycloakResponseBytes bounds how much of a Keycloak response the client
+// will buffer. SAML metadata XML can be a few hundred KB; error bodies are
+// small. 10 MiB is far beyond any legitimate payload while preventing a
+// compromised or misconfigured Keycloak from exhausting backend memory
+// (io.ReadAll would otherwise be unbounded).
+const maxKeycloakResponseBytes = 10 << 20 // 10 MiB
+
+// readBoundedResponse reads resp.Body up to maxKeycloakResponseBytes and
+// returns an error if the response is oversized.
+func readBoundedResponse(resp *http.Response) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxKeycloakResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
+	if len(body) > maxKeycloakResponseBytes {
+		return nil, fmt.Errorf("keycloak response too large (> %d bytes)", maxKeycloakResponseBytes)
+	}
+	return body, nil
+}
+
 // KeycloakClientInterface defines the operations used by handlers.
 type KeycloakClientInterface interface {
 	CreateUser(ctx context.Context, firstName, lastName, email, department string) (*CreateUserResult, error)
@@ -885,7 +905,7 @@ func (k *KeycloakClient) GetSAMLMetadataXML(ctx context.Context) (string, error)
 		return "", fmt.Errorf("fetch saml metadata: %w", err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBoundedResponse(resp)
 	if err != nil {
 		return "", fmt.Errorf("read saml metadata body: %w", err)
 	}
@@ -1447,7 +1467,7 @@ func (k *KeycloakClient) TestLDAPConnection(ctx context.Context, componentID, co
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := readBoundedResponse(resp)
 		return fmt.Errorf("test ldap connection: status %d: %s", resp.StatusCode, string(b))
 	}
 	return nil
@@ -1472,7 +1492,7 @@ func (k *KeycloakClient) TriggerFederationSync(ctx context.Context, componentID,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
+		b, _ := readBoundedResponse(resp)
 		return fmt.Errorf("trigger federation sync: status %d: %s", resp.StatusCode, string(b))
 	}
 	return nil
