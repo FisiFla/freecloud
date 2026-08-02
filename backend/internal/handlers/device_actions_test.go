@@ -31,6 +31,13 @@ func withAdminClaims(r *http.Request) *http.Request {
 	return r.WithContext(middleware.SetClaims(r.Context(), claims))
 }
 
+// withHelpdeskClaims injects fake helpdesk JWT claims (cycle-10 grant:
+// helpdesk = read + mutate within org).
+func withHelpdeskClaims(r *http.Request) *http.Request {
+	claims := &middleware.JWTClaims{Sub: "helpdesk-id", PreferredUsername: "helpdesk", Role: middleware.RoleHelpdesk}
+	return r.WithContext(middleware.SetClaims(r.Context(), claims))
+}
+
 // withOrgContext injects a resolved OrgContext (Epic C multi-tenant), as
 // OrgContextMiddleware would have set it, so device/user-scoped handlers'
 // org-ownership guard doesn't fail closed on "no organization context"
@@ -112,6 +119,41 @@ func TestRemoteLock_MissingDeviceID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+// TestRemoteLock_HelpdeskForeignOrgDevice404 locks in the composition of the
+// cycle-10 helpdesk grant with org isolation: a helpdesk caller in org A who
+// knows a device ID in org B must get 404 (indistinguishable from "doesn't
+// exist") and Fleet must never be called. Regression guard for the
+// "read + mutate WITHIN org" boundary.
+func TestRemoteLock_HelpdeskForeignOrgDevice404(t *testing.T) {
+	lockCalled := false
+	// Ownership query (`SELECT 1 ... org_id`) answers NOT found → foreign org.
+	db := &fakeDB{queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+	}}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
+		issueRemoteLockFn: func(_ context.Context, hostID string) error {
+			lockCalled = true
+			return nil
+		},
+	}, zap.NewNop())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/host-foreign/lock", nil)
+	req = chiCtxWithID(req, "id", "host-foreign")
+	req = withHelpdeskClaims(req)
+	req = withOrgContext(req)
+	req = req.WithContext(context.WithValue(req.Context(), middleware.ActorIDKey, "helpdesk"))
+	rec := httptest.NewRecorder()
+
+	h.RemoteLock(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("foreign-org device: expected 404, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if lockCalled {
+		t.Fatal("IssueRemoteLock must not be called for a foreign-org device")
 	}
 }
 
