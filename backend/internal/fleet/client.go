@@ -122,6 +122,12 @@ func NewClient(baseURL, apiToken string) *FleetClient {
 }
 
 // doRequest performs an authenticated HTTP request.
+// maxFleetResponseBytes bounds how much of a Fleet response the client will
+// buffer. Fleet returns JSON configs/policies/hosts; 10 MiB is far beyond any
+// legitimate payload while preventing a compromised or misconfigured Fleet
+// from exhausting backend memory (io.ReadAll would otherwise be unbounded).
+const maxFleetResponseBytes = 10 << 20 // 10 MiB
+
 func (f *FleetClient) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, error) {
 	logger := zap.L()
 
@@ -154,9 +160,12 @@ func (f *FleetClient) doRequest(ctx context.Context, method, path string, body i
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxFleetResponseBytes+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response body: %w", err)
+	}
+	if len(respBody) > maxFleetResponseBytes {
+		return nil, fmt.Errorf("fleet response too large (> %d bytes)", maxFleetResponseBytes)
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {

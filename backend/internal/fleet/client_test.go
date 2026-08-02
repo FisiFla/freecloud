@@ -212,6 +212,29 @@ func TestGetHostSoftware_TruncatesOversizedList(t *testing.T) {
 	}
 }
 
+// TestDoRequest_RejectsOversizedResponse confirms the client refuses to
+// buffer a Fleet response beyond maxFleetResponseBytes (load-path hardening
+// against a compromised/misconfigured Fleet exhausting backend memory).
+func TestDoRequest_RejectsOversizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Send maxFleetResponseBytes + 1 bytes of padding.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"pad":"`))
+		_, _ = w.Write(make([]byte, maxFleetResponseBytes))
+		_, _ = w.Write([]byte(`"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	_, err := c.doRequest(context.Background(), http.MethodGet, "/api/v1/fleet/policies", nil)
+	if err == nil {
+		t.Fatal("expected error for oversized Fleet response")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("expected 'too large' error, got: %v", err)
+	}
+}
+
 // TestIssueRemoteWipe_HappyPath confirms a 200 returns nil.
 func TestIssueRemoteWipe_HappyPath(t *testing.T) {
 	var path, method string
