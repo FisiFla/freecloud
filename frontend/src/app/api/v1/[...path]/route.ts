@@ -43,6 +43,55 @@ const PUBLIC_BACKEND_PATHS = new Set([
 /** Max path segments under /api/v1 (defense against oversized BFF fan-out). */
 const MAX_PATH_SEGMENTS = 16;
 
+/**
+ * Max response body the BFF will buffer from the backend. Software/compliance
+ * payloads can be large, but unbounded buffering lets a pathological (or
+ * compromised) backend balloon the BFF's memory. 50 MiB is far beyond any
+ * legitimate payload while keeping the proxy bounded. Operators can tune via
+ * BFF_MAX_RESPONSE_BYTES (bytes).
+ */
+const MAX_BFF_RESPONSE_BYTES = 50 * 1024 * 1024;
+
+/** Returns the effective BFF response cap, honoring the env override. */
+export function getBffMaxResponseBytes(): number {
+  const raw = process.env.BFF_MAX_RESPONSE_BYTES;
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  return MAX_BFF_RESPONSE_BYTES;
+}
+
+/** Reads a backend response body, aborting at the byte limit (default 50 MiB). */
+export async function readBoundedBody(
+  res: Response,
+  limit: number = MAX_BFF_RESPONSE_BYTES,
+): Promise<{ ok: true; bytes: ArrayBuffer } | { ok: false }> {
+  if (!res.body) {
+    return { ok: true, bytes: new ArrayBuffer(0) };
+  }
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel().catch(() => {});
+      return { ok: false };
+    }
+    chunks.push(value);
+  }
+  const merged = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    merged.set(c, off);
+    off += c.byteLength;
+  }
+  return { ok: true, bytes: merged.buffer };
+}
+
 /** Reject path segments that could escape /api/v1 via .. or empty components. */
 function sanitizePathParts(pathParts: string[]): string | null {
   if (pathParts.length === 0) return null;
@@ -131,7 +180,14 @@ async function proxy(req: NextRequest, pathParts: string[]): Promise<NextRespons
     return NextResponse.json({ success: false, error: "backend unreachable" }, { status: 502 });
   }
 
-  const buf = await backendRes.arrayBuffer();
+  const body = await readBoundedBody(backendRes, getBffMaxResponseBytes());
+  if (!body.ok) {
+    return NextResponse.json(
+      { success: false, error: "backend response too large" },
+      { status: 502 },
+    );
+  }
+  const buf = body.bytes;
   const resHeaders = new Headers();
   const respContentType = backendRes.headers.get("content-type");
   if (respContentType) resHeaders.set("content-type", respContentType);
