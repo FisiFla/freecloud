@@ -3,6 +3,7 @@ package keycloak
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -164,5 +165,32 @@ func TestLoginCachesToken(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&hits); got != 2 {
 		t.Errorf("expected 2 token fetches after expiry, got %d", got)
+	}
+}
+
+// TestReadBoundedResponse_AcceptsSmallBody verifies a normal-sized body passes
+// through unchanged.
+func TestReadBoundedResponse_AcceptsSmallBody(t *testing.T) {
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(`{"ok":true}`)), StatusCode: 200}
+	body, err := readBoundedResponse(resp)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("unexpected body: %s", body)
+	}
+}
+
+// TestReadBoundedResponse_RejectsOversized verifies the bounded reader errors
+// when the response exceeds maxKeycloakResponseBytes (load-path hardening).
+func TestReadBoundedResponse_RejectsOversized(t *testing.T) {
+	big := strings.Repeat("x", maxKeycloakResponseBytes+1)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(big)), StatusCode: 200}
+	_, err := readBoundedResponse(resp)
+	if err == nil {
+		t.Fatal("expected error for oversized response")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("expected 'too large' error, got: %v", err)
 	}
 }
