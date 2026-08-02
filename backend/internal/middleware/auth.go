@@ -87,7 +87,12 @@ var permissionMatrix = map[Permission][]Role{
 	PermReadGroups:          {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
 	PermManageDevices:       {RoleSuperAdmin, RoleHelpdesk},
 	PermReadCompliance:      {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
-	PermManagePolicies:      {RoleSuperAdmin},
+	// PermManagePolicies gates CreateTeam + AssignTeamPolicy. Helpdesk was
+	// added 2026-08-02 (product decision: read + mutate within org). Both
+	// handlers remain org-scoped via requireFleetTeamInCallerOrg, so the
+	// added capability is strictly within the caller's org — a helpdesk user
+	// cannot touch another org's teams.
+	PermManagePolicies:      {RoleSuperAdmin, RoleHelpdesk},
 	PermManageMFA:           {RoleSuperAdmin, RoleHelpdesk},
 	PermManageAPITokens:     {RoleSuperAdmin},
 	PermSelfService:         {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly, RoleEndUser},

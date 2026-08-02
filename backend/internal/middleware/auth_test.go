@@ -632,6 +632,11 @@ func TestHasPermissionMatrix(t *testing.T) {
 		{RoleHelpdesk, PermManageUsers, false},
 		{RoleHelpdesk, PermOnboardOffboard, false},
 		{RoleHelpdesk, PermSubmitApprovals, true},
+		// 2026-08-02 product decision: helpdesk = read + mutate within org.
+		{RoleHelpdesk, PermManagePolicies, true},
+		{RoleHelpdesk, PermManageDevices, true},
+		{RoleHelpdesk, PermReadCompliance, true},
+		{RoleAuditor, PermManagePolicies, false},
 		{RoleAuditor, PermOnboardOffboard, false},
 		{RoleAuditor, PermExportAuditLogs, true},
 		{RoleReadOnly, PermExportAuditLogs, false},
