@@ -240,8 +240,23 @@ func (f *FleetClient) GetHostSoftware(ctx context.Context, hostID string) ([]Sof
 		return nil, fmt.Errorf("fleet parse software: %w", err)
 	}
 
+	// Bound the per-host software list so a host with a pathological number of
+	// installed packages cannot balloon memory or API response size. Real Fleet
+	// pages this endpoint; the bound keeps us safe regardless of upstream shape.
+	if len(result.Software) > MaxSoftwarePerHost {
+		zap.L().Warn("truncating host software list",
+			zap.String("host_id", hostID),
+			zap.Int("count", len(result.Software)),
+			zap.Int("max", MaxSoftwarePerHost),
+		)
+		return result.Software[:MaxSoftwarePerHost], nil
+	}
 	return result.Software, nil
 }
+
+// MaxSoftwarePerHost bounds the software list returned per host. 1000 packages
+// is far beyond a typical workstation inventory while keeping responses bounded.
+const MaxSoftwarePerHost = 1000
 
 // GetHostSecurityState queries a host's details to determine security state.
 func (f *FleetClient) GetHostSecurityState(ctx context.Context, hostID string) (*SecurityState, error) {
