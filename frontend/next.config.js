@@ -1,9 +1,11 @@
 /** @type {import('next').NextConfig} */
 
-// Baseline security headers applied to every response. The CSP is kept
-// Next.js-compatible (it needs 'unsafe-inline'/'unsafe-eval' for its runtime);
-// tighten to nonces in a later pass. `connect-src https:` allows the browser to
-// reach the backend API and Keycloak over TLS; localhost is permitted for dev.
+// Baseline security headers applied to every response. The CSP is NOT set
+// here — src/proxy.ts (middleware) owns it so it can inject a per-request
+// nonce and drop 'unsafe-inline'/'unsafe-eval' in production. The remaining
+// headers below are static and safe to apply to all routes. `connect-src`
+// lives inside the middleware CSP so the browser can reach the backend API
+// and Keycloak over TLS; localhost is permitted for dev.
 const securityHeaders = [
   { key: "X-Frame-Options", value: "DENY" },
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -13,20 +15,6 @@ const securityHeaders = [
     value: "max-age=63072000; includeSubDomains; preload",
   },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
-  {
-    key: "Content-Security-Policy",
-    value: [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob:",
-      "font-src 'self' data:",
-      "connect-src 'self' https: http://localhost:8080 http://localhost:8081",
-      "frame-ancestors 'none'",
-      "base-uri 'self'",
-      "form-action 'self'",
-    ].join("; "),
-  },
 ];
 
 const nextConfig = {
