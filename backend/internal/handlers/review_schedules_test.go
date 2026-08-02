@@ -169,3 +169,47 @@ func TestJ09_MaxDueReviewSchedulesConstant(t *testing.T) {
 		t.Fatalf("maxDueReviewSchedules=%d", maxDueReviewSchedules)
 	}
 }
+
+// UpdateScheduleRequest name validation runs before any DB access, so these
+// tests use the nil-DB handler and still expect 400 (not 500).
+func TestUpdateReviewSchedule_EmptyNameRejected(t *testing.T) {
+	h := setupTestHandler(t)
+	req := httptest.NewRequest(http.MethodPatch, "/review-schedules/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		strings.NewReader(`{"name":"   "}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = chiCtxWithIDParam(req, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	rec := httptest.NewRecorder()
+	h.UpdateReviewSchedule(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("empty name: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateReviewSchedule_OverlongNameRejected(t *testing.T) {
+	h := setupTestHandler(t)
+	long := strings.Repeat("x", 201)
+	req := httptest.NewRequest(http.MethodPatch, "/review-schedules/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		strings.NewReader(`{"name":"`+long+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = chiCtxWithIDParam(req, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	rec := httptest.NewRecorder()
+	h.UpdateReviewSchedule(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("overlong name: expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestUpdateReviewSchedule_ValidNameHitsDB(t *testing.T) {
+	// With a valid trimmed name the handler proceeds to the nil-DB guard,
+	// which proves validation did not reject it.
+	h := setupTestHandler(t)
+	req := httptest.NewRequest(http.MethodPatch, "/review-schedules/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		strings.NewReader(`{"name":"  Q2 Review  "}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = chiCtxWithIDParam(req, "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+	rec := httptest.NewRecorder()
+	h.UpdateReviewSchedule(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("valid name: expected 500 (nil DB), got %d: %s", rec.Code, rec.Body.String())
+	}
+}

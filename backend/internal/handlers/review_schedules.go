@@ -190,17 +190,32 @@ func (h *Handler) UpdateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid schedule id")
 		return
 	}
+
+	// Validate body before touching the DB: malformed input is a client error
+	// (400) regardless of server state.
+	var req UpdateScheduleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Name != nil {
+		trimmed := strings.TrimSpace(*req.Name)
+		if trimmed == "" {
+			respondError(w, http.StatusBadRequest, "name must not be empty")
+			return
+		}
+		if len(trimmed) > 200 {
+			respondError(w, http.StatusBadRequest, "name must be ≤ 200 characters")
+			return
+		}
+		req.Name = &trimmed
+	}
+
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
 	}
 	if !h.requireReviewScheduleInCallerOrg(w, r, schedID) {
-		return
-	}
-
-	var req UpdateScheduleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
