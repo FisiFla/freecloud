@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -180,6 +181,34 @@ func TestGetHostSoftware_RejectsBadHostID(t *testing.T) {
 	_, err := c.GetHostSoftware(context.Background(), "../admin/users")
 	if err == nil {
 		t.Fatal("expected error for path-traversal hostID")
+	}
+}
+
+// TestGetHostSoftware_TruncatesOversizedList confirms the per-host software
+// list is bounded to MaxSoftwarePerHost so pathological inventories cannot
+// balloon memory or API response size.
+func TestGetHostSoftware_TruncatesOversizedList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/fleet/hosts/host-1/software" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		// Return MaxSoftwarePerHost + 25 entries.
+		out := []string{}
+		for i := 0; i < MaxSoftwarePerHost+25; i++ {
+			out = append(out, fmt.Sprintf(`{"name":"pkg-%d","version":"1.0"}`, i))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"software":[%s]}`, strings.Join(out, ","))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	sw, err := c.GetHostSoftware(context.Background(), "host-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(sw) != MaxSoftwarePerHost {
+		t.Fatalf("expected %d entries, got %d", MaxSoftwarePerHost, len(sw))
 	}
 }
 
