@@ -179,8 +179,9 @@ export default function IdentityProvidersPage() {
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className={LABEL_CLS}>Alias <span className="text-red-500">*</span></label>
+                <label htmlFor="idp-alias" className={LABEL_CLS}>Alias <span className="text-red-500">*</span></label>
                 <input
+                  id="idp-alias"
                   required
                   type="text"
                   value={form.alias}
@@ -194,8 +195,9 @@ export default function IdentityProvidersPage() {
               </div>
 
               <div>
-                <label className={LABEL_CLS}>Display Name</label>
+                <label htmlFor="idp-display-name" className={LABEL_CLS}>Display Name</label>
                 <input
+                  id="idp-display-name"
                   type="text"
                   value={form.displayName}
                   onChange={(e) => set("displayName", e.target.value)}
@@ -205,8 +207,9 @@ export default function IdentityProvidersPage() {
               </div>
 
               <div className="sm:col-span-2">
-                <label className={LABEL_CLS}>Provider Type <span className="text-red-500">*</span></label>
+                <label htmlFor="idp-provider-type" className={LABEL_CLS}>Provider Type <span className="text-red-500">*</span></label>
                 <select
+                  id="idp-provider-type"
                   value={form.providerType}
                   onChange={(e) => set("providerType", e.target.value as ProviderType)}
                   className={INPUT_CLS}
@@ -222,8 +225,9 @@ export default function IdentityProvidersPage() {
             {(form.providerType === "google" || form.providerType === "github") && (
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <label className={LABEL_CLS}>Client ID <span className="text-red-500">*</span></label>
+                  <label htmlFor="idp-client-id" className={LABEL_CLS}>Client ID <span className="text-red-500">*</span></label>
                   <input
+                    id="idp-client-id"
                     required
                     type="text"
                     value={form.clientId}
@@ -233,8 +237,9 @@ export default function IdentityProvidersPage() {
                   />
                 </div>
                 <div>
-                  <label className={LABEL_CLS}>Client Secret <span className="text-red-500">*</span></label>
+                  <label htmlFor="idp-client-secret" className={LABEL_CLS}>Client Secret <span className="text-red-500">*</span></label>
                   <input
+                    id="idp-client-secret"
                     required
                     type="password"
                     value={form.clientSecret}
@@ -249,8 +254,9 @@ export default function IdentityProvidersPage() {
             {form.providerType === "oidc" && (
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <label className={LABEL_CLS}>Authorization URL <span className="text-red-500">*</span></label>
+                  <label htmlFor="idp-authorization-url" className={LABEL_CLS}>Authorization URL <span className="text-red-500">*</span></label>
                   <input
+                    id="idp-authorization-url"
                     required
                     type="text"
                     value={form.authorizationUrl}
@@ -260,8 +266,9 @@ export default function IdentityProvidersPage() {
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className={LABEL_CLS}>Token URL <span className="text-red-500">*</span></label>
+                  <label htmlFor="idp-token-url" className={LABEL_CLS}>Token URL <span className="text-red-500">*</span></label>
                   <input
+                    id="idp-token-url"
                     required
                     type="text"
                     value={form.tokenUrl}
@@ -271,8 +278,9 @@ export default function IdentityProvidersPage() {
                   />
                 </div>
                 <div>
-                  <label className={LABEL_CLS}>Client ID <span className="text-red-500">*</span></label>
+                  <label htmlFor="idp-oidc-client-id" className={LABEL_CLS}>Client ID <span className="text-red-500">*</span></label>
                   <input
+                    id="idp-oidc-client-id"
                     required
                     type="text"
                     value={form.clientId}
@@ -282,8 +290,9 @@ export default function IdentityProvidersPage() {
                   />
                 </div>
                 <div>
-                  <label className={LABEL_CLS}>Client Secret <span className="text-red-500">*</span></label>
+                  <label htmlFor="idp-oidc-client-secret" className={LABEL_CLS}>Client Secret <span className="text-red-500">*</span></label>
                   <input
+                    id="idp-oidc-client-secret"
                     required
                     type="password"
                     value={form.clientSecret}
@@ -293,8 +302,9 @@ export default function IdentityProvidersPage() {
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className={LABEL_CLS}>Default Scope</label>
+                  <label htmlFor="idp-default-scope" className={LABEL_CLS}>Default Scope</label>
                   <input
+                    id="idp-default-scope"
                     type="text"
                     value={form.defaultScope}
                     onChange={(e) => set("defaultScope", e.target.value)}
@@ -308,8 +318,9 @@ export default function IdentityProvidersPage() {
             {form.providerType === "saml" && (
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <label className={LABEL_CLS}>Single Sign-On Service URL <span className="text-red-500">*</span></label>
+                  <label htmlFor="idp-sso-service-url" className={LABEL_CLS}>Single Sign-On Service URL <span className="text-red-500">*</span></label>
                   <input
+                    id="idp-sso-service-url"
                     required
                     type="text"
                     value={form.singleSignOnServiceUrl}
@@ -319,8 +330,9 @@ export default function IdentityProvidersPage() {
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className={LABEL_CLS}>NameID Policy Format</label>
+                  <label htmlFor="idp-nameid-policy-format" className={LABEL_CLS}>NameID Policy Format</label>
                   <select
+                    id="idp-nameid-policy-format"
                     value={form.nameIDPolicyFormat}
                     onChange={(e) =>
                       set("nameIDPolicyFormat", e.target.value as typeof form.nameIDPolicyFormat)

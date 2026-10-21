@@ -19,8 +19,8 @@ import (
 
 // Config holds parameters for bootstrapping Keycloak.
 // ServiceAccountSecretOverride, if non-empty, is used as the freecloud-service
-// client secret (operator override); otherwise a fresh secret is generated on
-// first run or the existing secret is regenerated on subsequent runs.
+// client secret (operator override); otherwise the existing secret is reused
+// (see the field's comment).
 type Config struct {
 	KeycloakURL string
 	// AdminUsername / AdminPassword are master-realm admin credentials.
@@ -34,8 +34,14 @@ type Config struct {
 	DashboardClientID string
 	// PostureFlowAlias is the browser-flow copy name. Default: "browser-with-posture".
 	PostureFlowAlias string
-	// ServiceAccountSecretOverride pins the service-account secret. If empty, a
-	// random secret is generated/regenerated on every bootstrap run.
+	// ServiceAccountSecretOverride pins the service-account secret. If empty,
+	// the EXISTING secret is read back from Keycloak and reused, so the
+	// secret stays stable across boots and across replicas: rotating it on
+	// every boot invalidated the secret the other replicas were already
+	// using, so they failed with 401 until they restarted (issue #166).
+	// It is only regenerated when Keycloak will not hand the secret back;
+	// pin KEYCLOAK_CLIENT_SECRET to a fixed value to make the secret
+	// independent of Keycloak's admin API.
 	ServiceAccountSecretOverride string
 	// CreateDemoUser creates a demo user for dev/e2e environments.
 	CreateDemoUser bool
@@ -265,6 +271,13 @@ func ensureGroups(ctx context.Context, gc *gocloak.GoCloak, token, realm string,
 
 // ensureServiceClient creates (or updates) the freecloud-service confidential
 // client and returns the active secret.
+//
+// The secret must be STABLE across boots: the backend keeps it in memory for
+// its Keycloak admin client, so rotating it on every boot invalidates the
+// secret every other replica is already using (they then fail with 401 until
+// they restart). When no explicit override is configured, the EXISTING secret
+// is read back from Keycloak and reused; it is only regenerated when Keycloak
+// will not hand it back (see the warning at the call site).
 func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) (string, error) {
 	clientID := cfg.ServiceClientID
 	clients, err := gc.GetClients(ctx, token, cfg.TargetRealm, gocloak.GetClientsParams{ClientID: &clientID})
@@ -306,7 +319,8 @@ func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string,
 	}
 
 	// Client exists. If an override secret is set, update it; otherwise
-	// regenerate to get a fresh known value.
+	// reuse the secret Keycloak already has, so the value stays stable
+	// across boots and across replicas.
 	clientUUID := *clients[0].ID
 
 	// Ensure full scope on an already-existing client too, so the SA token
@@ -329,7 +343,21 @@ func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string,
 		return secretValue, nil
 	}
 
-	// No override — regenerate.
+	// No override: read the secret Keycloak already has and reuse it.
+	existing, err := readClientSecret(ctx, gc, token, cfg.TargetRealm, clientUUID)
+	if err == nil && existing != "" {
+		logger.Info("bootstrap: reusing existing freecloud-service client secret")
+		return existing, nil
+	}
+
+	// Keycloak would not hand the secret back. Regenerating is the only way to
+	// obtain a usable value, but it invalidates the secret every other
+	// replica already has. Warn loudly: an HA deployment should pin
+	// KEYCLOAK_CLIENT_SECRET so all replicas agree.
+	logger.Warn("bootstrap: could not read the existing freecloud-service client secret; regenerating it. "+
+		"Other replicas using the previous secret will fail to authenticate until they restart. "+
+		"Set KEYCLOAK_CLIENT_SECRET to a fixed value to avoid this.",
+		zap.Error(err))
 	cred, err := gc.RegenerateClientSecret(ctx, token, cfg.TargetRealm, clientUUID)
 	if err != nil {
 		return "", fmt.Errorf("bootstrap: regenerate service client secret: %w", err)
@@ -338,6 +366,20 @@ func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string,
 		return "", fmt.Errorf("bootstrap: regenerated secret is nil")
 	}
 	logger.Info("bootstrap: regenerated freecloud-service client secret")
+	return *cred.Value, nil
+}
+
+// readClientSecret reads the secret Keycloak currently has for a client.
+// The admin REST endpoint GET /admin/realms/{realm}/clients/{id}/client-secret
+// returns it for confidential clients.
+func readClientSecret(ctx context.Context, gc *gocloak.GoCloak, token, realm, clientUUID string) (string, error) {
+	cred, err := gc.GetClientSecret(ctx, token, realm, clientUUID)
+	if err != nil {
+		return "", fmt.Errorf("bootstrap: read client secret: %w", err)
+	}
+	if cred == nil || cred.Value == nil {
+		return "", fmt.Errorf("bootstrap: client secret response has no value")
+	}
 	return *cred.Value, nil
 }
 

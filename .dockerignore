@@ -1,0 +1,37 @@
+# Root .dockerignore
+#
+# The Keycloak image is built with the REPO ROOT as its build context
+# (docker/Dockerfile.keycloak, `context: ..`). Without this file the whole
+# repository — .git (~14 MB), .secrets/ (live production secrets), and
+# frontend/node_modules + frontend/.next (~540 MB) — is transferred to the
+# Docker daemon and persisted in its build cache.
+#
+# Only the Keycloak build uses this context (backend/ and frontend/ have their
+# own .dockerignore files), so it is safe to be aggressive here.
+
+# Version control and CI metadata
+.git/
+.github/
+.gitignore
+.ai_infinite_backlog.md
+
+# Secrets — never send these to the daemon
+.secrets/
+.env.prod
+.env.local
+.env.*.local
+frontend/.env.local
+
+# Dependencies and build outputs
+**/node_modules/
+**/.next/
+**/target/
+**/dist/
+**/bin/
+frontend/tsconfig.tsbuildinfo
+
+# Local fixtures and scratch data
+backend/.e2e-fixtures/
+docs/
+*.log
+.DS_Store

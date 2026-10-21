@@ -499,6 +499,11 @@ func TestCrossOrgIsolation_MoveHostToTeam(t *testing.T) {
 			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
+		// The batched ownership check: only org A's own device is visible to
+		// org A.
+		queryFn: deviceOwnershipQueryFn(func(orgID, deviceID string) bool {
+			return deviceID == orgADevice && orgID == testIsoOrgA
+		}),
 	}
 	h := newIsolationHandler(ownershipDB)
 	fleetCalled := false

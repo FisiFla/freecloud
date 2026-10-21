@@ -194,3 +194,34 @@ func TestReadBoundedResponse_RejectsOversized(t *testing.T) {
 		t.Fatalf("expected 'too large' error, got: %v", err)
 	}
 }
+
+// TestGetSAMLMetadataXMLTimesOut proves the SAML metadata fetch is bounded:
+// http.DefaultClient has no timeout, so a hung Keycloak left the call blocked
+// forever (issue #139).
+func TestGetSAMLMetadataXMLTimesOut(t *testing.T) {
+	// A server that never answers.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+	}))
+	defer srv.Close()
+
+	orig := adminHTTPClient
+	adminHTTPClient = &http.Client{Timeout: 100 * time.Millisecond}
+	defer func() { adminHTTPClient = orig }()
+
+	k := NewClient(srv.URL, "client", "secret", "myrealm")
+	start := time.Now()
+	if _, err := k.GetSAMLMetadataXML(context.Background()); err == nil {
+		t.Fatal("expected a timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("expected the call to return within the timeout, took %v", elapsed)
+	}
+}
+
+// TestAdminHTTPClientHasTimeout proves the shared admin client is bounded.
+func TestAdminHTTPClientHasTimeout(t *testing.T) {
+	if adminHTTPClient.Timeout <= 0 {
+		t.Error("the admin HTTP client must have a non-zero timeout")
+	}
+}

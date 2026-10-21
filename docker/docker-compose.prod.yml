@@ -13,6 +13,12 @@
 #   PROVISIONING_MASTER_KEY
 # The operator sets NONE of these.
 #
+# The generated secrets are ALSO written one-per-file under .secrets/files/.
+# They are mounted into the containers as Docker secrets (see the `secrets:`
+# block at the bottom of this file) and read through the <VAR>_FILE convention
+# (the backend supports it natively — backend/internal/config/secrets.go), so
+# the values never appear in `docker inspect` or /proc/<pid>/environ.
+#
 # What the operator MUST set in .env.prod:
 #   DASHBOARD_DOMAIN, API_DOMAIN, KC_DOMAIN (+ their https:// URL variants)
 #   FLEET_URL, FLEET_API_TOKEN
@@ -21,18 +27,24 @@
 # Caddy auto-provisions TLS. Postgres serves TLS on the internal network.
 #
 # Note on POSTGRES_PASSWORD / KC_ADMIN_PASSWORD interpolation:
-#   These generated secrets must appear in URL strings and KC env vars that
-#   compose resolves at parse time. The `make prod-up` target sources
-#   .secrets/secrets.env before invoking compose so these variables are in
-#   the shell environment when compose reads the file. Running
-#   `docker compose ... config -q` directly (without sourcing) will interpolate
-#   them as empty strings — that is expected and safe (config validation only).
+#   The Postgres password has to appear in the DATABASE_URL string that compose
+#   resolves at parse time, so it is interpolated from the host environment.
+#   `make prod-up` sources .secrets/secrets.env before invoking compose so it is
+#   in the shell environment when compose reads the file. The interpolation uses
+#   `:?` so compose fails fast with a clear message when it is missing, instead
+#   of silently producing a password-less DSN. Running
+#   `docker compose ... config -q` directly (without sourcing) will therefore
+#   fail with that message — that is expected.
 
 services:
 
   # ── Secret generation (C1) ────────────────────────────────────────────────
   secrets-init:
-    image: busybox:1.36
+    image: busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662  # busybox 1.36
+    # Run as the host user so the generated 0600 files stay owned by (and
+    # readable by) the operator. FREECLOUD_UID/FREECLOUD_GID are exported by
+    # the Makefile; a plain `docker compose up` leaves them at 0 (root).
+    user: "${FREECLOUD_UID:-0}:${FREECLOUD_GID:-0}"
     volumes:
       - ../.secrets:/run/freecloud
       - ./init-secrets/generate.sh:/generate.sh:ro
@@ -45,12 +57,12 @@ services:
       context: ./postgres
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file:
-      - path: ../.secrets/secrets.env
-        required: false
+    secrets:
+      # The official Postgres image reads the password from POSTGRES_PASSWORD_FILE.
+      - postgres_password
     environment:
       POSTGRES_USER: freecloud
-      # POSTGRES_PASSWORD: injected from .secrets/secrets.env (auto-generated).
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: freecloud
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -71,24 +83,35 @@ services:
       dockerfile: docker/Dockerfile.keycloak
     restart: unless-stopped
     command: ["start"]
-    env_file:
-      - path: ../.secrets/secrets.env
-        required: false
+    secrets:
+      - kc_admin_password
+      - postgres_password
+      - access_eval_token
     environment:
       KEYCLOAK_ADMIN: admin
-      # KC_ADMIN_PASSWORD is in the host env when make prod-up sources secrets.env.
-      KEYCLOAK_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-}
+      # Keycloak has no <VAR>_FILE convention of its own: the image entrypoint
+      # (docker/keycloak-entrypoint.sh) reads these files and exports the
+      # values under the names Keycloak expects. The variables are not
+      # prefixed with KC_ on purpose — kc.sh turns every KC_* variable into a
+      # CLI option and would reject an unknown one.
+      FREECLOUD_KEYCLOAK_ADMIN_PASSWORD_FILE: /run/secrets/kc_admin_password
+      FREECLOUD_KEYCLOAK_DB_PASSWORD_FILE: /run/secrets/postgres_password
+      FREECLOUD_ACCESS_EVAL_TOKEN_FILE: /run/secrets/access_eval_token
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
       KC_DB_USERNAME: freecloud
-      KC_DB_PASSWORD: ${POSTGRES_PASSWORD:-}
       KC_HOSTNAME: ${KC_PUBLIC_URL}
       KC_PROXY_HEADERS: xforwarded
       KC_HTTP_ENABLED: "true"
       KC_HEALTH_ENABLED: "true"
       ACCESS_EVAL_URL: ${ACCESS_EVAL_URL:-http://backend:8080/api/v1/access/evaluate}
-      # ACCESS_EVAL_TOKEN: injected from .secrets/secrets.env
-      POSTURE_CHECK_ENABLED: ${POSTURE_CHECK_ENABLED:-false}
+      # Device posture enforcement is ON by default in production: a stack that
+      # forgets the variable must not silently run without posture checks.
+      # Set POSTURE_CHECK_ENABLED=false explicitly to opt out.
+      POSTURE_CHECK_ENABLED: ${POSTURE_CHECK_ENABLED:-true}
+      # Lets the authenticator tell a production stack from a development one,
+      # so it can warn loudly when posture enforcement is off outside dev.
+      APP_ENV: production
       # A3: safe to trust X-Forwarded-For here because this service has no
       # `ports:` mapping — Caddy is the only path to Keycloak in this
       # topology. See docs/DEPLOYMENT.md "Reverse Proxy Requirements (SPI
@@ -106,7 +129,7 @@ services:
   # (config.Validate fails closed without it); this is the only Redis the
   # backend is told about.
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499  # redis 7-alpine
     restart: unless-stopped
     volumes:
       - redis_data:/data
@@ -126,11 +149,10 @@ services:
       dockerfile: Dockerfile
     command: ["migrate"]
     restart: "no"
-    env_file:
-      - path: ../.secrets/secrets.env
-        required: false
     environment:
-      DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:-}@postgres:5432/freecloud?sslmode=require
+      # Fail fast: an empty password produces a confusing "password
+      # authentication failed" at connect time instead of a clear message.
+      DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set — run make prod-secrets-init and source .secrets/secrets.env}@postgres:5432/freecloud?sslmode=require
     depends_on:
       postgres:
         condition: service_healthy
@@ -141,14 +163,22 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file:
-      - path: ../.secrets/secrets.env
-        required: false
+    secrets:
+      - scim_bearer_token
+      - access_eval_token
+      - fleet_webhook_secret
+      - provisioning_master_key
+      - kc_admin_password
     environment:
       APP_ENV: production
       PORT: "8080"
-      # POSTGRES_PASSWORD is in the host env when make prod-up sources secrets.env.
-      DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:-}@postgres:5432/freecloud?sslmode=require
+      # Peers whose X-Forwarded-For may be trusted. Only Caddy can reach the
+      # backend (it has no `ports:` mapping), and Caddy appends the real peer
+      # to X-Forwarded-For, so the right-most untrusted hop is the client.
+      # Without this every request through the proxy shares ONE rate-limit
+      # bucket and a single client can rate-limit every tenant (issue #129).
+      TRUSTED_PROXY_CIDRS: ${FREECLOUD_SUBNET:-172.30.0.0/24}
+      DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set — run make prod-secrets-init and source .secrets/secrets.env}@postgres:5432/freecloud?sslmode=require
       REDIS_URL: redis://redis:6379/0
       KEYCLOAK_URL: ${KC_PUBLIC_URL}
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-freecloud}
@@ -157,11 +187,47 @@ services:
       KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-freecloud-dashboard}
       FLEET_URL: ${FLEET_URL}
       FLEET_API_TOKEN: ${FLEET_API_TOKEN}
-      # FLEET_WEBHOOK_SECRET, SCIM_BEARER_TOKEN, ACCESS_EVAL_TOKEN,
-      # PROVISIONING_MASTER_KEY: from secrets.env
       CORS_ORIGIN: ${DASHBOARD_PUBLIC_URL}
       KC_BOOTSTRAP_ADMIN: admin
-      KC_BOOTSTRAP_PASSWORD: ${KC_ADMIN_PASSWORD:-}
+      # The backend resolves secrets through <VAR>_FILE → <VAR>_VAULT_PATH →
+      # plain env (backend/internal/config/secrets.go).
+      SCIM_BEARER_TOKEN_FILE: /run/secrets/scim_bearer_token
+      ACCESS_EVAL_TOKEN_FILE: /run/secrets/access_eval_token
+      FLEET_WEBHOOK_SECRET_FILE: /run/secrets/fleet_webhook_secret
+      KC_BOOTSTRAP_PASSWORD_FILE: /run/secrets/kc_admin_password
+      # PROVISIONING_MASTER_KEY is delivered as a mounted secret only. The
+      # backend resolves it through config's resolveSecret (_FILE first) and
+      # injects the resolved value into the handler layer, so the value never
+      # has to be present in the process environment.
+      PROVISIONING_MASTER_KEY_FILE: /run/secrets/provisioning_master_key
+      # ── Notification channels ────────────────────────────────────────────
+      # The email channel is gated on NOTIFY_EMAIL (false by default). SMTP
+      # settings saved in-app (Settings → SMTP) win over these env fallbacks.
+      NOTIFY_EMAIL: ${NOTIFY_EMAIL:-false}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TO: ${SMTP_TO:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      NOTIFY_SLACK: ${NOTIFY_SLACK:-false}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+      NOTIFY_WEBHOOK: ${NOTIFY_WEBHOOK:-false}
+      WEBHOOK_URL: ${WEBHOOK_URL:-}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+      # ── Optional device-cookie signing key ───────────────────────────────
+      # Dedicated HMAC key for the freecloud-device-id cookie. When empty the
+      # backend falls back to FLEET_WEBHOOK_SECRET.
+      DEVICE_COOKIE_SECRET: ${DEVICE_COOKIE_SECRET:-}
+      # ── Background jobs / federation / SIEM ──────────────────────────────
+      RECONCILE_INTERVAL: ${RECONCILE_INTERVAL:-15m}
+      SNAPSHOT_INTERVAL: ${SNAPSHOT_INTERVAL:-1h}
+      AUDIT_PRUNE_INTERVAL: ${AUDIT_PRUNE_INTERVAL:-0}
+      AUDIT_RETAIN_FOR: ${AUDIT_RETAIN_FOR:-0}
+      LDAP_BIND_PASSWORD: ${LDAP_BIND_PASSWORD:-}
+      SIEM_SYSLOG_NET: ${SIEM_SYSLOG_NET:-udp}
+      SIEM_SYSLOG_ADDR: ${SIEM_SYSLOG_ADDR:-}
+      SIEM_HTTP_URL: ${SIEM_HTTP_URL:-}
+      SIEM_HTTP_TOKEN: ${SIEM_HTTP_TOKEN:-}
       # A2 — GeoIP (optional). Set GEOIP_MMDB_HOST_PATH in .env.prod to the
       # host-side path of your operator-downloaded GeoLite2 file (see
       # docs/DEPLOYMENT.md "GeoIP (MaxMind GeoLite2)") and it is bind-mounted
@@ -187,22 +253,33 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${API_PUBLIC_URL}
     restart: unless-stopped
-    env_file:
-      - path: ../.secrets/secrets.env
-        required: false
+    secrets:
+      - auth_secret
     environment:
       NODE_ENV: production
       AUTH_URL: ${DASHBOARD_PUBLIC_URL}
-      # AUTH_SECRET: injected from .secrets/secrets.env (auto-generated).
       AUTH_KEYCLOAK_ID: ${AUTH_KEYCLOAK_ID:-freecloud-dashboard}
       AUTH_KEYCLOAK_SECRET: ${AUTH_KEYCLOAK_SECRET:-}
       AUTH_KEYCLOAK_ISSUER: ${KC_PUBLIC_URL}/realms/${KEYCLOAK_REALM:-freecloud}
+      # The BFF proxies /api/v1/* to the backend. Inside the compose network
+      # that is http://backend:8080 — never the browser-facing URL and never
+      # the http://localhost:8080 fallback.
+      INTERNAL_API_URL: http://backend:8080
+    # Next.js has no <VAR>_FILE convention, so the mounted secret is read into
+    # the environment here — that keeps AUTH_SECRET out of `docker inspect`.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        export AUTH_SECRET="$$(cat /run/secrets/auth_secret)"
+        exec node server.js
     depends_on:
       - backend
 
   # ── Caddy (TLS termination) ───────────────────────────────────────────────
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f  # caddy 2-alpine
     restart: unless-stopped
     ports:
       - "80:80"
@@ -225,3 +302,40 @@ volumes:
   redis_data:
   caddy_data:
   caddy_config:
+
+# ── Network ─────────────────────────────────────────────────────────────────
+# The project network gets a FIXED subnet so the backend can trust exactly one
+# range of peer addresses (TRUSTED_PROXY_CIDRS below). Without a pinned subnet
+# Docker picks one from the host's default address pool, which differs between
+# hosts and Docker versions — the backend would then either trust nothing
+# (every client shares one rate-limit bucket) or trust too much (a client
+# could spoof X-Forwarded-For).
+#
+# Override FREECLOUD_SUBNET if 172.30.0.0/24 collides with a route on your
+# host; the backend reads the same variable, so the two stay in step.
+networks:
+  default:
+    ipam:
+      driver: default
+      config:
+        - subnet: ${FREECLOUD_SUBNET:-172.30.0.0/24}
+
+# ── Docker secrets ──────────────────────────────────────────────────────────
+# Generated by docker/init-secrets/generate.sh (one file per secret). Mounted
+# into the containers as /run/secrets/<name> and read through <VAR>_FILE, so
+# the values are not visible in `docker inspect` or /proc/<pid>/environ.
+secrets:
+  postgres_password:
+    file: ../.secrets/files/postgres_password
+  kc_admin_password:
+    file: ../.secrets/files/kc_admin_password
+  auth_secret:
+    file: ../.secrets/files/auth_secret
+  scim_bearer_token:
+    file: ../.secrets/files/scim_bearer_token
+  access_eval_token:
+    file: ../.secrets/files/access_eval_token
+  fleet_webhook_secret:
+    file: ../.secrets/files/fleet_webhook_secret
+  provisioning_master_key:
+    file: ../.secrets/files/provisioning_master_key

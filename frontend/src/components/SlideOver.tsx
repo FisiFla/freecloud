@@ -2,6 +2,7 @@
 
 import { X } from "lucide-react";
 import { ReactNode, useEffect, useRef } from "react";
+import { useBodyScrollLock, useFocusTrap } from "./useFocusTrap";
 
 interface SlideOverProps {
   isOpen: boolean;
@@ -19,6 +20,12 @@ export default function SlideOver({ isOpen, onClose, title, children, beforeClos
     onClose();
   };
 
+  // Trap Tab inside the panel and restore focus to the trigger on close.
+  // Declared before the focus effect below so the trap captures the
+  // previously-focused element before focus moves into the panel.
+  useFocusTrap(panelRef, isOpen);
+  useBodyScrollLock(isOpen);
+
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape") handleClose();
@@ -35,12 +42,14 @@ export default function SlideOver({ isOpen, onClose, title, children, beforeClos
 
   return (
     <>
-      {/* Overlay */}
+      {/* Overlay — aria-hidden because it is decorative: the Close button and
+          the Escape key are its keyboard equivalents. */}
       <div
         className={`fixed inset-0 z-40 bg-black/40 transition-opacity duration-300 ${
           isOpen ? "opacity-100" : "pointer-events-none opacity-0"
         }`}
         onClick={handleClose}
+        aria-hidden="true"
       />
 
       {/* Slide panel */}
@@ -50,6 +59,7 @@ export default function SlideOver({ isOpen, onClose, title, children, beforeClos
         role="dialog"
         aria-modal="true"
         aria-labelledby="slide-over-title"
+        inert={!isOpen}
         className={`fixed inset-y-0 right-0 z-50 w-full max-w-xl transform bg-white shadow-xl transition-transform duration-300 ease-in-out dark:bg-slate-900 ${
           isOpen ? "translate-x-0" : "translate-x-full"
         }`}

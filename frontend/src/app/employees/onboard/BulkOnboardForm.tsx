@@ -138,7 +138,7 @@ export default function BulkOnboardForm({ onSuccess }: BulkOnboardFormProps) {
 
       {/* File input */}
       <div>
-        <label className="block text-sm font-medium text-slate-700">CSV File</label>
+        <label htmlFor="bulk-onboard-csv-file" className="block text-sm font-medium text-slate-700">CSV File</label>
         <div
           className="mt-1 flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center transition-colors hover:border-indigo-400 hover:bg-indigo-50"
           onClick={() => inputRef.current?.click()}
@@ -152,6 +152,7 @@ export default function BulkOnboardForm({ onSuccess }: BulkOnboardFormProps) {
             </p>
           )}
           <input
+            id="bulk-onboard-csv-file"
             ref={inputRef}
             type="file"
             accept=".csv,text/csv"

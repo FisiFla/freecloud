@@ -378,7 +378,12 @@ async function request<T>(
   try {
     json = JSON.parse(text);
   } catch {
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+    if (!res.ok) {
+      // Never surface the raw upstream body: it can carry SQL errors, file
+      // paths or upstream URLs. The BFF logs the detail server-side and
+      // hands the client a generic message.
+      throw new ApiError(`Request failed with status ${res.status}`);
+    }
     // If it's a 2xx with no JSON body, treat as success with void data
     return undefined as T;
   }
@@ -456,7 +461,8 @@ export async function bulkOnboardEmployees(
   try {
     json = JSON.parse(text);
   } catch {
-    throw new ApiError(`HTTP ${res.status}: ${text || res.statusText}`);
+    // Generic message only — the raw body is never surfaced to the browser.
+    throw new ApiError(`Request failed with status ${res.status}`);
   }
   if (!json.success && res.status !== 207) {
     throw new ApiError(json.error || `Request failed with status ${res.status}`);

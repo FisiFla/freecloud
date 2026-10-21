@@ -164,10 +164,12 @@ export default function SettingsPage() {
       <div className="mt-8 rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
         <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">API Configuration</h2>
         <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-          The frontend connects to the backend at{" "}
+          The dashboard reaches the backend through the same-origin BFF proxy at{" "}
           <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-700 dark:bg-slate-800 dark:text-slate-300">
-            {process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"}
+            /api/v1
           </code>
+          . The backend address is resolved server-side and is never exposed to
+          the browser.
         </p>
       </div>
     </div>

@@ -21,6 +21,9 @@ type fakeKC struct {
 	realmCreateCalls  int32
 	groupCreateCalls  int32
 	clientCreateCalls int32
+	// clientSecretRegenCalls counts RegenerateClientSecret calls. The
+	// service-account secret must stay stable across boots (issue #166).
+	clientSecretRegenCalls int32
 
 	// H8: access-token-lifespan defense-in-depth.
 	// realmPutCalls counts EVERY PUT /admin/realms/freecloud call —
@@ -142,6 +145,14 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// GET /admin/realms/freecloud/clients/svc-uuid/client-secret
+	// (Keycloak's admin endpoint that returns the client's current secret).
+	if p == "/admin/realms/freecloud/clients/svc-uuid/client-secret" && m == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"type": "secret", "value": f.clientSecret})
+		return
+	}
+
 	// GET/POST /admin/realms/freecloud/clients
 	if p == "/admin/realms/freecloud/clients" || p == "/admin/realms/freecloud/clients/" {
 		if m == http.MethodGet {
@@ -199,6 +210,7 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 
 	// POST /admin/realms/freecloud/clients/svc-uuid/client-secret (RegenerateClientSecret)
 	if p == "/admin/realms/freecloud/clients/svc-uuid/client-secret" && m == http.MethodPost {
+		atomic.AddInt32(&f.clientSecretRegenCalls, 1)
 		newSecret := "regen-secret-" + strings.Repeat("x", 8)
 		f.clientSecret = newSecret
 		w.Header().Set("Content-Type", "application/json")
@@ -444,8 +456,12 @@ func TestBootstrap_ServiceClientCreatedOnFirstRun(t *testing.T) {
 	}
 }
 
-// TestBootstrap_SecretReturnedOnSecondRun verifies the regenerated secret is returned when client exists.
-func TestBootstrap_SecretReturnedOnSecondRun(t *testing.T) {
+// TestBootstrap_SecretStableOnSecondRun verifies the service-account secret
+// is NOT rotated on a second bootstrap run. The backend keeps the secret in
+// memory for its Keycloak admin client, so rotating it on every boot
+// invalidates the secret every other replica is already using (they then fail
+// with 401 until they restart) — issue #166.
+func TestBootstrap_SecretStableOnSecondRun(t *testing.T) {
 	f := newFakeKC(t)
 	defer f.srv.Close()
 
@@ -465,8 +481,11 @@ func TestBootstrap_SecretReturnedOnSecondRun(t *testing.T) {
 	if result.ServiceAccountSecret == "" {
 		t.Error("expected a non-empty service account secret on second run")
 	}
-	if result.ServiceAccountSecret == "old-secret" {
-		t.Error("expected secret to be regenerated, but got the old secret")
+	if result.ServiceAccountSecret != "old-secret" {
+		t.Errorf("expected the existing secret to be reused, got %q", result.ServiceAccountSecret)
+	}
+	if f.clientSecretRegenCalls != 0 {
+		t.Errorf("expected no secret regeneration on the second run, got %d", f.clientSecretRegenCalls)
 	}
 }
 

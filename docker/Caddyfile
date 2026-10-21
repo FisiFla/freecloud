@@ -11,5 +11,17 @@
 }
 
 {$KC_DOMAIN} {
+	# Keycloak is proxied directly, so it gets none of the hardening headers
+	# the backend (cmd/server/main.go) and the frontend (next.config.js) set on
+	# their own responses — without this the login page, where users type their
+	# credentials, is the one page served without them.
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains"
+		# SAMEORIGIN (not DENY): Keycloak's own admin console frames parts of
+		# itself, and same-origin framing still blocks third-party clickjacking.
+		X-Frame-Options "SAMEORIGIN"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
 	reverse_proxy keycloak:8080
 }

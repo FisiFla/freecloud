@@ -53,6 +53,10 @@ export default function OrganizationsPage() {
   const [removing, setRemoving] = useState(false);
 
   const isSystemAdmin = !!me?.isSystemAdmin;
+  // Member management is an org-admin (or system-admin) capability — the
+  // backend gates it with RequireOrgAdminOrSystemAdmin, so the UI must not
+  // offer controls a plain member cannot use.
+  const canManageMembers = isSystemAdmin || me?.activeRole === "org-admin";
 
   const fetchOrgs = useCallback(async () => {
     if (!isSystemAdmin) {
@@ -285,7 +289,8 @@ export default function OrganizationsPage() {
                 </div>
               )}
 
-              {/* Add-member form */}
+              {/* Add-member form — org-admin / system-admin only */}
+              {canManageMembers && (
               <form onSubmit={handleAddMember} className="flex flex-wrap items-end gap-3 border-b border-slate-100 p-6 dark:border-slate-800">
                 <div className="flex-1 min-w-[200px]">
                   <label htmlFor="member-user-id" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
@@ -330,6 +335,7 @@ export default function OrganizationsPage() {
                   </div>
                 )}
               </form>
+              )}
 
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -371,6 +377,8 @@ export default function OrganizationsPage() {
                             </span>
                           </td>
                           <td className="px-6 py-3 text-right">
+                            {/* Remove control — org-admin / system-admin only */}
+                            {canManageMembers && (
                             <button
                               onClick={() => setRemoveTarget(m)}
                               className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950 dark:text-red-300 dark:hover:bg-red-900"
@@ -378,6 +386,7 @@ export default function OrganizationsPage() {
                               <Trash2 className="h-3.5 w-3.5" />
                               Remove
                             </button>
+                            )}
                           </td>
                         </tr>
                       ))

@@ -20,3 +20,14 @@ updates:
     directory: /frontend
     schedule:
       interval: weekly
+  # The Dockerfiles under docker/ (Keycloak SPI image, Postgres TLS image, the
+  # two mocks) and the compose files are not covered by the entries above.
+  - package-ecosystem: docker
+    directory: /docker
+    schedule:
+      interval: weekly
+  # The Keycloak authenticator SPI is a Maven module.
+  - package-ecosystem: maven
+    directory: /keycloak-authenticator
+    schedule:
+      interval: weekly

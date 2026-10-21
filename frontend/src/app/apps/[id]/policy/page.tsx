@@ -4,7 +4,7 @@
 // Lets admins configure posture + condition gates (time window, network, geo)
 // and preview what the policy decision would be for a given scenario.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import ErrorBanner from "@/components/ErrorBanner";
 import {
@@ -37,6 +37,18 @@ export default function AppPolicyPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState(false);
+  // Timer that hides the "saved" banner — cleared on unmount so a pending
+  // timeout cannot fire after the component is gone.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Preview form fields
   const [previewIP, setPreviewIP] = useState("");
@@ -96,7 +108,8 @@ export default function AppPolicyPage() {
       };
       await upsertAppPolicy(appId, policy);
       setSaveOk(true);
-      setTimeout(() => setSaveOk(false), 3000);
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => setSaveOk(false), 3000);
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : "Failed to save policy");
     } finally {
@@ -168,7 +181,7 @@ export default function AppPolicyPage() {
                 onChange: setRequireNoCriticalVulns,
               },
             ].map(({ id, label, checked, onChange }) => (
-              <label key={id} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <label key={id} htmlFor={id} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
                 <input
                   type="checkbox"
                   id={id}

@@ -11,6 +11,7 @@ package handlers
 // map[string]string of attribute values (e.g. {"username": "alice@..."}).
 
 import (
+	"errors"
 	"strings"
 )
 
@@ -285,6 +286,13 @@ func (p *scimFilterParser) parsePrimary() *SCIMFilterNode {
 // parseSCIMFilter wraps ParseSCIMFilter and returns the old *scimFilter type
 // so the existing Users/Groups list handlers continue to compile unchanged.
 // New code should use ParseSCIMFilter + SCIMFilterNode directly.
+//
+// A logical expression (and/or/not) is NOT representable in the flat
+// scimFilter type. parseSCIMFilter therefore returns nil for it, which the
+// callers used to read as "no filter" — so a client sending
+// `userName eq "a" and userName eq "b"` silently got the whole user list
+// back instead of the 400 invalidFilter RFC 7644 §3.4.2.2 requires. Use
+// parseSCIMFilterStrict where the difference matters.
 
 func parseSCIMFilter(raw string) *scimFilter {
 	node := ParseSCIMFilter(raw)
@@ -302,6 +310,34 @@ func parseSCIMFilter(raw string) *scimFilter {
 		}
 	}
 	return nil
+}
+
+// errSCIMLogicalFilter marks a filter that parses into a logical expression
+// (and/or/not). The list handlers cannot evaluate those, and silently
+// ignoring them would return every row instead of the filtered set.
+var errSCIMLogicalFilter = errors.New("unsupported logical SCIM filter")
+
+// parseSCIMFilterStrict parses raw into the flat comparison filter the list
+// handlers understand.
+//
+// It returns errSCIMLogicalFilter when the filter is a logical expression,
+// so the caller can answer 400 invalidFilter instead of quietly dropping the
+// filter. An empty or unparseable filter returns (nil, nil) — "no filter" —
+// which keeps the previous behaviour for clients sending a malformed filter.
+func parseSCIMFilterStrict(raw string) (*scimFilter, error) {
+	node := ParseSCIMFilter(raw)
+	if node == nil {
+		return nil, nil
+	}
+	switch node.Op {
+	case scimOpEq, scimOpNe, scimOpCo, scimOpSw, scimOpPr:
+		return &scimFilter{
+			attr:  node.Attr,
+			op:    scimFilterOpString(node.Op),
+			value: node.Value,
+		}, nil
+	}
+	return nil, errSCIMLogicalFilter
 }
 
 func scimFilterOpString(op scimFilterOp) string {

@@ -341,6 +341,15 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 			return fmt.Errorf("missing email in onboard payload")
 		}
 
+		// C2: the approver's currently-resolved org owns the onboarded user.
+		// Fail closed rather than defaulting silently — and resolve it BEFORE
+		// anything is created in the identity provider, so a missing org can
+		// never leave an orphaned Keycloak user behind.
+		oc := middleware.GetOrgContext(ctx)
+		if oc == nil {
+			return fmt.Errorf("no organization context for approval execution")
+		}
+
 		kcResult, err := h.keycloak.CreateUser(ctx, req.FirstName, req.LastName, req.Email, req.Department)
 		if err != nil {
 			return fmt.Errorf("create user: %w", err)
@@ -349,6 +358,25 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 			return fmt.Errorf("keycloak returned no user id")
 		}
 		kcUserID := *kcResult.User.ID
+
+		// Compensation: if the local persist fails, delete the Keycloak user
+		// we just created. Without this the approval path leaves an orphaned
+		// IdP user that no local row references (the single-user onboard path
+		// in onboarding.go and the SCIM path in scim.go both roll back).
+		persisted := false
+		defer func() {
+			if persisted {
+				return
+			}
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			h.logger.Warn("approved onboard: rolling back orphaned Keycloak user",
+				zap.String("kc_user_id", kcUserID))
+			if delErr := h.keycloak.DeleteUser(cleanupCtx, kcUserID); delErr != nil {
+				h.logger.Error("approved onboard: failed to roll back orphaned Keycloak user",
+					zap.String("kc_user_id", kcUserID), zap.Error(delErr))
+			}
+		}()
 
 		enrollmentToken := ""
 		if tok, err := h.fleet.CreateEnrollmentToken(ctx); err == nil {
@@ -359,16 +387,11 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 			auditDetails := map[string]interface{}{
 				"email": req.Email, "approval_id": approvalID,
 			}
-			// C2: the approver's currently-resolved org owns the onboarded user.
-			// Fail closed rather than defaulting silently.
-			oc := middleware.GetOrgContext(ctx)
-			if oc == nil {
-				return fmt.Errorf("no organization context for approval execution")
-			}
 			if err := h.persistOnboard(ctx, kcUserID, req, approverID, auditDetails, enrollmentToken, oc.OrgID); err != nil {
 				return fmt.Errorf("persist onboard: %w", err)
 			}
 		}
+		persisted = true
 		return nil
 
 	case "offboard":
@@ -397,13 +420,33 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 		if err := h.keycloak.DisableUser(ctx, userID); err != nil {
 			return fmt.Errorf("disable user: %w", err)
 		}
-		_ = h.keycloak.LogoutAllSessions(ctx, userID)
-		_, _ = h.db.Exec(ctx,
+		// Session termination and the local soft-disable are best-effort, but
+		// their errors are logged rather than discarded — a failed logout
+		// leaves live sessions behind and a failed DB update leaves the local
+		// record active.
+		if err := h.keycloak.LogoutAllSessions(ctx, userID); err != nil {
+			h.logger.Warn("approved offboard: failed to logout sessions",
+				zap.String("user_id", userID), zap.Error(err))
+		}
+		if _, err := h.db.Exec(ctx,
 			`UPDATE users SET disabled = true, updated_at = NOW() WHERE keycloak_user_id = $1`,
 			userID,
-		)
+		); err != nil {
+			h.logger.Error("approved offboard: failed to mark user disabled locally",
+				zap.String("user_id", userID), zap.Error(err))
+		}
+		// The panic button's device-wipe guarantee must hold no matter how
+		// the offboard was triggered: the direct endpoint wipes the user's
+		// devices, so the approval path does too.
+		devicesWiped, devicesFailed, deviceWarnings := h.wipeUserDevices(ctx, userID)
+		for _, warn := range deviceWarnings {
+			h.logger.Warn("approved offboard: device wipe incomplete",
+				zap.String("user_id", userID), zap.String("warning", warn))
+		}
 		if err := h.writeAuditEntryBestEffort(ctx, approverID, "offboard", "user", userID, map[string]interface{}{
-			"approval_id": approvalID,
+			"approval_id":    approvalID,
+			"devices_wiped":  devicesWiped,
+			"devices_failed": devicesFailed,
 		}); err != nil {
 			h.logger.Warn("failed to write approved offboard audit log", zap.Error(err))
 		}

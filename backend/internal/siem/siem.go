@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/syslog"
 	"net/http"
@@ -20,8 +21,34 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"go.uber.org/zap"
 )
+
+// sinkTypeGauge exposes the ACTIVE sink type so a deployment that silently
+// streams nothing is visible in Prometheus. The value is the number of the
+// active sink: 0 = none (no-op), 1 = syslog, 2 = http. A value of 0 with a
+// non-zero SIEM_INTERVAL means audit events are being generated but NOT
+// delivered (issue #128).
+var sinkTypeGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	Name: "freecloud_siem_sink_type",
+	Help: "Active SIEM sink type: 0 = none (no-op, events are not delivered), 1 = syslog, 2 = http.",
+}, []string{"type"})
+
+// SinkTypeNone is the gauge value for "no sink configured".
+const SinkTypeNone = 0
+
+// SinkTypeSyslog is the gauge value for the syslog sink.
+const SinkTypeSyslog = 1
+
+// SinkTypeHTTP is the gauge value for the HTTP NDJSON sink.
+const SinkTypeHTTP = 2
+
+// setSinkTypeGauge records the active sink type.
+func setSinkTypeGauge(kind string, value float64) {
+	sinkTypeGauge.WithLabelValues(kind).Set(value)
+}
 
 // DBPool is the subset of *pgxpool.Pool the streamer uses.
 type DBPool interface {
@@ -47,13 +74,20 @@ type Sink interface {
 	Send(ctx context.Context, entry AuditEntry) error
 	// Name returns a short label for logging.
 	Name() string
+	// IsNoop reports whether the sink DISCARDS every entry instead of
+	// delivering it. The streamer refuses to advance its cursor for a no-op
+	// sink: advancing it would drop the audit events permanently while
+	// logging a healthy-looking "streamed N entries" line (issue #128).
+	IsNoop() bool
 }
 
-// noopSink is a sink that discards every entry (used when the sink is not configured).
+// noopSink is a sink that discards every entry (used when the sink is not
+// configured).
 type noopSink struct{}
 
 func (noopSink) Send(_ context.Context, _ AuditEntry) error { return nil }
 func (noopSink) Name() string                               { return "noop" }
+func (noopSink) IsNoop() bool                               { return true }
 
 // SyslogSink writes RFC5424-formatted messages to a remote syslog server.
 type SyslogSink struct {
@@ -71,6 +105,9 @@ func NewSyslogSink(network, addr string) (*SyslogSink, error) {
 }
 
 func (s *SyslogSink) Name() string { return "syslog" }
+
+// IsNoop reports false: the syslog sink delivers every entry.
+func (s *SyslogSink) IsNoop() bool { return false }
 
 // Send formats the entry as a structured syslog message.
 func (s *SyslogSink) Send(_ context.Context, entry AuditEntry) error {
@@ -98,6 +135,9 @@ func NewHTTPSink(url, token string) *HTTPSink {
 }
 
 func (h *HTTPSink) Name() string { return "http" }
+
+// IsNoop reports false: the HTTP sink delivers every entry.
+func (h *HTTPSink) IsNoop() bool { return false }
 
 // Send POSTs a single audit entry as JSON.
 func (h *HTTPSink) Send(ctx context.Context, entry AuditEntry) error {
@@ -150,7 +190,17 @@ const pollBatchSize = 100
 // poll reads the cursor, fetches new audit_log rows (by seq), sends them to
 // the sink, and advances the cursor on success. FAIL-SOFT: a send error
 // leaves the cursor unchanged so the next poll retries.
+//
+// A NO-OP sink (no SIEM configured, or the configured sink failed to
+// initialise) must NEVER advance the cursor: the events would be dropped
+// permanently while the log claimed they were streamed (issue #128).
 func (s *Streamer) poll(ctx context.Context) {
+	if s.sink.IsNoop() {
+		s.logger.Warn("siem: sink is a no-op (no SIEM sink configured or the configured sink failed to initialise); " +
+			"audit events are NOT being delivered and the SIEM cursor is NOT advanced")
+		return
+	}
+
 	var lastSeq int64
 	if err := s.pool.QueryRow(ctx, `SELECT last_seq FROM siem_cursor WHERE id = 1`).Scan(&lastSeq); err != nil {
 		s.logger.Warn("siem: failed to read cursor", zap.Error(err))
@@ -230,6 +280,14 @@ func (s *Streamer) Start(ctx context.Context, interval time.Duration) {
 		s.logger.Info("siem streamer disabled (SIEM_INTERVAL=0)")
 		return
 	}
+	if s.sink.IsNoop() {
+		// Loud startup warning: without a real sink the audit events are
+		// generated but never delivered, and the SIEM cursor is deliberately
+		// NOT advanced (issue #128).
+		s.logger.Warn("siem: no SIEM sink configured — audit events will NOT be delivered to a SIEM. " +
+			"Set SIEM_SYSLOG_ADDR or SIEM_HTTP_URL to enable streaming.")
+		return
+	}
 	s.logger.Info("siem streamer started",
 		zap.String("sink", s.sink.Name()),
 		zap.Duration("interval", interval),
@@ -254,8 +312,17 @@ func (s *Streamer) Start(ctx context.Context, interval time.Duration) {
 }
 
 // BuildSink constructs the active Sink from config parameters.
-// Returns a noopSink if no sink is configured.
-func BuildSink(syslogNet, syslogAddr, httpURL, httpToken string, logger *zap.Logger) Sink {
+//
+// It returns an ERROR when no sink could be built — either because nothing
+// is configured, or because the configured sink failed to initialise (for
+// example a syslog dial failure). The previous behaviour silently fell back
+// to a no-op sink, so the streamer looked healthy ("siem: streamed audit
+// entries count=100") while every event was discarded (issue #128).
+//
+// The caller decides what to do with the error: the server must still start
+// when SIEM is simply not configured, so main.go logs it loudly and starts
+// the streamer with a no-op sink, which never advances the cursor.
+func BuildSink(syslogNet, syslogAddr, httpURL, httpToken string, logger *zap.Logger) (Sink, error) {
 	if syslogAddr != "" {
 		net := syslogNet
 		if net == "" {
@@ -263,15 +330,33 @@ func BuildSink(syslogNet, syslogAddr, httpURL, httpToken string, logger *zap.Log
 		}
 		sink, err := NewSyslogSink(net, syslogAddr)
 		if err != nil {
-			logger.Error("siem: failed to connect syslog sink; falling back to noop", zap.Error(err))
-		} else {
-			logger.Info("siem: syslog sink active", zap.String("addr", syslogAddr))
-			return sink
+			return nil, fmt.Errorf("siem: syslog sink at %s could not be initialised: %w", syslogAddr, err)
 		}
+		logger.Info("siem: syslog sink active", zap.String("addr", syslogAddr))
+		setSinkTypeGauge("syslog", SinkTypeSyslog)
+		setSinkTypeGauge("http", 0)
+		setSinkTypeGauge("none", 0)
+		return sink, nil
 	}
 	if httpURL != "" {
 		logger.Info("siem: http sink active", zap.String("url", httpURL))
-		return NewHTTPSink(httpURL, httpToken)
+		setSinkTypeGauge("http", SinkTypeHTTP)
+		setSinkTypeGauge("syslog", 0)
+		setSinkTypeGauge("none", 0)
+		return NewHTTPSink(httpURL, httpToken), nil
 	}
+	setSinkTypeGauge("none", SinkTypeNone)
+	setSinkTypeGauge("syslog", 0)
+	setSinkTypeGauge("http", 0)
+	return nil, errors.New("siem: no sink configured (set SIEM_SYSLOG_ADDR or SIEM_HTTP_URL)")
+}
+
+// NewNoopSink returns the sink that discards every entry. The streamer
+// refuses to advance its cursor for it, so no audit event is silently
+// dropped while the logs claim a successful stream.
+func NewNoopSink() Sink {
+	setSinkTypeGauge("none", SinkTypeNone)
+	setSinkTypeGauge("syslog", 0)
+	setSinkTypeGauge("http", 0)
 	return noopSink{}
 }

@@ -12,6 +12,7 @@ package reconcile
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,6 +24,11 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/notify"
 )
+
+// driftUnknown is the sentinel the drift gauges carry when the last
+// reconciliation run FAILED: the real drift counts are unknown, which must not
+// be confused with a real count of zero (issue #164).
+const driftUnknown = -1
 
 // DBPool is the subset of *pgxpool.Pool the reconciler uses. *pgxpool.Pool
 // satisfies it directly.
@@ -47,6 +53,18 @@ var (
 	lastRunTimestamp = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "freecloud_reconcile_last_run_timestamp_seconds",
 		Help: "Unix timestamp of the last reconciliation run.",
+	})
+	// reconcileFailures counts failed reconciliation runs, so a broken
+	// reconcile is distinguishable from a healthy one that found no drift
+	// (issue #164).
+	reconcileFailures = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "freecloud_reconcile_failures_total",
+		Help: "Total failed reconciliation runs.",
+	})
+	// reconcileLastRunFailed is 1 when the last run failed, 0 otherwise.
+	reconcileLastRunFailed = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "freecloud_reconcile_last_run_failed",
+		Help: "1 when the last reconciliation run failed, 0 when it succeeded.",
 	})
 )
 
@@ -138,6 +156,12 @@ func (r *Reconciler) Run(ctx context.Context) (DriftResult, error) {
 		}
 	}
 
+	// Sort both lists: they are built from map iteration, whose order is
+	// randomised in Go, so /api/v1/admin/drift returned a different order on
+	// every call (issue #178).
+	sort.Strings(result.OrphansInKeycloak)
+	sort.Strings(result.OrphansInDB)
+
 	return result, nil
 }
 
@@ -168,14 +192,29 @@ func (r *Reconciler) Start(ctx context.Context, interval time.Duration) {
 }
 
 // runAndRecord runs a reconciliation pass and updates Prometheus gauges.
+//
+// On FAILURE the gauges are still updated: the drift gauges go to the
+// sentinel value (so a stale "0 orphans" reading cannot be mistaken for a
+// healthy run), the failure counter is incremented and the last-run timestamp
+// is bumped. Without this, a broken reconcile was indistinguishable from a
+// healthy one in Prometheus — the gauges kept their previous values and the
+// timestamp never moved (issue #164).
 func (r *Reconciler) runAndRecord(ctx context.Context) {
 	result, err := r.Run(ctx)
 	if err != nil {
 		r.logger.Warn("reconciliation run failed", zap.Error(err))
+		// Sentinel: -1 means "the last run failed, the drift counts below are
+		// unknown", which is distinguishable from a real count of 0.
+		driftOrphansInKeycloak.Set(driftUnknown)
+		driftOrphansInDB.Set(driftUnknown)
+		reconcileLastRunFailed.Set(1)
+		reconcileFailures.Inc()
+		lastRunTimestamp.SetToCurrentTime()
 		return
 	}
 	driftOrphansInKeycloak.Set(float64(len(result.OrphansInKeycloak)))
 	driftOrphansInDB.Set(float64(len(result.OrphansInDB)))
+	reconcileLastRunFailed.Set(0)
 	lastRunTimestamp.SetToCurrentTime()
 
 	if len(result.OrphansInKeycloak) > 0 || len(result.OrphansInDB) > 0 {

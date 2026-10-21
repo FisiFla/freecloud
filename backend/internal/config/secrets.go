@@ -9,8 +9,11 @@ package config
 //  3. Fall back to the plain environment variable <key>.
 //
 // Precedence: _FILE > _VAULT_PATH > plain env var.
-// An empty _FILE path falls through to Vault / plain env; a non-empty path
-// whose file cannot be read is a fatal error so the server fails closed.
+//
+// A configured-but-unreadable source is a HARD FAILURE: the plain env var is
+// NOT used as a fallback. A Vault outage or a revoked token must not silently
+// downgrade the secret source (and it must not leave the secret empty
+// either) — the caller records the error and Validate() refuses to start.
 
 import (
 	"encoding/json"
@@ -20,35 +23,61 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 var vaultHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 // resolveSecret returns the secret value for the given environment variable key.
 // It follows the _FILE → _VAULT_PATH → plain-env precedence documented above.
-func resolveSecret(key, fallback string) string {
+//
+// The returned error is non-nil when a CONFIGURED source could not be read;
+// the returned value is then empty (never a value from a different source).
+func resolveSecret(key, fallback string) (string, error) {
 	// 1. _FILE
 	if filePath := os.Getenv(key + "_FILE"); filePath != "" {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
-			// Fail loudly so misconfigured _FILE paths are visible at startup.
-			// We return the empty string here; Validate() will catch it.
-			return ""
+			// Fail closed: a misconfigured _FILE path must not silently fall
+			// back to the plain env var (which may hold a stale value).
+			return "", fmt.Errorf("reading %s_FILE (%s): %w", key, filePath, err)
 		}
-		return strings.TrimRight(string(data), "\n\r")
+		return strings.TrimRight(string(data), "\n\r"), nil
 	}
 
 	// 2. _VAULT_PATH
 	if vaultPath := os.Getenv(key + "_VAULT_PATH"); vaultPath != "" {
-		if val, err := vaultRead(vaultPath); err == nil {
-			return val
+		val, err := vaultRead(vaultPath)
+		if err != nil {
+			// Fail closed: a Vault read failure must NOT fall through to the
+			// plain env var — that is a silent downgrade of the secret source.
+			return "", fmt.Errorf("reading %s from vault path %q: %w", key, vaultPath, err)
 		}
-		// If Vault read fails, fall through to plain env — Validate() will
-		// reject an empty/placeholder value in production.
+		return val, nil
 	}
 
 	// 3. Plain env var.
-	return getEnv(key, fallback)
+	return getEnv(key, fallback), nil
+}
+
+// secretResolver resolves secrets and records the failures so Validate() can
+// refuse to start the process. It is the fail-closed counterpart of the old
+// "fall through to the env var" behaviour.
+type secretResolver struct {
+	errs []string
+}
+
+// get resolves one secret, recording (and loudly logging) any failure.
+func (r *secretResolver) get(key, fallback string) string {
+	value, err := resolveSecret(key, fallback)
+	if err != nil {
+		r.errs = append(r.errs, err.Error())
+		zap.L().Error("config: secret could not be resolved from its configured source",
+			zap.String("key", key), zap.Error(err))
+		return ""
+	}
+	return value
 }
 
 // vaultRead fetches the "value" field from a HashiCorp Vault KV v2 secret at

@@ -2,7 +2,11 @@ package audit
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -98,16 +102,40 @@ func (tx *fakeTx) Conn() *pgx.Conn { return nil }
 
 // buildChain constructs a realistic sequence of entries (actorID, action, ...) and
 // returns them as ChainEntry values with correct hashes computed in order.
+//
+// The hashes are computed by an INDEPENDENT implementation of the documented
+// canonical form (see referenceHash below), NOT by the production computeHash
+// helper. Using computeHash here made the test tautological: the same function
+// produced the expected values and verified them, so a change to the hash
+// format could not be detected (issue #228).
 func buildChain(entries []ChainEntry) []ChainEntry {
 	prev := ""
 	out := make([]ChainEntry, len(entries))
 	for i, e := range entries {
 		e.PrevHash = prev
-		e.RowHash = computeHash(e.ActorID, e.Action, e.TargetType, e.TargetID, e.Details, prev)
+		e.RowHash = referenceHash(e.ActorID, e.Action, e.TargetType, e.TargetID, e.Details, prev)
 		out[i] = e
 		prev = e.RowHash
 	}
 	return out
+}
+
+// referenceHash is an independent implementation of the audit chain's
+// canonical hash, written from the documented format rather than reusing the
+// production helper:
+//
+//	hash = SHA-256( for each field: len(field) || ":" || field || "|" )
+//
+// with the fields in the order actorID, action, targetType, targetID,
+// details, prevHash.
+func referenceHash(actorID, action, targetType, targetID, details, prevHash string) string {
+	fields := []string{actorID, action, targetType, targetID, details, prevHash}
+	var b strings.Builder
+	for _, f := range fields {
+		fmt.Fprintf(&b, "%d:%s|", len(f), f)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
 }
 
 func chainRows(entries []ChainEntry) pgx.Rows {
@@ -157,6 +185,80 @@ func TestVerifyChainValid(t *testing.T) {
 	}
 	if res.RowsChecked != 3 {
 		t.Errorf("expected 3 rows checked, got %d", res.RowsChecked)
+	}
+}
+
+// TestVerifyChainDetectsWrongHashFormat proves the chain test is not
+// tautological: a chain whose hashes were computed with a DIFFERENT canonical
+// form must be rejected. Before the fix the test built its expectations with
+// the very helper it was verifying, so a change to the hash format (or to the
+// fields that go into it) could not be detected (issue #228).
+func TestVerifyChainDetectsWrongHashFormat(t *testing.T) {
+	raw := []ChainEntry{
+		{Seq: 1, ID: "a", ActorID: "alice", Action: "onboard", TargetType: "user", TargetID: "u1", Details: "{}"},
+	}
+	// Build the chain with a DIFFERENT (wrong) canonical form: the fields
+	// are joined without the length prefix.
+	chain := buildChainWrongFormat(raw)
+
+	db := &fakeDB{
+		queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+			return chainRows(chain), nil
+		},
+	}
+
+	res, err := VerifyChain(context.Background(), db)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.OK {
+		t.Error("expected a chain built with the wrong hash format to be rejected, got OK=true")
+	}
+	if res.FirstBreakSeq != 1 {
+		t.Errorf("expected the break at seq 1, got %d", res.FirstBreakSeq)
+	}
+}
+
+// buildChainWrongFormat builds a chain whose hashes use a different canonical
+// form (plain concatenation instead of length-prefixed fields).
+func buildChainWrongFormat(entries []ChainEntry) []ChainEntry {
+	prev := ""
+	out := make([]ChainEntry, len(entries))
+	for i, e := range entries {
+		e.PrevHash = prev
+		sum := sha256.Sum256([]byte(e.ActorID + e.Action + e.TargetType + e.TargetID + e.Details + prev))
+		e.RowHash = hex.EncodeToString(sum[:])
+		out[i] = e
+		prev = e.RowHash
+	}
+	return out
+}
+
+// TestVerifyChainMultiKeyDetails proves the chain verifies a row whose
+// details are a multi-key JSON object — the shape the writer actually stores.
+// Every previous fixture used the single-key value "{}", which is the one
+// value where Go's json.Marshal and Postgres' jsonb::text agree, so the
+// fixtures never exercised the canonicalisation (issue #228).
+func TestVerifyChainMultiKeyDetails(t *testing.T) {
+	details := `{"device_ids": ["d1", "d2"], "email": "alice@tenant-b.com", "role": "engineer"}`
+	raw := []ChainEntry{
+		{Seq: 1, ID: "a", ActorID: "alice", Action: "onboard", TargetType: "user", TargetID: "u1", Details: details},
+		{Seq: 2, ID: "b", ActorID: "bob", Action: "offboard", TargetType: "user", TargetID: "u2", Details: details},
+	}
+	chain := buildChain(raw)
+
+	db := &fakeDB{
+		queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+			return chainRows(chain), nil
+		},
+	}
+
+	res, err := VerifyChain(context.Background(), db)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.OK {
+		t.Errorf("expected OK=true for multi-key details, got false: %s", res.Error)
 	}
 }
 

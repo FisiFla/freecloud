@@ -22,8 +22,9 @@ export default async function RootLayout({
   children: React.ReactNode;
 }>) {
   // The middleware (src/proxy.ts) generates a per-request CSP nonce and
-  // exposes it as `x-nonce`; apply it to the inline dark-mode script so the
-  // strict production CSP (no 'unsafe-inline') still allows it.
+  // forwards it on the REQUEST headers (NextResponse.next({ request: {
+  // headers } })); apply it to the inline dark-mode script so the strict
+  // production CSP (no 'unsafe-inline') still allows it.
   const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en" suppressHydrationWarning>

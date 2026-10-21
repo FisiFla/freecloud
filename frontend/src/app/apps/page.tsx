@@ -304,10 +304,11 @@ export default function AppsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Protocol</label>
+            <span className="block text-sm font-medium text-slate-700 dark:text-slate-300">Protocol</span>
             <div className="mt-2 flex gap-4">
-              <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+              <label htmlFor="app-protocol-oidc" className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                 <input
+                  id="app-protocol-oidc"
                   type="radio"
                   name="protocol"
                   value="OIDC"
@@ -317,8 +318,9 @@ export default function AppsPage() {
                 />
                 OIDC
               </label>
-              <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+              <label htmlFor="app-protocol-saml" className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                 <input
+                  id="app-protocol-saml"
                   type="radio"
                   name="protocol"
                   value="SAML"
@@ -378,8 +380,9 @@ export default function AppsPage() {
                 </summary>
                 <div className="border-t border-slate-200 px-4 pb-4 pt-3 space-y-4 dark:border-slate-700">
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">Signing Algorithm</label>
+                    <label htmlFor="app-saml-signing-algorithm" className="block text-xs font-medium text-slate-600 dark:text-slate-400">Signing Algorithm</label>
                     <select
+                      id="app-saml-signing-algorithm"
                       value={samlSigningAlgo}
                       onChange={(e) => setSamlSigningAlgo(e.target.value as typeof samlSigningAlgo)}
                       className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
@@ -390,8 +393,9 @@ export default function AppsPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-600 dark:text-slate-400">NameID Format</label>
+                    <label htmlFor="app-saml-nameid-format" className="block text-xs font-medium text-slate-600 dark:text-slate-400">NameID Format</label>
                     <select
+                      id="app-saml-nameid-format"
                       value={samlNameIDFormat}
                       onChange={(e) => setSamlNameIDFormat(e.target.value as typeof samlNameIDFormat)}
                       className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
@@ -402,8 +406,9 @@ export default function AppsPage() {
                       <option value="unspecified">Unspecified</option>
                     </select>
                   </div>
-                  <label className="flex items-center gap-3 cursor-pointer">
+                  <label htmlFor="app-saml-encrypt" className="flex items-center gap-3 cursor-pointer">
                     <input
+                      id="app-saml-encrypt"
                       type="checkbox"
                       checked={samlEncrypt}
                       onChange={(e) => setSamlEncrypt(e.target.checked)}
@@ -413,7 +418,7 @@ export default function AppsPage() {
                   </label>
                   <div>
                     <div className="flex items-center justify-between">
-                      <label className="text-xs font-medium text-slate-600 dark:text-slate-400">Extra Attribute Mappings</label>
+                      <span className="text-xs font-medium text-slate-600 dark:text-slate-400">Extra Attribute Mappings</span>
                       <button
                         type="button"
                         onClick={() => setSamlAttrMappings(prev => [...prev, { userAttribute: "", samlAttributeName: "" }])}
@@ -506,8 +511,9 @@ export default function AppsPage() {
                 )}
                 {policy && (
                   <>
-                    <label className="flex items-center gap-3 cursor-pointer">
+                    <label htmlFor="app-policy-require-enrolled" className="flex items-center gap-3 cursor-pointer">
                       <input
+                        id="app-policy-require-enrolled"
                         type="checkbox"
                         checked={policy.requireEnrolled}
                         onChange={(e) => setPolicy({ ...policy, requireEnrolled: e.target.checked })}
@@ -515,8 +521,9 @@ export default function AppsPage() {
                       />
                       <span className="text-sm text-slate-700 dark:text-slate-300">Require device enrolled in MDM</span>
                     </label>
-                    <label className="flex items-center gap-3 cursor-pointer">
+                    <label htmlFor="app-policy-require-disk-encrypted" className="flex items-center gap-3 cursor-pointer">
                       <input
+                        id="app-policy-require-disk-encrypted"
                         type="checkbox"
                         checked={policy.requireDiskEncrypted}
                         onChange={(e) => setPolicy({ ...policy, requireDiskEncrypted: e.target.checked })}
@@ -524,8 +531,9 @@ export default function AppsPage() {
                       />
                       <span className="text-sm text-slate-700 dark:text-slate-300">Require disk encryption</span>
                     </label>
-                    <label className="flex items-center gap-3 cursor-pointer">
+                    <label htmlFor="app-policy-require-no-critical-vulns" className="flex items-center gap-3 cursor-pointer">
                       <input
+                        id="app-policy-require-no-critical-vulns"
                         type="checkbox"
                         checked={policy.requireNoCriticalVulns}
                         onChange={(e) => setPolicy({ ...policy, requireNoCriticalVulns: e.target.checked })}
@@ -570,8 +578,9 @@ export default function AppsPage() {
             </p>
 
             <div className="mt-4">
-              <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">User</label>
+              <label htmlFor="app-assign-user" className="block text-sm font-medium text-slate-700 dark:text-slate-300">User</label>
               <select
+                id="app-assign-user"
                 value={assignUserId}
                 onChange={(e) => setAssignUserId(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700 shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"

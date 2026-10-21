@@ -122,8 +122,9 @@ export default function ApprovalsPage() {
           <form onSubmit={handleSubmit} className="space-y-3">
             <div className="flex gap-3">
               <div>
-                <label className="block text-xs text-slate-500 mb-1 dark:text-slate-400">Action Type</label>
+                <label htmlFor="approval-action-type" className="block text-xs text-slate-500 mb-1 dark:text-slate-400">Action Type</label>
                 <select
+                  id="approval-action-type"
                   value={submitActionType}
                   onChange={(e) => setSubmitActionType(e.target.value as "onboard" | "offboard")}
                   className="border border-slate-200 rounded px-2 py-1.5 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"
@@ -133,10 +134,11 @@ export default function ApprovalsPage() {
                 </select>
               </div>
               <div className="flex-1">
-                <label className="block text-xs text-slate-500 mb-1 dark:text-slate-400">
+                <label htmlFor="approval-payload" className="block text-xs text-slate-500 mb-1 dark:text-slate-400">
                   Payload (JSON) — e.g. <code className="bg-slate-200 px-1 rounded dark:bg-slate-600 dark:text-slate-200">{"{\"email\":\"user@example.com\",\"firstName\":\"Jo\",\"lastName\":\"Doe\"}"}</code>
                 </label>
                 <textarea
+                  id="approval-payload"
                   value={submitPayload}
                   onChange={(e) => setSubmitPayload(e.target.value)}
                   className="w-full border border-slate-200 rounded px-2 py-1.5 text-sm font-mono text-slate-700 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-100"

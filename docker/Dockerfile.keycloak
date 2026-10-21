@@ -11,7 +11,7 @@
 # Docker Compose sets context: .. from the docker/ directory.
 
 # ---- Stage 1: Maven build ----
-FROM maven:3.9-eclipse-temurin-17 AS builder
+FROM maven:3.9-eclipse-temurin-17@sha256:1a352420f7aba21f5ad08df31bab55f74c013fb491f1ae8ab1dd7ff9ed698584 AS builder
 WORKDIR /build
 
 # Copy the Maven module.
@@ -25,11 +25,16 @@ RUN mvn -q dependency:go-offline
 RUN mvn -q package -DskipTests
 
 # ---- Stage 2: Custom Keycloak image ----
-FROM quay.io/keycloak/keycloak:25.0 AS keycloak
+FROM quay.io/keycloak/keycloak:25.0@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2 AS keycloak
 
 # Copy the shaded fat jar into Keycloak's providers directory.
 COPY --from=builder /build/target/keycloak-posture-authenticator-1.0.0.jar \
     /opt/keycloak/providers/keycloak-posture-authenticator.jar
+
+# FreeCloud entrypoint: reads the mounted Docker secrets (<VAR>_FILE) and
+# exports them under the names Keycloak expects, then execs kc.sh.
+COPY docker/keycloak-entrypoint.sh /opt/keycloak/bin/freecloud-entrypoint.sh
+RUN chmod +x /opt/keycloak/bin/freecloud-entrypoint.sh
 
 # Pre-build Keycloak so startup is fast and providers are compiled-in.
 # KC_DB is required by `kc.sh build` even though the value is overridden at runtime.
@@ -39,4 +44,4 @@ RUN /opt/keycloak/bin/kc.sh build
 # Runtime environment variables are supplied by docker-compose at startup.
 # Required: ACCESS_EVAL_URL, ACCESS_EVAL_TOKEN, POSTURE_CHECK_ENABLED
 # (The Keycloak-specific KC_* vars are also supplied by compose.)
-ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]
+ENTRYPOINT ["/opt/keycloak/bin/freecloud-entrypoint.sh"]

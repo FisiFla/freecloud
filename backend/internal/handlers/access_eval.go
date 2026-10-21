@@ -300,25 +300,18 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		// API's documented "no policy row means no posture gate" behavior.
 	}
 
-	// 4. Evaluate posture. When the SPI supplies an explicit deviceId we check
-	// that one device only. When deviceId is empty we allow if ANY enrolled
-	// device is compliant — AND-ing failures across every host blocked SSO for
-	// users who still had one clean laptop next to a retired non-compliant one.
-	var reasons []string
-	anyCompliant := false
-	var worstReasons []string
-
-	for _, devID := range deviceIDs {
-		devReasons := evaluateDevicePosture(ctx, h, policy, devID)
-		if len(devReasons) == 0 {
-			anyCompliant = true
-			break
-		}
-		worstReasons = append(worstReasons, devReasons...)
-	}
-	if !anyCompliant {
-		reasons = append(reasons, worstReasons...)
-	}
+	// 4. Evaluate posture.
+	//
+	// When the SPI supplies an explicit deviceId, deviceIDs holds exactly that
+	// one device and only it is checked.
+	//
+	// When deviceId is empty the request cannot be attributed to a device, so
+	// EVERY enrolled device must be compliant. Allowing the request because
+	// *some other* enrolled device was clean let a user on a non-compliant
+	// machine bypass posture simply by suppressing the device-identity cookie
+	// (issue #202). Failing closed here means a request is only allowed when
+	// no enrolled device contradicts it.
+	reasons := evaluateDevicesPosture(ctx, h, policy, deviceIDs)
 
 	// 5. Evaluate D1 policy conditions (time window, network, geo).
 	condReasons := evalConditions(policy, clientIP, time.Now().UTC(), h.geoIP)
@@ -330,6 +323,26 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		Allow:   allow,
 		Reasons: reasons,
 	})
+}
+
+// evaluateDevicesPosture returns the deny reasons for every device in
+// deviceIDs. A device contributes its reasons when it is non-compliant; the
+// result is empty only when EVERY device is compliant.
+//
+// This is deliberately fail-closed across the whole set: when the request
+// carries no device id the request cannot be attributed to a device, and
+// allowing it because some *other* enrolled device happened to be clean let a
+// user on a non-compliant machine bypass posture simply by suppressing the
+// device-identity cookie (issue #202).
+func evaluateDevicesPosture(ctx context.Context, h *Handler, policy appPolicy, deviceIDs []string) []string {
+	var reasons []string
+	for _, devID := range deviceIDs {
+		devReasons := evaluateDevicePosture(ctx, h, policy, devID)
+		if len(devReasons) > 0 {
+			reasons = append(reasons, devReasons...)
+		}
+	}
+	return reasons
 }
 
 // evaluateDevicePosture returns deny reasons for a single device. Empty means

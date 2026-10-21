@@ -113,8 +113,10 @@ func (h *Handler) CreateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "review_schedule.create", "schedule", id,
-		map[string]interface{}{"name": req.Name, "cadence": req.Cadence})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "review_schedule.create", "schedule", id,
+		map[string]interface{}{"name": req.Name, "cadence": req.Cadence}); err != nil {
+		h.logger.Warn("failed to write review schedule creation audit log", zap.Error(err))
+	}
 
 	resp := ReviewSchedule{
 		ID:        id,
@@ -257,8 +259,10 @@ func (h *Handler) UpdateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 		s.LastRunAt = &str
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "review_schedule.update", "schedule", schedID,
-		map[string]interface{}{})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "review_schedule.update", "schedule", schedID,
+		map[string]interface{}{}); err != nil {
+		h.logger.Warn("failed to write review schedule update audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusOK, s)
 }
@@ -289,8 +293,10 @@ func (h *Handler) DeleteReviewSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "review_schedule.delete", "schedule", schedID,
-		map[string]interface{}{})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "review_schedule.delete", "schedule", schedID,
+		map[string]interface{}{}); err != nil {
+		h.logger.Warn("failed to write review schedule deletion audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }

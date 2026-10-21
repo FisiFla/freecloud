@@ -149,6 +149,44 @@ class PostureCheckAuthenticatorTest {
         verify(context, never()).success();
     }
 
+    // ---- Wrong-typed payloads must fail closed, not throw ----
+
+    @Test
+    void testWrongTypedAllowFailsClosedWithAccessBlockedForm() {
+        // "allow" is a string instead of a boolean: the typed getter throws.
+        PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
+            "http://localhost:9999/no-server", "token", true,
+            (url, token, body) -> new BackendResponse(200, "{\"success\":true,\"data\":{\"allow\":\"yes\"}}")
+        );
+        auth.authenticate(context);
+        verify(context).failure(eq(AuthenticationFlowError.ACCESS_DENIED), any(Response.class));
+        verify(context, never()).success();
+    }
+
+    @Test
+    void testWrongTypedReasonsFailsClosedWithAccessBlockedForm() {
+        // "reasons" is a string instead of an array.
+        PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
+            "http://localhost:9999/no-server", "token", true,
+            (url, token, body) -> new BackendResponse(200, "{\"success\":true,\"data\":{\"allow\":false,\"reasons\":\"none\"}}")
+        );
+        auth.authenticate(context);
+        verify(context).failure(eq(AuthenticationFlowError.ACCESS_DENIED), any(Response.class));
+        verify(context, never()).success();
+    }
+
+    @Test
+    void testNullAllowFailsClosedWithAccessBlockedForm() {
+        // A JSON null for "allow" is well-formed but not a boolean.
+        PostureCheckAuthenticator auth = new PostureCheckAuthenticator(
+            "http://localhost:9999/no-server", "token", true,
+            (url, token, body) -> new BackendResponse(200, "{\"success\":true,\"data\":{\"allow\":null}}")
+        );
+        auth.authenticate(context);
+        verify(context).failure(eq(AuthenticationFlowError.ACCESS_DENIED), any(Response.class));
+        verify(context, never()).success();
+    }
+
     // ---- A3: client-IP forwarding ----
 
     @Test

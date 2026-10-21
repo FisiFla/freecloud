@@ -24,6 +24,22 @@ import (
 // (io.ReadAll would otherwise be unbounded).
 const maxKeycloakResponseBytes = 10 << 20 // 10 MiB
 
+// adminRequestTimeout bounds the three admin requests this package issues
+// with a hand-built http.Client (the SAML metadata fetch, the LDAP
+// connection test and the federation sync trigger).
+//
+// http.DefaultClient has NO timeout, so a hung or black-holed Keycloak left
+// those calls blocked forever: the server's WriteTimeout dropped the client
+// but the goroutine and its connection stayed parked (issue #139). Every
+// other outbound call in the codebase already uses a bounded client
+// (middleware/auth.go 5s, siem/siem.go 10s, config/secrets.go 5s).
+const adminRequestTimeout = 10 * time.Second
+
+// adminHTTPClient is the bounded client used for the hand-built admin
+// requests. It is a package-level var so tests can substitute a client with
+// a shorter timeout.
+var adminHTTPClient = &http.Client{Timeout: adminRequestTimeout}
+
 // readBoundedResponse reads resp.Body up to maxKeycloakResponseBytes and
 // returns an error if the response is oversized.
 func readBoundedResponse(resp *http.Response) ([]byte, error) {
@@ -900,7 +916,7 @@ func (k *KeycloakClient) GetSAMLMetadataXML(ctx context.Context) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("build saml metadata request: %w", err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := adminHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("fetch saml metadata: %w", err)
 	}
@@ -1461,7 +1477,7 @@ func (k *KeycloakClient) TestLDAPConnection(ctx context.Context, componentID, co
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := adminHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("test ldap connection: %w", err)
 	}
@@ -1486,7 +1502,7 @@ func (k *KeycloakClient) TriggerFederationSync(ctx context.Context, componentID,
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := adminHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("trigger federation sync: %w", err)
 	}

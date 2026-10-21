@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 )
 
 // setSecureProdEnv sets a complete, secure production configuration via the
@@ -17,6 +18,7 @@ func setSecureProdEnv(t *testing.T) {
 	t.Setenv("KEYCLOAK_AUDIENCE", "freecloud-dashboard")
 	t.Setenv("FLEET_API_TOKEN", "fleet-token")
 	t.Setenv("FLEET_WEBHOOK_SECRET", "webhook-secret")
+	t.Setenv("DEVICE_COOKIE_SECRET", "device-cookie-secret")
 	t.Setenv("PROVISIONING_MASTER_KEY", "MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=")
 	t.Setenv("CORS_ORIGIN", "https://dashboard.example.com")
 	t.Setenv("SCIM_BEARER_TOKEN", "scim-secret-token")
@@ -178,18 +180,156 @@ func TestValidateProductionMissingAccessEvalToken(t *testing.T) {
 	}
 }
 
-func TestDeviceCookieSigningSecretFallback(t *testing.T) {
+// The device-cookie key is always domain-separated from the fleet-webhook
+// key, even when both derive from the same master secret: the two trust
+// domains (browser→backend cookie vs. Fleet→backend webhook) must never
+// share key material (issue #125).
+func TestDeviceCookieSigningSecretIsDomainSeparated(t *testing.T) {
 	t.Setenv("APP_ENV", "development")
 	t.Setenv("FLEET_WEBHOOK_SECRET", "fleet-secret")
 	t.Setenv("DEVICE_COOKIE_SECRET", "")
 	cfg := Load()
-	if got := cfg.DeviceCookieSigningSecret(); got != "fleet-secret" {
-		t.Fatalf("empty DEVICE_COOKIE_SECRET: want fleet webhook secret, got %q", got)
+
+	got := cfg.DeviceCookieSigningSecret()
+	if got == "" {
+		t.Fatal("expected a derived device-cookie key")
+	}
+	if got == "fleet-secret" {
+		t.Error("device-cookie key must not be the raw fleet webhook secret")
+	}
+	// The fleet webhook key stays RAW: FleetDM signs the enrollment callback
+	// with the shared secret itself, so a derived subkey would break it.
+	if cfg.FleetWebhookSecret != "fleet-secret" {
+		t.Errorf("fleet webhook secret must stay raw, got %q", cfg.FleetWebhookSecret)
+	}
+	// Deriving the same master with the same label is deterministic, so a
+	// restart does not invalidate every issued cookie.
+	if cfg.DeviceCookieSigningSecret() != got {
+		t.Error("device-cookie key derivation must be deterministic")
+	}
+}
+
+// With a dedicated DEVICE_COOKIE_SECRET the key is derived from THAT
+// secret, so the fleet-webhook master is never involved.
+func TestDeviceCookieSigningSecretPrefersDedicatedSecret(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("FLEET_WEBHOOK_SECRET", "fleet-secret")
+	t.Setenv("DEVICE_COOKIE_SECRET", "cookie-only")
+	cfg := Load()
+
+	got := cfg.DeviceCookieSigningSecret()
+	if got == "" {
+		t.Fatal("expected a device-cookie key")
+	}
+	if got == "cookie-only" {
+		t.Error("device-cookie key must be domain-separated from its master too")
+	}
+	if got == "fleet-secret" {
+		t.Error("device-cookie key must never equal the fleet webhook secret")
+	}
+}
+
+// The device-cookie key is derived from FLEET_WEBHOOK_SECRET when no
+// dedicated DEVICE_COOKIE_SECRET is set. The derivation is domain-separated,
+// so the two trust domains never share key material (issue #125) — but the
+// operator should know the cookie key is not independently rotatable.
+func TestDeviceCookieSecretConfigured(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("FLEET_WEBHOOK_SECRET", "fleet-secret")
+	t.Setenv("DEVICE_COOKIE_SECRET", "")
+	cfg := Load()
+	if cfg.DeviceCookieSecretConfigured() {
+		t.Error("expected DeviceCookieSecretConfigured() to be false without DEVICE_COOKIE_SECRET")
 	}
 	t.Setenv("DEVICE_COOKIE_SECRET", "cookie-only")
 	cfg = Load()
-	if got := cfg.DeviceCookieSigningSecret(); got != "cookie-only" {
-		t.Fatalf("set DEVICE_COOKIE_SECRET: want dedicated secret, got %q", got)
+	if !cfg.DeviceCookieSecretConfigured() {
+		t.Error("expected DeviceCookieSecretConfigured() to be true with DEVICE_COOKIE_SECRET set")
+	}
+}
+
+// A wildcard CORS origin is invalid everywhere: the CORS handler also sends
+// Allow-Credentials: true, which the spec forbids for a wildcard.
+func TestValidateRejectsWildcardCORSOrigin(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("CORS_ORIGIN", "*")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for CORS_ORIGIN=* , got nil")
+	}
+}
+
+// The wildcard is rejected in dev/test too — it is invalid in every
+// environment, not just production.
+func TestValidateRejectsWildcardCORSOriginInDev(t *testing.T) {
+	t.Setenv("APP_ENV", "development")
+	t.Setenv("CORS_ORIGIN", "*")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for CORS_ORIGIN=* in development, got nil")
+	}
+}
+
+// Outside dev/test the dashboard origin must be an absolute https URL.
+func TestValidateRejectsNonHTTPSCORSOrigin(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("CORS_ORIGIN", "http://dashboard.example.com")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for a non-https CORS_ORIGIN in production, got nil")
+	}
+}
+
+// An unparsable AUDIT_RETAIN_FOR must fail validation: silently substituting
+// 15m pruned the entire audit history (issue #130).
+func TestValidateRejectsUnparsableAuditRetention(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("AUDIT_RETAIN_FOR", "30 days")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for an unparsable AUDIT_RETAIN_FOR, got nil")
+	}
+}
+
+// The day suffix operators naturally use must parse.
+func TestParseDurationAcceptsDaySuffix(t *testing.T) {
+	d, err := parseDuration("30d")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := 30 * 24 * time.Hour; d != want {
+		t.Errorf("expected %v, got %v", want, d)
+	}
+}
+
+func TestParseDurationRejectsGarbage(t *testing.T) {
+	for _, s := range []string{"30 days", "abc", "-5m", "15x"} {
+		if _, err := parseDuration(s); err == nil {
+			t.Errorf("expected an error for %q", s)
+		}
+	}
+}
+
+func TestParseDurationZeroAndEmpty(t *testing.T) {
+	for _, s := range []string{"", "0", "  "} {
+		d, err := parseDuration(s)
+		if err != nil {
+			t.Errorf("%q: unexpected error: %v", s, err)
+		}
+		if d != 0 {
+			t.Errorf("%q: expected 0, got %v", s, d)
+		}
+	}
+}
+
+// A malformed KEYCLOAK_URL breaks issuer/JWKS derivation, so every token is
+// rejected — catch it at startup instead of at the first request.
+func TestValidateRejectsMalformedKeycloakURL(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("KEYCLOAK_URL", "not-a-url")
+	cfg := Load()
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected error for a malformed KEYCLOAK_URL, got nil")
 	}
 }
 

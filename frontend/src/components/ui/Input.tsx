@@ -1,6 +1,14 @@
 "use client";
 
-import { type InputHTMLAttributes, type SelectHTMLAttributes, forwardRef, type ReactNode } from "react";
+import {
+  type InputHTMLAttributes,
+  type SelectHTMLAttributes,
+  cloneElement,
+  forwardRef,
+  isValidElement,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 
 interface FieldProps {
   label: string;
@@ -8,16 +16,40 @@ interface FieldProps {
   hint?: string;
   children: ReactNode;
   required?: boolean;
+  /**
+   * id of the control this field labels. The label is associated with it via
+   * htmlFor and the child control receives the id, so the control gets an
+   * accessible name (WCAG 1.3.1 / 4.1.2).
+   *
+   * When no id is given the caption is rendered as a plain <span> instead of
+   * a <label>: there is no control to associate it with, and an orphan
+   * <label> is announced as a form field that does not exist.
+   */
+  id?: string;
 }
 
-export function Field({ label, error, hint, children, required }: FieldProps) {
+export function Field({ label, error, hint, children, required, id }: FieldProps) {
+  // Only clone when an id was supplied, so a child that already carries its
+  // own id is left untouched.
+  const control =
+    id && isValidElement(children)
+      ? cloneElement(children as ReactElement<{ id?: string }>, { id })
+      : children;
+  const captionClass = "block text-sm font-medium text-slate-700 dark:text-slate-300";
   return (
     <div>
-      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
-        {label}
-        {required && <span className="ml-0.5 text-red-500">*</span>}
-      </label>
-      {children}
+      {id ? (
+        <label htmlFor={id} className={captionClass}>
+          {label}
+          {required && <span className="ml-0.5 text-red-500">*</span>}
+        </label>
+      ) : (
+        <span className={captionClass}>
+          {label}
+          {required && <span className="ml-0.5 text-red-500">*</span>}
+        </span>
+      )}
+      {control}
       {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
       {hint && !error && <p className="mt-1 text-xs text-slate-500 dark:text-slate-500">{hint}</p>}
     </div>

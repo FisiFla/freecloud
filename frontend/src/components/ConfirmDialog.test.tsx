@@ -62,4 +62,31 @@ describe("ConfirmDialog", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  // --- #190: the dialog traps Tab and restores focus to the trigger ---
+  it("keeps Tab focus inside the dialog", () => {
+    render(<ConfirmDialog {...baseProps} />);
+    const dialog = screen.getByRole("dialog");
+    const confirm = screen.getByText("Delete");
+
+    confirm.focus();
+    expect(document.activeElement).toBe(confirm);
+    fireEvent.keyDown(document, { key: "Tab" });
+    // Focus wrapped back to the first control instead of escaping the dialog.
+    expect(document.activeElement).toBe(screen.getByText("Cancel"));
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it("restores focus to the trigger when it closes", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    const { rerender } = render(<ConfirmDialog {...baseProps} />);
+    expect(document.activeElement).not.toBe(trigger);
+
+    rerender(<ConfirmDialog {...baseProps} isOpen={false} />);
+    expect(document.activeElement).toBe(trigger);
+    trigger.remove();
+  });
 });

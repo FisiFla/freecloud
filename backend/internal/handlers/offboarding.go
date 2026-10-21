@@ -87,45 +87,10 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		sessionsTerminated = true
 	}
 
-	// Step 3: Look up device IDs
-	var deviceIDs []string
-	if h.db != nil {
-		rows, err := h.db.Query(ctx,
-			`SELECT device_id FROM users_devices_mapping WHERE user_id = $1`,
-			userID,
-		)
-		if err != nil {
-			logger.Error("failed to query device mapping", zap.Error(err))
-			warnings = append(warnings, "failed to look up user devices")
-		} else {
-			for rows.Next() {
-				var devID string
-				if err := rows.Scan(&devID); err != nil {
-					logger.Warn("failed to scan device ID", zap.Error(err))
-					continue
-				}
-				deviceIDs = append(deviceIDs, devID)
-			}
-			if err := rows.Err(); err != nil {
-				logger.Error("error iterating device rows", zap.Error(err))
-				warnings = append(warnings, "failed to read user devices")
-			}
-			rows.Close()
-		}
-	}
-
-	// Step 4: Wipe each device best-effort (sequential, no shared mutation)
-	for _, devID := range deviceIDs {
-		if err := h.fleet.IssueRemoteWipe(ctx, devID); err != nil {
-			logger.Error("failed to wipe device",
-				zap.String("device_id", devID),
-				zap.Error(err),
-			)
-			devicesFailed++
-		} else {
-			devicesWiped++
-		}
-	}
+	// Step 3+4: look up the user's devices and wipe each one (best-effort).
+	var deviceWarnings []string
+	devicesWiped, devicesFailed, deviceWarnings = h.wipeUserDevices(ctx, userID)
+	warnings = append(warnings, deviceWarnings...)
 
 	// A3: Deactivate remote accounts on provisioning-enabled apps (best-effort).
 	if h.provisionEngine != nil && h.db != nil {
@@ -136,7 +101,6 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 		if auditErr := h.writeAuditEntryBestEffort(r.Context(), actorID, "offboard", "user", userID, map[string]interface{}{
 			"devices_wiped":  devicesWiped,
 			"devices_failed": devicesFailed,
-			"device_ids":     deviceIDs,
 		}); auditErr != nil {
 			logger.Warn("failed to write audit log", zap.Error(auditErr))
 			warnings = append(warnings, "failed to write offboard audit log")
@@ -177,6 +141,60 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// wipeUserDevices looks up the devices mapped to userID and issues a remote
+// wipe for each of them. It is the shared device-wipe step of the offboard
+// flow: the direct endpoint (Offboard) and the approval-executed offboard
+// (executeApprovedAction) both call it, so the panic button's device-wipe
+// guarantee holds no matter how the offboard was triggered.
+//
+// Best-effort per device: a failing wipe is counted and logged, it never
+// aborts the rest of the offboard. The returned warnings describe what could
+// not be done (the device lookup failed, N wipes failed).
+func (h *Handler) wipeUserDevices(ctx context.Context, userID string) (wiped int, failed int, warnings []string) {
+	var deviceIDs []string
+	if h.db != nil {
+		rows, err := h.db.Query(ctx,
+			`SELECT device_id FROM users_devices_mapping WHERE user_id = $1`,
+			userID,
+		)
+		if err != nil {
+			h.logger.Error("failed to query device mapping", zap.String("user_id", userID), zap.Error(err))
+			warnings = append(warnings, "failed to look up user devices")
+		} else {
+			for rows.Next() {
+				var devID string
+				if err := rows.Scan(&devID); err != nil {
+					h.logger.Warn("failed to scan device ID", zap.String("user_id", userID), zap.Error(err))
+					continue
+				}
+				deviceIDs = append(deviceIDs, devID)
+			}
+			if err := rows.Err(); err != nil {
+				h.logger.Error("error iterating device rows", zap.String("user_id", userID), zap.Error(err))
+				warnings = append(warnings, "failed to read user devices")
+			}
+			rows.Close()
+		}
+	}
+
+	for _, devID := range deviceIDs {
+		if err := h.fleet.IssueRemoteWipe(ctx, devID); err != nil {
+			h.logger.Error("failed to wipe device",
+				zap.String("user_id", userID),
+				zap.String("device_id", devID),
+				zap.Error(err),
+			)
+			failed++
+			continue
+		}
+		wiped++
+	}
+	if failed > 0 {
+		warnings = append(warnings, "failed to wipe one or more devices")
+	}
+	return wiped, failed, warnings
+}
+
 // triggerDeprovisioningForUser queries provisioned remote accounts for userID
 // and calls DeprovisionUser on each. Best-effort: errors are logged and audited.
 func (h *Handler) triggerDeprovisioningForUser(ctx context.Context, userID string) {
@@ -207,11 +225,15 @@ func (h *Handler) triggerDeprovisioningForUser(ctx context.Context, userID strin
 		if err := h.provisionEngine.DeprovisionUser(ctx, appID, userID); err != nil {
 			h.logger.Warn("triggerDeprovisioning: deprovision failed",
 				zap.String("app_id", appID), zap.String("user_id", userID), zap.Error(err))
-			_ = h.writeAuditEntryBestEffort(ctx, "system:provisioning", "deprovision_failed", "user", userID,
-				map[string]interface{}{"app_id": appID, "error": err.Error()})
+			if auditErr := h.writeAuditEntryBestEffort(ctx, "system:provisioning", "deprovision_failed", "user", userID,
+				map[string]interface{}{"app_id": appID, "error": err.Error()}); auditErr != nil {
+				h.logger.Warn("failed to write deprovision failure audit log", zap.Error(auditErr))
+			}
 		} else {
-			_ = h.writeAuditEntryBestEffort(ctx, "system:provisioning", "deprovision_success", "user", userID,
-				map[string]interface{}{"app_id": appID})
+			if auditErr := h.writeAuditEntryBestEffort(ctx, "system:provisioning", "deprovision_success", "user", userID,
+				map[string]interface{}{"app_id": appID}); auditErr != nil {
+				h.logger.Warn("failed to write deprovision success audit log", zap.Error(auditErr))
+			}
 		}
 	}
 }

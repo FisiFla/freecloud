@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { Mail, Briefcase, Building2, Monitor, AlertTriangle, AlertCircle, CheckCircle, XCircle, Pencil, KeyRound, Lock, Package, ShieldCheck, ShieldAlert, ChevronRight, RotateCcw, KeySquare, ChevronDown } from "lucide-react";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -46,6 +46,18 @@ export default function EmployeeDetailPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  // Timer that closes the edit form after a successful save — cleared on
+  // unmount so a pending timeout cannot fire after the component is gone.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // A5 — password reset
   const [resetSending, setResetSending] = useState(false);
@@ -86,12 +98,16 @@ export default function EmployeeDetailPage() {
 
   useEffect(() => {
     if (!apiReady) return;
+    // A late response for a previous employee must not overwrite the state
+    // after the id changed (client-side navigation between employees).
+    let cancelled = false;
     const fetchData = async () => {
       try {
         setLoading(true);
         setError(null);
 
         const userData = await getUser(userId);
+        if (cancelled) return;
         setEmployee({
           id: String(userData.id || ""),
           firstName: String(userData.firstName || ""),
@@ -105,22 +121,29 @@ export default function EmployeeDetailPage() {
         setDevices(Array.isArray(userData.devices) ? userData.devices : []);
 
         // C2: fetch MFA status in parallel — non-blocking.
-        getMFAStatus(userId).then(setMfaStatus).catch(() => {/* silently skip */});
+        getMFAStatus(userId)
+          .then((status) => {
+            if (!cancelled) setMfaStatus(status);
+          })
+          .catch(() => {/* silently skip */});
 
         // Fetch policies for B4 (best-effort)
         try {
           const policyData = await listPolicies();
-          setPolicies(Array.isArray(policyData.policies) ? policyData.policies : []);
+          if (!cancelled) setPolicies(Array.isArray(policyData.policies) ? policyData.policies : []);
         } catch {
           // Policy list is non-critical; don't block the page
         }
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to load employee data");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load employee data");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
     fetchData();
+    return () => {
+      cancelled = true;
+    };
   }, [userId, apiReady]);
 
   const openEdit = () => {
@@ -160,7 +183,11 @@ export default function EmployeeDetailPage() {
         isFederated: Boolean(updated.isFederated),
       });
       setSaveSuccess(true);
-      setTimeout(() => { setShowEdit(false); setSaveSuccess(false); }, 1200);
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        setShowEdit(false);
+        setSaveSuccess(false);
+      }, 1200);
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -521,13 +548,14 @@ export default function EmployeeDetailPage() {
                   )}
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs font-medium text-slate-700">
+                      <label htmlFor="edit-first-name" className="block text-xs font-medium text-slate-700">
                         First Name
                         {employee?.isFederated && (
                           <span className="ml-1 text-xs text-blue-500">(managed by directory)</span>
                         )}
                       </label>
                       <input
+                        id="edit-first-name"
                         type="text"
                         value={editFirst}
                         onChange={(e) => setEditFirst(e.target.value)}
@@ -538,13 +566,14 @@ export default function EmployeeDetailPage() {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-700">
+                      <label htmlFor="edit-last-name" className="block text-xs font-medium text-slate-700">
                         Last Name
                         {employee?.isFederated && (
                           <span className="ml-1 text-xs text-blue-500">(managed by directory)</span>
                         )}
                       </label>
                       <input
+                        id="edit-last-name"
                         type="text"
                         value={editLast}
                         onChange={(e) => setEditLast(e.target.value)}
@@ -556,8 +585,9 @@ export default function EmployeeDetailPage() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-700">Department</label>
+                    <label htmlFor="edit-department" className="block text-xs font-medium text-slate-700">Department</label>
                     <input
+                      id="edit-department"
                       type="text"
                       value={editDept}
                       onChange={(e) => setEditDept(e.target.value)}
@@ -565,8 +595,9 @@ export default function EmployeeDetailPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-700">Role</label>
+                    <label htmlFor="edit-role" className="block text-xs font-medium text-slate-700">Role</label>
                     <input
+                      id="edit-role"
                       type="text"
                       value={editRole}
                       onChange={(e) => setEditRole(e.target.value)}
@@ -574,9 +605,11 @@ export default function EmployeeDetailPage() {
                     />
                   </div>
                   <div className="flex items-center gap-3">
-                    <label className="text-sm font-medium text-slate-700">Account enabled</label>
+                    <span className="text-sm font-medium text-slate-700">Account enabled</span>
                     <button
                       type="button"
+                      aria-pressed={editEnabled}
+                      aria-label="Account enabled"
                       onClick={() => setEditEnabled((v) => !v)}
                       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${editEnabled ? "bg-indigo-600" : "bg-slate-300"}`}
                     >

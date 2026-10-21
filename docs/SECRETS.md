@@ -23,6 +23,33 @@ FLEET_API_TOKEN_FILE=/var/secrets/fleet-token
 
 A missing or unreadable file returns an empty value, which `Validate()` rejects in production (fail-closed).
 
+#### How the production stack delivers secrets
+
+`docker/init-secrets/generate.sh` writes every auto-generated secret twice: into
+`.secrets/secrets.env` (`KEY=VALUE`) and into `.secrets/files/<key>` (one file
+per secret). The production compose mounts the per-key files as Docker secrets
+(`/run/secrets/<name>`) and points the services at them:
+
+| Secret | Service | Delivery |
+|---|---|---|
+| `POSTGRES_PASSWORD` | postgres | `POSTGRES_PASSWORD_FILE` (native to the Postgres image) |
+| `KC_ADMIN_PASSWORD` | keycloak | `FREECLOUD_KEYCLOAK_ADMIN_PASSWORD_FILE` → read by `docker/keycloak-entrypoint.sh` |
+| `POSTGRES_PASSWORD` | keycloak | `FREECLOUD_KEYCLOAK_DB_PASSWORD_FILE` → read by `docker/keycloak-entrypoint.sh` |
+| `ACCESS_EVAL_TOKEN` | keycloak | `FREECLOUD_ACCESS_EVAL_TOKEN_FILE` → read by `docker/keycloak-entrypoint.sh` |
+| `AUTH_SECRET` | frontend | mounted file, read by the container entrypoint |
+| `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`, `FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD` | backend | `<VAR>_FILE` (resolved natively by `config.resolveSecret`) |
+| `PROVISIONING_MASTER_KEY` | backend | `<VAR>_FILE` **and** the plain env var — `backend/internal/handlers/provisioning.go` still reads the plain variable directly |
+
+The values are therefore not visible in `docker inspect` or
+`/proc/<pid>/environ` — with the single exception of the database password,
+which has to appear inside the `DATABASE_URL` that Compose interpolates, and
+of the operator-provided variables in `.env.prod` (`FLEET_API_TOKEN`,
+`AUTH_KEYCLOAK_SECRET`, `SMTP_PASSWORD`).
+
+`.secrets/` is created with mode `0700`; the per-key files inside are
+world-readable so that containers running as a non-root uid can read them,
+and the directory permissions are what keep them off the host.
+
 ### 2. HashiCorp Vault (`<VAR>_VAULT_PATH`)
 
 Set `<VAR>_VAULT_PATH` to the path of a KV v1 or v2 secret, and also set `VAULT_ADDR` and `VAULT_TOKEN`.

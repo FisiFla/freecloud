@@ -14,6 +14,11 @@ import (
 // GetAnalyticsSnapshots returns the time-series analytics snapshot rows.
 // Route: GET /api/v1/analytics/snapshots?limit=N&from=RFC3339&to=RFC3339
 // Default limit 24, max 1000. from/to filter by captured_at (inclusive).
+//
+// The limit is clamped HERE, at the handler boundary, so the documented
+// contract ("max 1000") is enforced by the API itself — the snapshotter
+// clamps as well, but the value that reaches it used to be whatever the
+// client asked for.
 func (h *Handler) GetAnalyticsSnapshots(w http.ResponseWriter, r *http.Request) {
 	if h.snapshotter == nil {
 		respondError(w, http.StatusServiceUnavailable, "analytics snapshots not configured")
@@ -26,11 +31,14 @@ func (h *Handler) GetAnalyticsSnapshots(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	limit := 24
+	limit := defaultAnalyticsLimit
 	if ls := r.URL.Query().Get("limit"); ls != "" {
 		if v, err := strconv.Atoi(ls); err == nil && v > 0 {
 			limit = v
 		}
+	}
+	if limit > maxAnalyticsLimit {
+		limit = maxAnalyticsLimit
 	}
 
 	var from, to time.Time
@@ -84,6 +92,15 @@ func (h *Handler) GetAnalyticsSnapshots(w http.ResponseWriter, r *http.Request) 
 	respondJSON(w, http.StatusOK, series)
 }
 
+const (
+	// defaultAnalyticsLimit is the number of snapshot rows returned when
+	// the client does not ask for a specific limit.
+	defaultAnalyticsLimit = 24
+	// maxAnalyticsLimit is the documented maximum number of snapshot rows
+	// a single request may return.
+	maxAnalyticsLimit = 1000
+)
+
 // snapshotResponseRow is the JSON shape for a single analytics snapshot.
 type snapshotResponseRow struct {
 	ID              int64   `json:"id"`
@@ -112,4 +129,3 @@ func toSnapshotResponse(raw []snapshot.SnapshotRow) []snapshotResponseRow {
 	}
 	return out
 }
-

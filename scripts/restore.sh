@@ -55,6 +55,19 @@ export PGPASSWORD
 PGPASSWORD=$(echo "$_parsed" | sed -n '4p')
 PGDB=$(echo "$_parsed" | sed -n '5p')
 
+psql_target() {
+  psql \
+    --host="$PGHOST" \
+    --port="$PGPORT" \
+    --username="$PGUSER" \
+    --dbname="$PGDB" \
+    --no-password \
+    -X \
+    --tuples-only \
+    --no-align \
+    "$@"
+}
+
 echo "Restoring ${DUMP_FILE} into ${PGHOST}:${PGPORT} (database: ${PGDB}) ..."
 echo "WARNING: existing databases in the dump will be dropped and recreated."
 read -r -p "Type YES to continue: " CONFIRM
@@ -63,13 +76,60 @@ if [ "$CONFIRM" != "YES" ]; then
   exit 1
 fi
 
-psql \
+PSQL_LOG="$(mktemp -t freecloud-restore.XXXXXX)"
+cleanup() {
+  rm -f "${PSQL_LOG}"
+}
+trap cleanup EXIT
+
+# A pg_dumpall cluster dump is NOT expected to run without errors: the
+# bootstrap superuser already exists on the target ("role ... already
+# exists"), and because the dump was taken with --clean it also emits
+# DROP ROLE IF EXISTS, which fails whenever the role still owns objects.
+# Aborting on the first such error would leave a half-restored cluster, so
+# psql runs with ON_ERROR_STOP=0 and the result is verified afterwards.
+# -X keeps ~/.psqlrc out of the way so local psql settings cannot change the
+# behaviour of a production restore.
+if ! psql \
   --host="$PGHOST" \
   --port="$PGPORT" \
   --username="$PGUSER" \
   --dbname="$PGDB" \
   --no-password \
-  --file="$DUMP_FILE" \
-  --set ON_ERROR_STOP=1
+  -X \
+  --set ON_ERROR_STOP=0 \
+  --file="$DUMP_FILE" 2>&1 | tee "${PSQL_LOG}"; then
+  echo "" >&2
+  echo "ERROR: psql aborted while restoring the dump — the target is incomplete." >&2
+  exit 1
+fi
+
+# ── Verify the result ────────────────────────────────────────────────────────
+#
+# "psql exited 0" only means it did not hit a fatal error. Check that every
+# database the dump creates actually exists on the target now.
+
+EXPECTED_DBS=$(sed -n 's/^CREATE DATABASE \([^ ]*\).*/\1/p' "$DUMP_FILE" | tr -d '"' | sort -u)
+if [ -z "${EXPECTED_DBS}" ]; then
+  echo "WARNING: the dump contains no CREATE DATABASE statements — nothing to verify." >&2
+fi
+
+FAILED=0
+for db in ${EXPECTED_DBS}; do
+  count=$(psql_target -c "SELECT count(*) FROM pg_database WHERE datname = '${db}';" | tr -d '[:space:]')
+  if [ "${count}" = "1" ]; then
+    echo "  OK  database ${db} exists"
+  else
+    echo "  FAIL database ${db} is missing after the restore" >&2
+    FAILED=1
+  fi
+done
+
+if [ "${FAILED}" -ne 0 ]; then
+  echo "" >&2
+  echo "Restore finished with errors: the restored cluster is incomplete." >&2
+  echo "See the psql output above for the failing statements." >&2
+  exit 1
+fi
 
 echo "Restore complete."

@@ -6,6 +6,7 @@ package snapshot
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -33,15 +34,23 @@ type DBPool interface {
 }
 
 // SnapshotRow is one time-series data point returned by GetSeries.
+//
+// Unit convention: every rate-like field is a ratio in the range 0–1.
+// complianceRate and mfaCoveragePct are both ratios, never percentages —
+// the dashboard renders both through a single pct() helper that multiplies
+// by 100, so a 0–100 value here would be displayed as e.g. "8800%".
 type SnapshotRow struct {
-	ID              int64     `json:"id"`
-	CapturedAt      time.Time `json:"capturedAt"`
-	ComplianceRate  float64   `json:"complianceRate"`
-	EnrolledDevices int       `json:"enrolledDevices"`
-	MFACoveragePct  float64   `json:"mfaCoveragePct"`
-	AppCount        int       `json:"appCount"`
-	OnboardCount    int       `json:"onboardCount"`
-	OffboardCount   int       `json:"offboardCount"`
+	ID         int64     `json:"id"`
+	CapturedAt time.Time `json:"capturedAt"`
+	// ComplianceRate is the share of compliant devices, 0–1.
+	ComplianceRate float64 `json:"complianceRate"`
+	// EnrolledDevices is a count.
+	EnrolledDevices int `json:"enrolledDevices"`
+	// MFACoveragePct is the share of users with MFA enrolled, 0–1.
+	MFACoveragePct float64 `json:"mfaCoveragePct"`
+	AppCount       int     `json:"appCount"`
+	OnboardCount   int     `json:"onboardCount"`
+	OffboardCount  int     `json:"offboardCount"`
 }
 
 // Snapshotter periodically writes analytics snapshots to the DB.
@@ -176,7 +185,11 @@ func (s *Snapshotter) takeSnapshotForOrg(ctx context.Context, orgID string) erro
 		).Scan(&mfaEnrolled); err != nil {
 			return err
 		}
-		mfaCoveragePct = float64(mfaEnrolled) / float64(mfaTotal) * 100.0
+		// Ratio in the range 0–1, matching complianceRate above, the
+		// documented API contract (docs/API.md) and the dashboard's shared
+		// pct() helper. Storing a 0–100 percentage here made the dashboard
+		// render "8800%" because the frontend multiplies by 100.
+		mfaCoveragePct = float64(mfaEnrolled) / float64(mfaTotal)
 	}
 
 	// App count.
@@ -336,8 +349,49 @@ func (s *Snapshotter) GetSeriesRange(ctx context.Context, orgID string, from, to
 	return series, nil
 }
 
+const (
+	// analyticsSnapshotRetention is how long snapshot rows are kept. One row
+	// per org per tick is written (roughly 525k rows per org per year at a
+	// one-minute interval), so without a retention sweep the table grows
+	// without bound.
+	analyticsSnapshotRetention = 90 * 24 * time.Hour
+	// snapshotPruneEveryNTicks runs the retention sweep every N snapshot
+	// ticks. The snapshot interval is typically one minute, so this makes
+	// the sweep hourly instead of running a DELETE every minute.
+	snapshotPruneEveryNTicks = 60
+)
+
+// Prune deletes snapshot rows older than retainFor and returns the number of
+// rows deleted. retainFor <= 0 means "keep forever" (no-op).
+//
+// The sweep runs on the snapshot tick (see Start) so the table cannot grow
+// without bound. It is leader-gated together with the snapshot itself, so
+// only one replica prunes in a multi-instance deployment.
+func (s *Snapshotter) Prune(ctx context.Context, retainFor time.Duration) (int64, error) {
+	if retainFor <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().Add(-retainFor)
+	tag, err := s.pool.Exec(ctx,
+		`DELETE FROM analytics_snapshots WHERE captured_at < $1`, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("prune analytics_snapshots: %w", err)
+	}
+	deleted := tag.RowsAffected()
+	if deleted > 0 && s.logger != nil {
+		s.logger.Info("analytics snapshots pruned",
+			zap.Int64("rows_deleted", deleted),
+			zap.Time("cutoff", cutoff),
+		)
+	}
+	return deleted, nil
+}
+
 // Start launches the periodic snapshot ticker. It returns immediately; the
 // goroutine stops when ctx is cancelled.
+//
+// Every snapshotPruneEveryNTicks ticks the retention sweep runs, so the
+// analytics_snapshots table cannot grow without bound.
 func (s *Snapshotter) Start(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		s.logger.Info("analytics snapshot job disabled (SNAPSHOT_INTERVAL=0)")
@@ -347,6 +401,7 @@ func (s *Snapshotter) Start(ctx context.Context, interval time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		ticks := 0
 		for {
 			select {
 			case <-ctx.Done():
@@ -360,6 +415,12 @@ func (s *Snapshotter) Start(ctx context.Context, interval time.Duration) {
 					s.logger.Warn("analytics snapshot failed", zap.Error(err))
 				} else {
 					s.logger.Info("analytics snapshot captured")
+				}
+				ticks++
+				if ticks%snapshotPruneEveryNTicks == 0 {
+					if _, err := s.Prune(ctx, analyticsSnapshotRetention); err != nil {
+						s.logger.Warn("analytics snapshot retention sweep failed", zap.Error(err))
+					}
 				}
 			}
 		}

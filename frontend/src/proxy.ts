@@ -1,8 +1,14 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import type { NextAuthRequest } from "next-auth";
+import { requiredProdEnv } from "@/lib/env";
 
-const INTERNAL_API_URL = process.env.INTERNAL_API_URL ?? "http://localhost:8080";
+// Fail closed in production: a missing INTERNAL_API_URL used to silently
+// fall back to http://localhost:8080, which inside the frontend container
+// resolves to nothing — every BFF call then failed with ECONNREFUSED and a
+// 502 "backend unreachable" with no obvious cause. requiredProdEnv throws at
+// runtime instead, so a misconfigured deployment refuses to serve.
+const INTERNAL_API_URL = requiredProdEnv("INTERNAL_API_URL", "http://localhost:8080");
 
 // Routes that bypass all checks (public / auth plumbing / static assets).
 // M5: /access-blocked must also be public — Keycloak's posture-check
@@ -21,8 +27,8 @@ function isStaticPath(pathname: string): boolean {
 
 // Nonce-based CSP (see next.config.js comment: "tighten to nonces in a later
 // pass" — this is that pass). The policy builder lives in src/lib/csp.ts
-// (dependency-free, unit-tested); the nonce is generated below and exposed
-// as `x-nonce` for layout.tsx.
+// (dependency-free, unit-tested); the nonce is generated below and forwarded
+// to layout.tsx on the request headers.
 import { buildCsp } from "@/lib/csp";
 
 // checkProvisioned calls the backend setup-status endpoint.
@@ -64,15 +70,31 @@ export default auth(async (request: NextAuthRequest) => {
     return NextResponse.next();
   }
 
-  // Nonce-based CSP for every HTML page response. The nonce is also exposed
-  // via the `x-nonce` response header so layout.tsx can apply it to the
-  // inline dark-mode script.
+  // Nonce-based CSP for every HTML page response. The nonce is forwarded to
+  // the app on the REQUEST headers (see nextWithNonce below) so layout.tsx
+  // can apply it to the inline dark-mode script.
   const nonce = crypto.randomUUID();
   const cspResponse = (res: NextResponse): NextResponse => {
     res.headers.set("Content-Security-Policy", buildCsp(nonce));
-    res.headers.set("x-nonce", nonce);
     return res;
   };
+
+  // Forward the nonce to the app on the REQUEST headers.
+  //
+  // Next.js only propagates a middleware-set request header downstream when
+  // the response is built with `NextResponse.next({ request: { headers } })`
+  // — that is what makes Next set the internal x-middleware-override-headers
+  // list. Setting the header on the RESPONSE alone never reaches the
+  // layout, which reads it from `headers()`; the nonce-based CSP was
+  // therefore dead code and the browser blocked the app's inline
+  // dark-mode script.
+  //
+  // The nonce is deliberately NOT echoed back as a response header — that
+  // would expose it to anything able to read response headers.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nonce", nonce);
+  const nextWithNonce = (): NextResponse =>
+    cspResponse(NextResponse.next({ request: { headers: requestHeaders } }));
 
   // /setup path — if already provisioned, redirect to home.
   if (pathname === "/setup" || pathname.startsWith("/setup/")) {
@@ -80,11 +102,11 @@ export default auth(async (request: NextAuthRequest) => {
     if (provisioned) {
       return cspResponse(NextResponse.redirect(new URL("/", request.url)));
     }
-    return cspResponse(NextResponse.next());
+    return nextWithNonce();
   }
 
   if (isPublicPath(pathname)) {
-    return cspResponse(NextResponse.next());
+    return nextWithNonce();
   }
 
   // Not yet provisioned — send everyone to /setup regardless of auth state.
@@ -101,7 +123,7 @@ export default auth(async (request: NextAuthRequest) => {
     return cspResponse(NextResponse.redirect(signInUrl));
   }
 
-  return cspResponse(NextResponse.next());
+  return nextWithNonce();
 });
 
 export const config = {

@@ -70,7 +70,7 @@ services:
   # in docker-compose.prod.yml) over introducing a second reverse-proxy
   # technology just for e2e.
   lb-e2e:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f  # caddy 2-alpine
     ports:
       - "8086:8080"
     volumes:

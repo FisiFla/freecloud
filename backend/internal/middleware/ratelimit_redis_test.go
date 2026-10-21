@@ -177,3 +177,102 @@ func TestRedisRateLimiterKeyNamespacing(t *testing.T) {
 		t.Fatalf("route B first (different namespace): expected 200, got %d", c)
 	}
 }
+
+// TestRedisRateLimiterArmsTTLAtomically is the regression test for issue
+// #136: the counter increment and its expiry used to be two separate
+// commands, so a connection drop between them left the key with NO TTL —
+// the client was then permanently rate limited. The Lua script does both in
+// one step, so the key ALWAYS has a TTL.
+func TestRedisRateLimiterArmsTTLAtomically(t *testing.T) {
+	rl, mr := newTestRedisLimiter(t, 5, time.Minute)
+	h := rl.Middleware(okHandler)
+
+	if c := doRequest(t, h, "10.2.2.2:1000", ""); c != http.StatusOK {
+		t.Fatalf("first: expected 200, got %d", c)
+	}
+
+	keys := mr.Keys()
+	if len(keys) != 1 {
+		t.Fatalf("expected exactly one counter key, got %v", keys)
+	}
+	ttl := mr.TTL(keys[0])
+	if ttl <= 0 {
+		t.Fatalf("counter key %q must have a TTL, got %v", keys[0], ttl)
+	}
+}
+
+// The TTL must be re-armed only once per window, not on every increment —
+// otherwise a busy client would keep its window alive forever.
+func TestRedisRateLimiterTTLSurvivesSubsequentIncrements(t *testing.T) {
+	rl, mr := newTestRedisLimiter(t, 10, time.Minute)
+	h := rl.Middleware(okHandler)
+
+	for i := 0; i < 3; i++ {
+		if c := doRequest(t, h, "10.2.2.3:1000", ""); c != http.StatusOK {
+			t.Fatalf("request %d: expected 200, got %d", i, c)
+		}
+	}
+	keys := mr.Keys()
+	if len(keys) != 1 {
+		t.Fatalf("expected exactly one counter key, got %v", keys)
+	}
+	if mr.TTL(keys[0]) <= 0 {
+		t.Fatalf("counter key %q lost its TTL", keys[0])
+	}
+}
+
+// Behind a trusted reverse proxy, two different clients must draw from
+// separate buckets (issue #129).
+// TestRedisRateLimiterRepairsMissingTTL proves a counter key that somehow
+// ended up WITHOUT a TTL is repaired instead of leaving the client
+// permanently rate limited.
+//
+// This is the failure mode issue #136 describes: the old implementation
+// issued INCR and then a separate EXPIRE, and a connection drop between
+// them left the key with no expiry — the client was then blocked forever.
+// The Lua script re-arms the TTL whenever the key has none, so even a
+// pre-existing TTL-less key recovers.
+func TestRedisRateLimiterRepairsMissingTTL(t *testing.T) {
+	rl, mr := newTestRedisLimiter(t, 5, time.Minute)
+	h := rl.Middleware(okHandler)
+
+	// Simulate the broken state: a counter key with no TTL.
+	if err := mr.Set("test:203.0.113.5", "1"); err != nil {
+		t.Fatalf("seed ttl-less key: %v", err)
+	}
+	if ttl := mr.TTL("test:203.0.113.5"); ttl != 0 {
+		t.Fatalf("expected the seeded key to have no TTL, got %v", ttl)
+	}
+
+	if c := doRequest(t, h, "203.0.113.5:1000", ""); c != http.StatusOK {
+		t.Fatalf("first: expected 200, got %d", c)
+	}
+
+	if ttl := mr.TTL("test:203.0.113.5"); ttl <= 0 {
+		t.Errorf("expected the TTL-less counter to be repaired, got TTL %v", ttl)
+	}
+}
+
+func TestRedisRateLimiterTrustedProxySeparatesClients(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("start miniredis: %v", err)
+	}
+	defer mr.Close()
+	client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer client.Close()
+
+	rl := NewRedisRateLimiter(client, 1, time.Minute, "proxy", zap.NewNop(), []string{"10.0.0.0/8"})
+	h := rl.Middleware(okHandler)
+
+	const proxyPeer = "10.0.0.5:40000"
+	if c := doRequest(t, h, proxyPeer, "203.0.113.10"); c != http.StatusOK {
+		t.Fatalf("client A first: expected 200, got %d", c)
+	}
+	if c := doRequest(t, h, proxyPeer, "203.0.113.11"); c != http.StatusOK {
+		t.Fatalf("client B first: expected 200 (separate bucket), got %d", c)
+	}
+	if c := doRequest(t, h, proxyPeer, "203.0.113.10"); c != http.StatusTooManyRequests {
+		t.Fatalf("client A second: expected 429, got %d", c)
+	}
+}

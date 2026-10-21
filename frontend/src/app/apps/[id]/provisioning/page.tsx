@@ -6,7 +6,7 @@
 // E1: attribute mapping editor + dry-run preview
 // E2: reconcile-all button + nextRetryAt column
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { RefreshCw, AlertTriangle, CheckCircle, Clock, XCircle, Plus, Trash2 } from "lucide-react";
 import ErrorBanner from "@/components/ErrorBanner";
@@ -50,6 +50,18 @@ export default function ProvisioningPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState(false);
+  // Timer that hides the "saved" banner — cleared on unmount so a pending
+  // timeout cannot fire after the component is gone.
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // E1: Attribute mapping editor state — list of [freecloudField, remoteAttribute] pairs
   const [attrMapRows, setAttrMapRows] = useState<{ field: string; remote: string }[]>([]);
@@ -124,7 +136,8 @@ export default function ProvisioningPage() {
       setConfig(updated);
       setBearerToken(""); // never re-echo
       setSaveOk(true);
-      setTimeout(() => setSaveOk(false), 3000);
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => setSaveOk(false), 3000);
     } catch (err: unknown) {
       setSaveError(err instanceof Error ? err.message : "Failed to save config");
     } finally {
@@ -294,9 +307,9 @@ export default function ProvisioningPage() {
         {/* E1: Attribute mapping editor */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <label className="block text-sm font-medium text-gray-700">
+            <span className="block text-sm font-medium text-gray-700">
               Attribute mapping
-            </label>
+            </span>
             <button
               type="button"
               onClick={addAttrRow}

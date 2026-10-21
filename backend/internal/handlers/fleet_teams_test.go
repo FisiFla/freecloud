@@ -32,6 +32,30 @@ func withOrgAdminCtx(r *http.Request) *http.Request {
 	return r.WithContext(ctx)
 }
 
+// deviceOwnershipQueryFn answers the batched device-ownership query
+// (SELECT fleet_host_id::TEXT FROM devices WHERE org_id = $1 AND
+// fleet_host_id::TEXT = ANY($2::text[])) with the requested host IDs.
+//
+// owned decides whether a host belongs to the querying org; pass nil to
+// treat every requested host as owned.
+func deviceOwnershipQueryFn(owned func(orgID, deviceID string) bool) func(context.Context, string, ...any) (pgx.Rows, error) {
+	return func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+		if strings.Contains(sql, "FROM devices") && strings.Contains(sql, "ANY(") {
+			orgID, _ := args[0].(string)
+			ids, _ := args[1].([]string)
+			rows := make([][]interface{}, 0, len(ids))
+			for _, id := range ids {
+				if owned != nil && !owned(orgID, id) {
+					continue
+				}
+				rows = append(rows, []interface{}{id})
+			}
+			return &fakeQueryRows{rows: rows}, nil
+		}
+		return nil, fmt.Errorf("unexpected query: %s", sql)
+	}
+}
+
 // ---- ListTeams ----
 
 func TestListTeams_Success(t *testing.T) {
@@ -221,7 +245,7 @@ func TestMoveHostToTeam_Success(t *testing.T) {
 	// H4: MoveHostToTeam now verifies each host belongs to the caller's org
 	// before ever calling Fleet — needs an OrgContext and a DB that answers
 	// the ownership check.
-	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil), queryFn: deviceOwnershipQueryFn(nil)}
 	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
 	body, _ := json.Marshal(MoveHostRequest{HostIDs: []string{"host-1", "host-2"}})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/2/hosts", bytes.NewReader(body))
@@ -259,7 +283,7 @@ func TestMoveHostToTeam_FleetError(t *testing.T) {
 			return fmt.Errorf("fleet error")
 		},
 	}
-	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil), queryFn: deviceOwnershipQueryFn(nil)}
 	h := NewHandler(db, &fakeKeycloak{}, f, zap.NewNop())
 	body, _ := json.Marshal(MoveHostRequest{HostIDs: []string{"host-a"}})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/teams/1/hosts", bytes.NewReader(body))
@@ -550,7 +574,7 @@ func TestAssignTeamPolicy_MappedNonAdminAllowed(t *testing.T) {
 
 func TestMoveHostToTeam_MappedNonAdminAllowed(t *testing.T) {
 	moved := false
-	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil), queryFn: deviceOwnershipQueryFn(nil)}
 	f := &fakeFleet{
 		moveHostToTeamFn: func(ctx context.Context, teamID int, hostIDs []string) error {
 			moved = true
@@ -577,7 +601,7 @@ func TestMoveHostToTeam_MappedNonAdminAllowed(t *testing.T) {
 
 func TestMoveHostToTeam_TrimsEmptyHostIDs(t *testing.T) {
 	var got []string
-	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}
+	db := &fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil), queryFn: deviceOwnershipQueryFn(nil)}
 	f := &fakeFleet{
 		moveHostToTeamFn: func(ctx context.Context, teamID int, hostIDs []string) error {
 			got = hostIDs

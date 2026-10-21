@@ -82,14 +82,19 @@ func ParseMappingCSV(body string) ([]MappingRow, error) {
 	return out, nil
 }
 
-// SQLInsert returns a parameterized INSERT template comment for operators.
-func SQLInsert(row MappingRow) string {
-	return fmt.Sprintf(
-		"INSERT INTO fleet_team_orgs (fleet_team_id, org_id, team_name) VALUES (%d, '%s', '%s') ON CONFLICT (fleet_team_id) DO UPDATE SET org_id = EXCLUDED.org_id, team_name = EXCLUDED.team_name;",
-		row.FleetTeamID,
-		strings.ReplaceAll(row.OrgID, "'", "''"),
-		strings.ReplaceAll(row.TeamName, "'", "''"),
-	)
+// SQLInsert returns a PARAMETERIZED upsert statement and its arguments for
+// the given mapping row.
+//
+// The statement contains only placeholders ($1, $2, $3) — no value is ever
+// interpolated into the SQL text. This is the only place in the codebase that
+// used to build SQL by string concatenation, which is a maintenance hazard
+// (hand-rolled quote doubling) even when it happens to be correct (issue
+// #162). Callers that execute the statement MUST use a parameterized driver
+// API (pgx's Exec with args) rather than pasting the values into the SQL.
+func SQLInsert(row MappingRow) (string, []any) {
+	const stmt = `INSERT INTO fleet_team_orgs (fleet_team_id, org_id, team_name) VALUES ($1, $2, $3) ` +
+		`ON CONFLICT (fleet_team_id) DO UPDATE SET org_id = EXCLUDED.org_id, team_name = EXCLUDED.team_name;`
+	return stmt, []any{row.FleetTeamID, row.OrgID, row.TeamName}
 }
 
 // ApplyMappingsTx applies fleet_team_orgs mappings inside the given

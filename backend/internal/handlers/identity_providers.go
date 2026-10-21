@@ -69,8 +69,10 @@ func (h *Handler) CreateIdentityProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "identity_provider.create", "identity_provider", req.Alias,
-		map[string]interface{}{"provider_type": req.ProviderType})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "identity_provider.create", "identity_provider", req.Alias,
+		map[string]interface{}{"provider_type": req.ProviderType}); err != nil {
+		h.logger.Warn("failed to write identity provider creation audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusCreated, map[string]string{"alias": req.Alias})
 }
@@ -99,7 +101,9 @@ func (h *Handler) UpdateIdentityProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "identity_provider.update", "identity_provider", alias, nil)
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "identity_provider.update", "identity_provider", alias, nil); err != nil {
+		h.logger.Warn("failed to write identity provider update audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"alias": alias})
 }
@@ -122,7 +126,9 @@ func (h *Handler) DeleteIdentityProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "identity_provider.delete", "identity_provider", alias, nil)
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "identity_provider.delete", "identity_provider", alias, nil); err != nil {
+		h.logger.Warn("failed to write identity provider deletion audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }

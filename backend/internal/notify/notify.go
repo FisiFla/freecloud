@@ -151,9 +151,25 @@ func NewEmailNotifier(cfg EmailConfig) *EmailNotifier {
 func (e *EmailNotifier) Name() string { return "email" }
 
 // Notify formats and sends an email for the event.
-func (e *EmailNotifier) Notify(_ context.Context, ev Event) error {
+//
+// The context is honoured: the SMTP conversation is bounded by its deadline,
+// so a hung relay cannot keep this goroutine (and its connection) alive
+// forever. It used to be discarded, which made every caller's 10-second
+// context meaningless.
+func (e *EmailNotifier) Notify(ctx context.Context, ev Event) error {
 	if len(e.cfg.To) == 0 {
 		return fmt.Errorf("email notifier: no recipients configured")
+	}
+	// The message is assembled by string concatenation, so a CR/LF in any
+	// configured address would inject SMTP headers. Reject it here rather
+	// than sending a message with attacker-chosen recipients.
+	if err := ValidateMailAddress(e.cfg.From); err != nil {
+		return fmt.Errorf("email notifier: from address: %w", err)
+	}
+	for _, rcpt := range e.cfg.To {
+		if err := ValidateMailAddress(rcpt); err != nil {
+			return fmt.Errorf("email notifier: recipient: %w", err)
+		}
 	}
 
 	detailsJSON, _ := json.MarshalIndent(ev.Details, "", "  ")
@@ -182,7 +198,7 @@ func (e *EmailNotifier) Notify(_ context.Context, ev Event) error {
 		}
 		auth = smtp.PlainAuth("", username, e.cfg.Password, e.cfg.Host)
 	}
-	return smtp.SendMail(addr, auth, e.cfg.From, e.cfg.To, []byte(msg))
+	return SendMail(ctx, addr, auth, e.cfg.From, e.cfg.To, []byte(msg))
 }
 
 // SlackNotifier posts event notifications to a Slack incoming webhook.

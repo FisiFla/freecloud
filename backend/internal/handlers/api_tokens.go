@@ -29,12 +29,25 @@ type APITokenResponse struct {
 	ExpiresAt       *string `json:"expiresAt,omitempty"`
 }
 
+// MaxAPITokenTTLDays is the maximum lifetime an API token may be created
+// with. Tokens are long-lived credentials, so an operator must opt in to a
+// long lifetime explicitly and it can never be unbounded.
+const MaxAPITokenTTLDays = 365
+
+// DefaultAPITokenTTLDays is the lifetime applied when a caller asks for a
+// token with no expiry (expiresInDays == 0). A non-super-admin token is
+// always given a bounded lifetime — a never-expiring credential for a
+// lower-privilege role has no legitimate use.
+const DefaultAPITokenTTLDays = 90
+
 // CreateAPITokenRequest is the body for POST /api/v1/api-tokens.
 type CreateAPITokenRequest struct {
 	Name            string `json:"name"`
 	Role            string `json:"role"`
 	ServiceIdentity string `json:"serviceIdentity"`
-	// ExpiresInDays: 0 = never expires.
+	// ExpiresInDays: 0 = the default bounded lifetime
+	// (DefaultAPITokenTTLDays, or unlimited for a super-admin token).
+	// Values above MaxAPITokenTTLDays are rejected.
 	ExpiresInDays int `json:"expiresInDays"`
 }
 
@@ -77,6 +90,12 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ExpiresInDays < 0 {
 		valErrs = append(valErrs, ValidationError{Field: "expiresInDays", Message: "expiresInDays must be ≥ 0"})
+	} else if req.ExpiresInDays > MaxAPITokenTTLDays {
+		// A token is a long-lived credential: cap the lifetime so a
+		// mistake (or a hostile value) cannot mint a permanent credential,
+		// and so the expiry arithmetic below cannot overflow.
+		valErrs = append(valErrs, ValidationError{Field: "expiresInDays",
+			Message: fmt.Sprintf("expiresInDays must be ≤ %d", MaxAPITokenTTLDays)})
 	}
 	if len(valErrs) > 0 {
 		respondValidationErrors(w, valErrs)
@@ -106,9 +125,28 @@ func (h *Handler) CreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Compute the expiry.
+	//
+	// The expiry is computed with AddDate (calendar days) rather than
+	// time.Duration(days) * 24 * time.Hour: the latter overflows int64 for
+	// large day counts, which produced a token that was born expired or
+	// expired at an arbitrary far-future date (issue #123). The day count is
+	// bounded by MaxAPITokenTTLDays above.
+	expiresInDays := req.ExpiresInDays
+	if expiresInDays == 0 {
+		// A super-admin token is the only one that may be created without an
+		// expiry: it is the credential the backend itself uses to administer
+		// the realm, and it is created deliberately. Every other role gets
+		// the bounded default.
+		if req.Role == string(middleware.RoleSuperAdmin) {
+			expiresInDays = 0 // no expiry
+		} else {
+			expiresInDays = DefaultAPITokenTTLDays
+		}
+	}
 	var expiresAt *time.Time
-	if req.ExpiresInDays > 0 {
-		t := time.Now().UTC().Add(time.Duration(req.ExpiresInDays) * 24 * time.Hour)
+	if expiresInDays > 0 {
+		t := time.Now().UTC().AddDate(0, 0, expiresInDays)
 		expiresAt = &t
 	}
 

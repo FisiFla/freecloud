@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
@@ -57,19 +58,25 @@ type AssignPolicyResponse struct {
 // isn't a per-org filter, it's a straight system-admin-only restriction.
 // Every other caller holding PermReadCompliance (helpdesk, auditor,
 // read-only) gets an empty list instead of every tenant's compliance
-// policy inventory. Fleet is still queried first so an upstream failure
-// surfaces the same way regardless of role.
+// policy inventory.
+//
+// The permission check happens BEFORE the Fleet call: querying Fleet first
+// meant a non-admin got a 502 when Fleet was down, which turned the
+// endpoint into an upstream-availability oracle for a resource they are not
+// allowed to see.
 func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+
+	if !isSystemAdminCaller(ctx) {
+		respondJSON(w, http.StatusOK, ListPoliciesResponse{Policies: []fleet.Policy{}})
+		return
+	}
 
 	policies, err := h.fleet.ListPolicies(ctx)
 	if err != nil {
 		h.logger.Error("failed to list fleet policies", zap.Error(err))
 		respondError(w, http.StatusBadGateway, "failed to retrieve policies from Fleet")
 		return
-	}
-	if !isSystemAdminCaller(ctx) {
-		policies = []fleet.Policy{}
 	}
 
 	respondJSON(w, http.StatusOK, ListPoliciesResponse{Policies: policies})
@@ -183,8 +190,20 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			team.ID, oc.OrgID, team.Name,
 		); err != nil {
 			h.logger.Error("failed to record fleet team org mapping", zap.Error(err))
-			// Best-effort: team exists in Fleet; surface error so caller retries
-			// rather than leaving an unmapped team silently.
+			// Compensating delete: the Fleet team was created first, so a
+			// failed mapping insert would leave it orphaned — unmapped and
+			// invisible to non-admins, yet still consuming a globally
+			// unique team name (which makes the retry fail). A detached
+			// context is used so the cleanup still runs if the client
+			// disconnected.
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			if delErr := h.deleteFleetTeam(cleanupCtx, team.ID); delErr != nil {
+				cancel()
+				h.logger.Error("failed to delete the orphaned fleet team",
+					zap.Int("team_id", team.ID), zap.String("team_name", team.Name), zap.Error(delErr))
+			} else {
+				cancel()
+			}
 			respondError(w, http.StatusInternalServerError, "team created in Fleet but org mapping failed")
 			return
 		}
@@ -297,12 +316,13 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 	// ownership via requireDeviceInCallerOrg before acting; this one moved
 	// hosts to a Fleet team with zero check, so an org-B caller who merely
 	// knew (or guessed/enumerated) an org-A host ID could reassign its
-	// policy. Reject the whole batch on the first foreign/unknown host —
-	// requireDeviceInCallerOrg has already written the 403/404 response.
-	for _, id := range req.HostIDs {
-		if !h.requireDeviceInCallerOrg(w, r, id) {
-			return
-		}
+	// policy. The whole batch is rejected when any host is foreign/unknown.
+	//
+	// The ownership check is ONE query for the whole batch (see
+	// requireDevicesInCallerOrg): the per-host form cost one round trip per
+	// host, i.e. up to 500 queries per request.
+	if !h.requireDevicesInCallerOrg(w, r, req.HostIDs) {
+		return
 	}
 
 	actorID := middleware.GetActorID(r.Context())

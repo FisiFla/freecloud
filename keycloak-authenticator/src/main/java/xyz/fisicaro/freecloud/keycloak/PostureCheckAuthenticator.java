@@ -171,24 +171,39 @@ public class PostureCheckAuthenticator implements Authenticator {
             return;
         }
 
-        boolean allow = data.getBoolean("allow", false);
+        boolean allow;
+        List<String> reasonList = new ArrayList<>();
+        try {
+            allow = data.getBoolean("allow", false);
+            if (!allow && data.containsKey("reasons")) {
+                JsonArray arr = data.getJsonArray("reasons");
+                if (arr != null) {
+                    for (int i = 0; i < arr.size(); i++) {
+                        reasonList.add(arr.getString(i));
+                    }
+                }
+            }
+        } catch (RuntimeException e) {
+            // A well-formed but wrong-typed payload ("allow": "yes", "reasons":
+            // "none", a JSON null) makes the typed getters throw instead of
+            // returning a value. Fail closed with the access-blocked form —
+            // an unhandled exception would render a 500 instead of an access
+            // decision.
+            deny(context, "access evaluation returned an unexpected response");
+            return;
+        }
+
         if (allow) {
             context.success();
             return;
         }
 
-        // Denied — extract reasons
-        List<String> reasonList = new ArrayList<>();
-        if (data.containsKey("reasons")) {
-            JsonArray arr = data.getJsonArray("reasons");
-            if (arr != null) {
-                for (int i = 0; i < arr.size(); i++) {
-                    reasonList.add(arr.getString(i));
-                }
-            }
-        }
-        String reasonsStr = String.join(", ", reasonList);
+        // Denied — show the access-blocked form with the reasons.
+        deny(context, String.join(", ", reasonList));
+    }
 
+    /** Deny the login and render the access-blocked template with the reasons. */
+    private void deny(AuthenticationFlowContext context, String reasonsStr) {
         Response challenge = context.form()
             .setAttribute("reasons", reasonsStr)
             .createForm("access-blocked.ftl");

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -191,8 +192,18 @@ func (s *SCIMConnector) SyncGroupMembership(ctx context.Context, remoteID string
 
 // findOrCreateGroup returns the SCIM group ID for the given display name, creating it if absent.
 func (s *SCIMConnector) findOrCreateGroup(ctx context.Context, displayName string) (string, error) {
-	url := s.baseURL + "/Groups?filter=displayName+eq+%22" + displayName + "%22"
-	resp, err := s.doRequest(ctx, http.MethodGet, url, nil)
+	// The display name is operator-controlled free text, so it is escaped
+	// before it is placed in the query string. Interpolating it raw broke
+	// the request line for a name containing a space, and a name containing
+	// a double quote injected into the SCIM filter expression — which made
+	// findOrCreateGroup return the first resource of an unrelated filter
+	// and put the user in an arbitrary group.
+	filter := `displayName eq "` + displayName + `"`
+	query := url.Values{}
+	query.Set("filter", filter)
+	groupURL := s.baseURL + "/Groups?" + query.Encode()
+
+	resp, err := s.doRequest(ctx, http.MethodGet, groupURL, nil)
 	if err != nil {
 		return "", err
 	}

@@ -1,6 +1,10 @@
 package middleware
 
 import (
+	"bufio"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -34,14 +38,57 @@ func IncProvisioningError(appID, connector string) {
 }
 
 // statusRecorder captures the response status code for metrics labelling.
+//
+// It forwards the optional interfaces of the wrapped ResponseWriter
+// (http.Flusher, http.Hijacker, io.ReaderFrom) so wrapping does not disable
+// streaming or connection hijacking for the handlers behind it (issue #138).
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
+	if s.wroteHeader {
+		// The first WriteHeader wins; a second call is ignored, exactly
+		// like net/http's own behaviour (it logs "superfluous WriteHeader
+		// call" and keeps the first status).
+		return
+	}
+	s.wroteHeader = true
 	s.status = code
 	s.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap exposes the wrapped ResponseWriter so http.ResponseController (and
+// other helpers that look for Unwrap) can reach the underlying writer.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
+// Flush forwards to the wrapped writer when it supports flushing, so
+// streaming responses (SSE and friends) still work behind the metrics
+// middleware.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack forwards to the wrapped writer when it supports hijacking, so
+// WebSocket-style upgrades still work behind the metrics middleware.
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, errors.New("middleware: underlying ResponseWriter does not implement http.Hijacker")
+}
+
+// ReadFrom forwards to the wrapped writer when it supports io.ReaderFrom, so
+// efficient copies (io.Copy and friends) are not degraded by the wrapper.
+func (s *statusRecorder) ReadFrom(r io.Reader) (int64, error) {
+	if rf, ok := s.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(r)
+	}
+	return io.Copy(struct{ io.Writer }{s.ResponseWriter}, r)
 }
 
 // Metrics records request count and latency to Prometheus, labelled by the chi
