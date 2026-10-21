@@ -144,6 +144,9 @@ func TestPortalRequestAccessForeignAppRejected(t *testing.T) {
 	const callerOrg = "00000000-0000-0000-0000-000000000001"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// requireAppInCallerOrg → resourceInOrg on connected_apps: no row.
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
@@ -203,6 +206,9 @@ func TestAccessEvalRejectsUnsignedDeviceIDWhenSecretSet(t *testing.T) {
 	const hostID = "host-plain"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if s, ok := dest[0].(*string); ok {
 					*s = userID
@@ -236,6 +242,9 @@ func TestAccessEvalAcceptsSignedDeviceCookie(t *testing.T) {
 	}
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			switch {
 			case strings.Contains(sql, "FROM users "):
 				return fakeRow{scanFn: func(dest ...any) error {

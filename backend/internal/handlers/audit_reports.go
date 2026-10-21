@@ -159,7 +159,7 @@ func (h *Handler) downloadComplianceReport(
 		})
 	}
 
-	if err := h.writeAuditEntryBestEffort(actorID, "report.download", "report", reportTypeCompliance,
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "report.download", "report", reportTypeCompliance,
 		map[string]interface{}{"format": format, "rows": len(report)}); err != nil {
 		h.logger.Warn("failed to write report download audit entry", zap.Error(err))
 	}
@@ -252,7 +252,7 @@ func (h *Handler) downloadAccessReviewReport(
 		return
 	}
 
-	if err := h.writeAuditEntryBestEffort(actorID, "report.download", "report", reportTypeAccessReview,
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "report.download", "report", reportTypeAccessReview,
 		map[string]interface{}{"format": format, "rows": len(report)}); err != nil {
 		h.logger.Warn("failed to write report download audit entry", zap.Error(err))
 	}

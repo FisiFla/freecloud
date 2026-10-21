@@ -188,6 +188,9 @@ func newUserCRUDRouter(t *testing.T) (chi.Router, *Handler, func() map[string]in
 	db := &fakeDB{
 		// QueryRow: supports both SELECT for existence check and SELECT for get/patch/delete
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// existence check (CREATE): SELECT keycloak_user_id FROM users WHERE email=...
 			if strings.Contains(sql, "WHERE email = $1") && !strings.Contains(sql, "first_name") {
 				// Return no-rows to indicate user doesn't exist yet (allow create)
@@ -435,6 +438,9 @@ func TestSCIMConformance_Users_GetNotFound(t *testing.T) {
 	h.SetSCIMBearerToken("test-bearer")
 	notFoundDB := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}
@@ -466,6 +472,9 @@ func TestSCIMConformance_Users_ConflictOnDuplicate(t *testing.T) {
 	existingID := "existing-uid"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "WHERE email = $1") {
 				return fakeRow{scanFn: func(dest ...any) error {
 					assignFakeVal(dest[0], existingID)
@@ -708,6 +717,9 @@ func newFilterRouter(t *testing.T) chi.Router {
 	db := &fakeDB{
 		// SCIMListUsers issues COUNT(*) via QueryRow before the page Query.
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if !strings.Contains(sql, "COUNT(") {
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			}
@@ -863,6 +875,9 @@ func TestSCIMConformance_Pagination_ItemsPerPage(t *testing.T) {
 
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "COUNT(") {
 				return fakeRow{scanFn: func(dest ...any) error {
 					*(dest[0].(*int)) = len(allRows)
@@ -1043,6 +1058,9 @@ func TestSCIMConformance_ErrorShape_404(t *testing.T) {
 	h.SetSCIMBearerToken("test-bearer")
 	h.db = &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}
@@ -1074,6 +1092,9 @@ func TestSCIMConformance_ErrorShape_404(t *testing.T) {
 func TestSCIMConformance_ErrorShape_ConflictHasUniqueness(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "WHERE email = $1") {
 				// Simulate existing user
 				return fakeRow{scanFn: func(dest ...any) error {

@@ -107,8 +107,8 @@ func (h *Handler) PreviewAppPolicy(w http.ResponseWriter, r *http.Request) {
 				RequireDiskEncrypted:   reqDisk,
 				RequireNoCriticalVulns: reqVulns,
 				MaxOsAgeDays:           maxOsAgeDays,
-				AllowedTimeStart:       allowedTimeStart,
-				AllowedTimeEnd:         allowedTimeEnd,
+				AllowedTimeStart:       normalisePolicyTime(allowedTimeStart),
+				AllowedTimeEnd:         normalisePolicyTime(allowedTimeEnd),
 				NetworkAllowlist:       networkAllowlist,
 				GeoCountryAllowlist:    geoCountryAllowlist,
 			}

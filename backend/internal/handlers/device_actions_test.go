@@ -130,7 +130,10 @@ func TestRemoteLock_MissingDeviceID(t *testing.T) {
 func TestRemoteLock_HelpdeskForeignOrgDevice404(t *testing.T) {
 	lockCalled := false
 	// Ownership query (`SELECT 1 ... org_id`) answers NOT found → foreign org.
-	db := &fakeDB{queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+	db := &fakeDB{queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+		if isCanonicalQuery(sql) {
+			return fakeCanonicalRow(args)
+		}
 		return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 	}}
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{
@@ -184,8 +187,8 @@ func TestRemoteLock_AuditWritten(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: ownershipFoundQueryRowFn(nil),
 		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-			if len(args) >= 2 {
-				if action, ok := args[1].(string); ok && action == "device_lock" {
+			if len(args) >= 3 {
+				if action, ok := args[2].(string); ok && action == "device_lock" {
 					auditWritten = true
 				}
 			}
@@ -195,7 +198,10 @@ func TestRemoteLock_AuditWritten(t *testing.T) {
 	db.beginFn = func(_ context.Context) (pgx.Tx, error) {
 		return &fakeTx{
 			execFn: db.execFn,
-			queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			},
 		}, nil

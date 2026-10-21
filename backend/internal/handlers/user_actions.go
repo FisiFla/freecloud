@@ -165,7 +165,7 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 
 	// Audit log (detached context)
 	actorID := middleware.GetActorID(ctx)
-	if err := h.writeAuditEntryBestEffort(actorID, "user_update", "user", userID, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "user_update", "user", userID, map[string]interface{}{
 		"first_name": newFirst, "last_name": newLast,
 		"department": newDept, "role": newRole, "enabled": newEnabled,
 	}); err != nil {
@@ -220,7 +220,7 @@ func (h *Handler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	// Audit log (detached context — this is a privileged security action)
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "user_password_reset", "user", userID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "user_password_reset", "user", userID, map[string]interface{}{
 			"triggered_by": actorID,
 		}); err != nil {
 			h.logger.Warn("failed to write password reset audit log", zap.Error(err))

@@ -46,6 +46,9 @@ func TestListAppTemplates(t *testing.T) {
 func TestCreateAppFromTemplate_SAMLGoogleWorkspace(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if s, ok := dest[0].(*string); ok {
 					*s = "app-uuid-001"
@@ -149,6 +152,9 @@ func TestCreateAppFromTemplate_UnknownTemplateID(t *testing.T) {
 func TestCreateAppFromTemplate_OIDCGeneric(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if s, ok := dest[0].(*string); ok {
 					*s = "app-uuid-002"

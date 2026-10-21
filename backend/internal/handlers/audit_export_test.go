@@ -35,9 +35,9 @@ type fakeAuditRows struct {
 	closed  bool
 }
 
-func (r *fakeAuditRows) Close()                                               { r.closed = true }
-func (r *fakeAuditRows) Err() error                                           { return nil }
-func (r *fakeAuditRows) CommandTag() pgconn.CommandTag                         { return pgconn.CommandTag{} }
+func (r *fakeAuditRows) Close()                                       { r.closed = true }
+func (r *fakeAuditRows) Err() error                                   { return nil }
+func (r *fakeAuditRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
 func (r *fakeAuditRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *fakeAuditRows) Next() bool {
 	r.idx++
@@ -63,9 +63,9 @@ func (r *fakeAuditRows) Scan(dest ...any) error {
 	*dest[6].(*time.Time) = ts
 	return nil
 }
-func (r *fakeAuditRows) Values() ([]any, error)    { return nil, nil }
-func (r *fakeAuditRows) RawValues() [][]byte        { return nil }
-func (r *fakeAuditRows) Conn() *pgx.Conn            { return nil }
+func (r *fakeAuditRows) Values() ([]any, error) { return nil, nil }
+func (r *fakeAuditRows) RawValues() [][]byte    { return nil }
+func (r *fakeAuditRows) Conn() *pgx.Conn        { return nil }
 
 // fakeDBWithQuery extends fakeDB to support Query.
 type fakeDBWithQuery struct {

@@ -72,7 +72,10 @@ func TestCreateAPITokenAuditsCreation(t *testing.T) {
 	auditWritten := false
 
 	tx := &fakeTx{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "INSERT INTO api_tokens") {
 				return fakeRow{scanFn: func(dest ...any) error {
 					*dest[0].(*string) = tokenID
@@ -83,7 +86,7 @@ func TestCreateAPITokenAuditsCreation(t *testing.T) {
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-			if strings.Contains(sql, "INSERT INTO audit_logs") && args[1] == "api_token.create" && args[3] == tokenID {
+			if strings.Contains(sql, "INSERT INTO audit_logs") && args[2] == "api_token.create" && args[4] == tokenID {
 				auditWritten = true
 			}
 			return pgconn.CommandTag{}, nil
@@ -125,7 +128,10 @@ func TestRevokeAPITokenAuditsRevocation(t *testing.T) {
 	auditWritten := false
 
 	tx := &fakeTx{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "UPDATE api_tokens") {
 				return fakeRow{scanFn: func(dest ...any) error {
 					*dest[0].(*string) = "deploy-token"
@@ -137,7 +143,7 @@ func TestRevokeAPITokenAuditsRevocation(t *testing.T) {
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-			if strings.Contains(sql, "INSERT INTO audit_logs") && args[1] == "api_token.revoke" && args[3] == tokenID {
+			if strings.Contains(sql, "INSERT INTO audit_logs") && args[2] == "api_token.revoke" && args[4] == tokenID {
 				auditWritten = true
 			}
 			return pgconn.CommandTag{}, nil

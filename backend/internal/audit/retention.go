@@ -106,7 +106,7 @@ func (p *Pruner) Prune(ctx context.Context, retainFor time.Duration) (int64, err
 			zap.Int64("rows_deleted", deleted),
 			zap.Time("cutoff", cutoff),
 		)
-		if err := WriteEntry(ctx, tx, "system", "audit.prune", "audit_logs", "",
+		if err := WriteEntry(ctx, tx, DefaultOrgID, "system", "audit.prune", "audit_logs", "",
 			map[string]interface{}{
 				"rows_deleted": deleted,
 				"cutoff":       cutoff.Format(time.RFC3339),

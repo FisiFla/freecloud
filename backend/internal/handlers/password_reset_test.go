@@ -53,6 +53,9 @@ func TestForgotPasswordCallsKCWhenUserExists(t *testing.T) {
 	}
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if sp, ok := dest[0].(*string); ok {
 					*sp = "kc-uid-found"
@@ -84,6 +87,9 @@ func TestForgotPasswordKCFailureSilent(t *testing.T) {
 	}
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if sp, ok := dest[0].(*string); ok {
 					*sp = "kc-uid-found"

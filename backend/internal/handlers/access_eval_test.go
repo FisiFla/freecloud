@@ -114,6 +114,9 @@ func TestAccessEvalNilDB(t *testing.T) {
 func TestAccessEvalUserNotFound(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// user lookup returns no rows
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
@@ -138,6 +141,9 @@ func TestAccessEvalNoDevices(t *testing.T) {
 	callCount := 0
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// user exists
 			return fakeRow{scanFn: func(dest ...any) error {
 				if s, ok := dest[0].(*string); ok {
@@ -178,6 +184,9 @@ func TestAccessEvalExplicitDeviceMustBeMappedToUser(t *testing.T) {
 	const devID = "dev-spoofed"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			switch {
 			case strings.Contains(sql, "FROM users "):
 				return fakeRow{scanFn: func(dest ...any) error {
@@ -217,6 +226,9 @@ func TestAccessEvalExplicitMappedDeviceAllowsCleanPosture(t *testing.T) {
 	const devID = "dev-clean"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			switch {
 			case strings.Contains(sql, "FROM users "):
 				return fakeRow{scanFn: func(dest ...any) error {
@@ -258,6 +270,9 @@ func TestAccessEvalFleetError(t *testing.T) {
 	const devID = "dev-001"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if s, ok := dest[0].(*string); ok {
 					*s = userID
@@ -294,6 +309,9 @@ func TestAccessEvalAllow(t *testing.T) {
 	const devID = "dev-clean"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if s, ok := dest[0].(*string); ok {
 					*s = userID
@@ -328,6 +346,9 @@ func TestAccessEvalNoPolicyRowAllowsCleanDevice(t *testing.T) {
 	const devID = "dev-clean"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			switch {
 			case strings.Contains(sql, "FROM users"):
 				return fakeRow{scanFn: func(dest ...any) error {
@@ -367,6 +388,9 @@ func TestAccessEvalPolicyLookupErrorDenies(t *testing.T) {
 	const devID = "dev-clean"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			switch {
 			case strings.Contains(sql, "FROM users"):
 				return fakeRow{scanFn: func(dest ...any) error {
@@ -409,6 +433,9 @@ func TestAccessEvalLoadsPolicyByKeycloakClientID(t *testing.T) {
 	const devID = "dev-noenc"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			switch {
 			case strings.Contains(sql, "FROM users "):
 				return fakeRow{scanFn: func(dest ...any) error {
@@ -478,6 +505,9 @@ func TestAccessEvalLegacyMaxOSAgePolicyFailsClosed(t *testing.T) {
 	maxAge := 90
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			switch {
 			case strings.Contains(sql, "FROM users "):
 				return fakeRow{scanFn: func(dest ...any) error {
@@ -540,6 +570,9 @@ func TestAccessEvalDenyDiskEncryption(t *testing.T) {
 	const devID = "dev-noenc"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if s, ok := dest[0].(*string); ok {
 					*s = userID
@@ -570,4 +603,3 @@ func TestAccessEvalDenyDiskEncryption(t *testing.T) {
 		t.Error("expected deny reason for disk encryption failure")
 	}
 }
-

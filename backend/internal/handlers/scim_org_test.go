@@ -27,6 +27,9 @@ func scimTokenDB(tokenPlain, orgID string) *fakeDB {
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenPlain)))
 	return &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if len(args) > 0 && args[0] == hash {
 				return fakeRow{scanFn: func(dest ...any) error {
 					*(dest[0].(*string)) = orgID

@@ -34,7 +34,10 @@ func TestGetSMTPConfig_NoDB(t *testing.T) {
 // TestGetSMTPConfig_NoRow returns default response when row is absent.
 func TestGetSMTPConfig_NoRow(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}
@@ -66,7 +69,10 @@ func TestGetSMTPConfig_Row(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	hash := "somehash"
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "smtp.example.com"
 				*(dest[1].(*string)) = "587"
@@ -211,7 +217,10 @@ func TestTestSMTPEmail_NoTo(t *testing.T) {
 // TestTestSMTPEmail_NotConfigured verifies that missing SMTP config returns sent=false.
 func TestTestSMTPEmail_NotConfigured(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}
@@ -244,7 +253,10 @@ func TestTestSMTPEmail_NotConfigured(t *testing.T) {
 // TestTestSMTPEmail_NoHost verifies that an empty host returns sent=false.
 func TestTestSMTPEmail_NoHost(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "" // empty host
 				*(dest[1].(*string)) = "587"

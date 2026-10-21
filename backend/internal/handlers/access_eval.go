@@ -89,9 +89,14 @@ func accessEvalBearerMiddleware(token string) func(http.Handler) http.Handler {
 // EvaluateAccess checks whether a user/device may access a given app based on
 // the current FleetDM posture and the app's configured access policy.
 func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
+	// The request context carries the caller's resolved org (set by
+	// OrgContextMiddleware) and is needed for audit attribution, so it is
+	// captured before the first early return.
+	ctx := r.Context()
+
 	var req AccessEvalRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.auditAccessDecision("", req.AppID, false, []string{"invalid request body"})
+		h.auditAccessDecision(ctx, "", req.AppID, false, []string{"invalid request body"})
 		respondJSON(w, http.StatusOK, AccessEvalResponse{
 			Allow:   false,
 			Reasons: []string{"invalid request body"},
@@ -113,7 +118,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		} else if strings.HasPrefix(req.DeviceID, "v1.") || secret != "" {
 			// Signed-looking value that failed MAC/expiry, or any deviceId when
 			// signing is configured (reject legacy plain host IDs).
-			h.auditAccessDecision(req.UserID, req.AppID, false, []string{"invalid or expired device identity"})
+			h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"invalid or expired device identity"})
 			respondJSON(w, http.StatusOK, AccessEvalResponse{
 				Allow:   false,
 				Reasons: []string{"invalid or expired device identity"},
@@ -124,7 +129,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		// leave as-is so unit tests that inject bare host IDs still work.
 		if req.DeviceID != "" {
 			if err := ValidateHostID(req.DeviceID); err != nil {
-				h.auditAccessDecision(req.UserID, req.AppID, false, []string{"invalid device identifier"})
+				h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"invalid device identifier"})
 				respondJSON(w, http.StatusOK, AccessEvalResponse{
 					Allow:   false,
 					Reasons: []string{"invalid device identifier"},
@@ -146,7 +151,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := ValidateUserID(req.UserID); err != nil {
-		h.auditAccessDecision("", req.AppID, false, []string{"missing or invalid user identifier"})
+		h.auditAccessDecision(ctx, "", req.AppID, false, []string{"missing or invalid user identifier"})
 		respondJSON(w, http.StatusOK, AccessEvalResponse{
 			Allow:   false,
 			Reasons: []string{"missing or invalid user identifier"},
@@ -156,15 +161,13 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 
 	if h.db == nil {
 		h.logger.Error("access eval: database not available", zap.String("user_id", req.UserID))
-		h.auditAccessDecision(req.UserID, req.AppID, false, []string{"database unavailable"})
+		h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"database unavailable"})
 		respondJSON(w, http.StatusOK, AccessEvalResponse{
 			Allow:   false,
 			Reasons: []string{"database unavailable"},
 		})
 		return
 	}
-
-	ctx := r.Context()
 
 	// 1. Verify the user exists and is not disabled.
 	var foundUID string
@@ -177,7 +180,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 			zap.String("user_id", req.UserID),
 			zap.Error(err),
 		)
-		h.auditAccessDecision(req.UserID, req.AppID, false, []string{"user not found or disabled"})
+		h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"user not found or disabled"})
 		respondJSON(w, http.StatusOK, AccessEvalResponse{
 			Allow:   false,
 			Reasons: []string{"user not found or disabled"},
@@ -202,7 +205,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 					zap.Error(err),
 				)
 			}
-			h.auditAccessDecision(req.UserID, req.AppID, false, []string{"device is not enrolled for user"})
+			h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"device is not enrolled for user"})
 			respondJSON(w, http.StatusOK, AccessEvalResponse{
 				Allow:   false,
 				Reasons: []string{"device is not enrolled for user"},
@@ -220,7 +223,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 				zap.String("user_id", req.UserID),
 				zap.Error(err),
 			)
-			h.auditAccessDecision(req.UserID, req.AppID, false, []string{"device lookup failed"})
+			h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"device lookup failed"})
 			respondJSON(w, http.StatusOK, AccessEvalResponse{
 				Allow:   false,
 				Reasons: []string{"device lookup failed"},
@@ -241,7 +244,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(deviceIDs) == 0 {
-		h.auditAccessDecision(req.UserID, req.AppID, false, []string{"no enrolled device found for user"})
+		h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"no enrolled device found for user"})
 		respondJSON(w, http.StatusOK, AccessEvalResponse{
 			Allow:   false,
 			Reasons: []string{"no enrolled device found for user"},
@@ -275,8 +278,8 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 				RequireDiskEncrypted:   reqDisk,
 				RequireNoCriticalVulns: reqVulns,
 				MaxOsAgeDays:           maxOsAgeDays,
-				AllowedTimeStart:       allowedTimeStart,
-				AllowedTimeEnd:         allowedTimeEnd,
+				AllowedTimeStart:       normalisePolicyTime(allowedTimeStart),
+				AllowedTimeEnd:         normalisePolicyTime(allowedTimeEnd),
 				NetworkAllowlist:       networkAllowlist,
 				GeoCountryAllowlist:    geoCountryAllowlist,
 			}
@@ -286,7 +289,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 				zap.String("app_id", req.AppID),
 				zap.Error(err),
 			)
-			h.auditAccessDecision(req.UserID, req.AppID, false, []string{"app policy lookup failed"})
+			h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"app policy lookup failed"})
 			respondJSON(w, http.StatusOK, AccessEvalResponse{
 				Allow:   false,
 				Reasons: []string{"app policy lookup failed"},
@@ -322,7 +325,7 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 	reasons = append(reasons, condReasons...)
 
 	allow := len(reasons) == 0
-	h.auditAccessDecision(req.UserID, req.AppID, allow, reasons)
+	h.auditAccessDecision(ctx, req.UserID, req.AppID, allow, reasons)
 	respondJSON(w, http.StatusOK, AccessEvalResponse{
 		Allow:   allow,
 		Reasons: reasons,
@@ -387,15 +390,16 @@ func evalConditions(p appPolicy, clientIP string, now time.Time, geoIP GeoIPLook
 
 	// Time-window condition: both must be set to activate.
 	if p.AllowedTimeStart != nil && p.AllowedTimeEnd != nil {
-		start, errS := time.Parse("15:04", *p.AllowedTimeStart)
-		end, errE := time.Parse("15:04", *p.AllowedTimeEnd)
-		if errS != nil || errE != nil {
+		// The value comes from a Postgres TIME column, which pgx renders as
+		// "09:00:00.000000". parsePolicyTime accepts that form as well as the
+		// documented "09:00", so a valid window no longer denies every request.
+		startMins, okS := parsePolicyTime(*p.AllowedTimeStart)
+		endMins, okE := parsePolicyTime(*p.AllowedTimeEnd)
+		if !okS || !okE {
 			reasons = append(reasons, "policy: time window condition is misconfigured")
 		} else {
 			// Compare using minutes-since-midnight to stay timezone-agnostic.
 			nowMins := now.Hour()*60 + now.Minute()
-			startMins := start.Hour()*60 + start.Minute()
-			endMins := end.Hour()*60 + end.Minute()
 			var inWindow bool
 			if startMins <= endMins {
 				inWindow = nowMins >= startMins && nowMins < endMins
@@ -405,7 +409,7 @@ func evalConditions(p appPolicy, clientIP string, now time.Time, geoIP GeoIPLook
 			}
 			if !inWindow {
 				reasons = append(reasons, "policy: access not allowed at this time (window: "+
-					*p.AllowedTimeStart+"–"+*p.AllowedTimeEnd+" UTC)")
+					formatPolicyTime(startMins)+"–"+formatPolicyTime(endMins)+" UTC)")
 			}
 		}
 	}
@@ -464,7 +468,7 @@ func evalConditions(p appPolicy, clientIP string, now time.Time, geoIP GeoIPLook
 // context so the write survives request cancellation. When access is denied,
 // it also fires the EventAccessBlocked notification (A4) with denied_conditions
 // derived from the reason strings (D3).
-func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons []string) {
+func (h *Handler) auditAccessDecision(ctx context.Context, userID, appID string, allow bool, reasons []string) {
 	if h.db == nil {
 		return
 	}
@@ -478,7 +482,7 @@ func (h *Handler) auditAccessDecision(userID, appID string, allow bool, reasons 
 	if !allow {
 		details["denied_conditions"] = conditionTypesFromReasons(reasons)
 	}
-	if err := h.writeAuditEntryBestEffort(actorID, "access_eval", "user", userID, details); err != nil {
+	if err := h.writeAuditEntryBestEffort(ctx, actorID, "access_eval", "user", userID, details); err != nil {
 		h.logger.Warn("access eval: failed to write audit log", zap.Error(err))
 	}
 

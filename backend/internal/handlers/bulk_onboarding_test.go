@@ -81,6 +81,9 @@ func TestBulkOnboardSkipsDuplicate(t *testing.T) {
 	db := &fakeDB{
 		// Idempotency lookup: first call returns existing ID, others return no rows.
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				// Pretend email already exists.
 				if sp, ok := dest[0].(*string); ok {
@@ -190,6 +193,9 @@ func TestBulkOnboardKCFailure(t *testing.T) {
 	}
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 		beginFn: func(ctx context.Context) (pgx.Tx, error) {
@@ -246,4 +252,3 @@ func TestParseCSVMissingRequiredColumn(t *testing.T) {
 		t.Error("expected error for missing email column")
 	}
 }
-

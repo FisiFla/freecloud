@@ -306,6 +306,10 @@ func (h *Handler) AdminDecideAccessRequest(w http.ResponseWriter, r *http.Reques
 	actorID := middleware.GetActorID(r.Context())
 	ctx := r.Context()
 
+	// Tracks the IdP grant made by an approval so it can be rolled back if the
+	// local transaction cannot be committed.
+	var grantedUserID, grantedClientID string
+
 	tx, err := h.db.Begin(ctx)
 	if err != nil {
 		h.logger.Error("failed to begin access request decision transaction", zap.Error(err))
@@ -332,13 +336,28 @@ func (h *Handler) AdminDecideAccessRequest(w http.ResponseWriter, r *http.Reques
 	// still belongs to this org so a stale/cross-org app_id can never grant
 	// access even if it somehow landed in access_requests.
 	if req.Decision == "approved" {
-		var appOrg string
+		var appOrg, keycloakClientID string
 		if err := tx.QueryRow(ctx,
-			`SELECT org_id::text FROM connected_apps WHERE id = $1::uuid`, appID,
-		).Scan(&appOrg); err != nil || appOrg != oc.OrgID {
+			`SELECT org_id::text, keycloak_client_id FROM connected_apps WHERE id = $1::uuid`, appID,
+		).Scan(&appOrg, &keycloakClientID); err != nil || appOrg != oc.OrgID {
 			respondError(w, http.StatusNotFound, "app not found")
 			return
 		}
+
+		// The assignment only takes effect if the user is also granted the
+		// Keycloak client — otherwise the request is recorded as approved while
+		// access is still denied by the IdP. Assign first, then record, and
+		// compensate the IdP grant if the local write fails.
+		if err := h.keycloak.AssignUserToClient(ctx, requesterID, keycloakClientID); err != nil {
+			h.logger.Error("failed to assign user to keycloak client on approval",
+				zap.String("user_id", requesterID),
+				zap.String("kc_client_id", keycloakClientID),
+				zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "failed to grant requested access")
+			return
+		}
+		grantedUserID, grantedClientID = requesterID, keycloakClientID
+
 		_, assignErr := tx.Exec(ctx,
 			`INSERT INTO app_assignments (app_id, user_id, assigned_by)
 			 VALUES ($1::uuid, $2, $3)
@@ -346,12 +365,16 @@ func (h *Handler) AdminDecideAccessRequest(w http.ResponseWriter, r *http.Reques
 			appID, requesterID, actorID,
 		)
 		if assignErr != nil {
+			h.compensateAppAssignment(requesterID, keycloakClientID)
 			h.logger.Error("access request approval assignment insert failed", zap.Error(assignErr))
 			respondError(w, http.StatusInternalServerError, "failed to grant requested access")
 			return
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
+		if grantedClientID != "" {
+			h.compensateAppAssignment(grantedUserID, grantedClientID)
+		}
 		h.logger.Error("failed to commit access request decision", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "internal error")
 		return

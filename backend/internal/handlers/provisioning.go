@@ -217,7 +217,7 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "provisioning_config.upsert", "app", appID, map[string]interface{}{
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning_config.upsert", "app", appID, map[string]interface{}{
 		"enabled":        req.Enabled,
 		"connector_type": req.ConnectorType,
 		"token_changed":  req.BearerToken != "",
@@ -365,7 +365,7 @@ func (h *Handler) ResyncUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "provisioning.resync", "user", userID,
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning.resync", "user", userID,
 		map[string]interface{}{"app_id": appID})
 
 	capturedAppID := appID
@@ -485,7 +485,7 @@ func (h *Handler) DryRunProvisioning(w http.ResponseWriter, r *http.Request) {
 	}
 	payload := provisioning.ApplyAttributeMap(user, attrMap)
 
-	_ = h.writeAuditEntryBestEffort(actorID, "provisioning.dry_run", "app", appID,
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning.dry_run", "app", appID,
 		map[string]interface{}{"user_id": req.UserID})
 
 	respondJSON(w, http.StatusOK, DryRunProvisioningResponse{
@@ -535,7 +535,7 @@ func (h *Handler) ReconcileAllHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "provisioning.reconcile_all", "app", appID,
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning.reconcile_all", "app", appID,
 		map[string]interface{}{})
 
 	go func() {

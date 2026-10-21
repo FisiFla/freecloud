@@ -380,6 +380,9 @@ func TestAssignTeamPolicy_ForeignOrgForbidden(t *testing.T) {
 	// Non–system-admin with no fleet_team_orgs row → 404 (not leak).
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}
@@ -407,6 +410,9 @@ func TestAssignTeamPolicy_ForeignOrgForbidden(t *testing.T) {
 func TestMoveHostToTeam_ForeignOrgForbidden(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}
@@ -680,6 +686,9 @@ func TestRequireFleetTeam_SystemAdminBypassesMapping(t *testing.T) {
 	// System admin must not hit fleet_team_orgs SELECT for ownership.
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "fleet_team_orgs") {
 				t.Fatal("system admin must not query fleet_team_orgs for ownership")
 			}

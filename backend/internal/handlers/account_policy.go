@@ -219,7 +219,7 @@ func (h *Handler) UpdateAccountPolicy(w http.ResponseWriter, r *http.Request) {
 	// Audit — best-effort.
 	actorID := middleware.GetActorID(r.Context())
 	if h.db != nil {
-		if auditErr := h.writeAuditEntryBestEffort(actorID, "update_account_policy", "realm", "default", map[string]interface{}{
+		if auditErr := h.writeAuditEntryBestEffort(r.Context(), actorID, "update_account_policy", "realm", "default", map[string]interface{}{
 			"passwordPolicy":               kcReq.PasswordPolicy,
 			"bruteForceProtected":          req.BruteForceProtected,
 			"failureFactor":                req.FailureFactor,

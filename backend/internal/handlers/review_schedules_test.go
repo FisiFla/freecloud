@@ -123,6 +123,9 @@ func TestFireReviewScheduleCreatesCampaign(t *testing.T) {
 			return pgconn.NewCommandTag("INSERT 0 1"), nil
 		},
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "INSERT INTO review_campaigns") {
 				campaignInserted = true
 				return fakeRow{scanFn: func(dest ...any) error {

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -107,6 +108,9 @@ func (d *fakeDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, 
 }
 
 func (d *fakeDB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if isCanonicalQuery(sql) {
+		return fakeCanonicalRow(args)
+	}
 	if d.queryRowFn != nil {
 		return d.queryRowFn(ctx, sql, args...)
 	}
@@ -169,6 +173,9 @@ func (tx *fakeTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows,
 }
 
 func (tx *fakeTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if isCanonicalQuery(sql) {
+		return fakeCanonicalRow(args)
+	}
 	if tx.queryRowFn != nil {
 		return tx.queryRowFn(ctx, sql, args...)
 	}
@@ -177,4 +184,21 @@ func (tx *fakeTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 
 func (tx *fakeTx) Conn() *pgx.Conn {
 	return nil
+}
+
+// fakeCanonicalRow answers the audit writer's canonicalisation query
+// ("SELECT ($1::jsonb)::text") the way Postgres would. The audit chain hashes
+// the exact text Postgres renders for the JSONB value, so the fake has to
+// answer it or every audit-writing handler fails in unit tests.
+func fakeCanonicalRow(args []any) fakeRow {
+	raw, _ := args[0].([]byte)
+	return fakeRow{scanFn: func(dest ...any) error {
+		*dest[0].(*string) = string(raw)
+		return nil
+	}}
+}
+
+// isCanonicalQuery reports whether sql is the audit canonicalisation query.
+func isCanonicalQuery(sql string) bool {
+	return strings.Contains(sql, "::jsonb)::text")
 }

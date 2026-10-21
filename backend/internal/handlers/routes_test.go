@@ -130,7 +130,10 @@ func TestRouterReadOnlyCanReadUsersButCannotOnboard(t *testing.T) {
 
 func TestRouterHelpdeskCanSubmitApprovalButCannotDirectlyOnboard(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "INSERT INTO approval_requests") {
 				return fakeRow{scanFn: func(dest ...any) error {
 					*(dest[0].(*string)) = "00000000-0000-0000-0000-000000000001"
@@ -257,22 +260,22 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 		// Test-only enrollment-token helper — SCIM-bearer-authenticated (APP_ENV=test only).
 		"POST /api/v1/e2e/enrollment-token": true,
 		// Self-service — gated by PermSelfService, which end-user holds.
-		"POST /api/v1/auth/device-check": true,
-		"GET /api/v1/portal/me/devices":                    true,
-		"GET /api/v1/portal/me/apps":                       true,
-		"GET /api/v1/portal/me/compliance":                 true,
-		"POST /api/v1/portal/access-requests":              true,
+		"POST /api/v1/auth/device-check":      true,
+		"GET /api/v1/portal/me/devices":       true,
+		"GET /api/v1/portal/me/apps":          true,
+		"GET /api/v1/portal/me/compliance":    true,
+		"POST /api/v1/portal/access-requests": true,
 		// C1/C3 (Epic C multi-tenant): every authenticated user can see their
 		// own identity, global role, and org memberships — gated by
 		// PermSelfService, which end-user holds.
 		"GET /api/v1/me": true,
 		// B1: MFA self-service — gated by PermSelfService, which end-user holds.
-		"GET /api/v1/portal/me/mfa/factors":                true,
-		"POST /api/v1/portal/me/mfa/totp/enroll":           true,
-		"POST /api/v1/portal/me/mfa/webauthn/enroll":       true,
-		"DELETE /api/v1/portal/me/mfa/factors/{credId}":    true,
-		"GET /api/v1/portal/me/recovery-codes":             true,
-		"POST /api/v1/portal/me/recovery-codes":            true,
+		"GET /api/v1/portal/me/mfa/factors":             true,
+		"POST /api/v1/portal/me/mfa/totp/enroll":        true,
+		"POST /api/v1/portal/me/mfa/webauthn/enroll":    true,
+		"DELETE /api/v1/portal/me/mfa/factors/{credId}": true,
+		"GET /api/v1/portal/me/recovery-codes":          true,
+		"POST /api/v1/portal/me/recovery-codes":         true,
 		// B1 (setup wizard): unauthenticated, fail-closed once provisioned.
 		"GET /api/v1/setup/status": true,
 		"POST /api/v1/setup":       true,
@@ -327,7 +330,7 @@ func TestEveryAPIRouteIsPermissionGated(t *testing.T) {
 // needing a live Postgres connection.
 type zeroMembershipDB struct{}
 
-func (zeroMembershipDB) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {
+func (zeroMembershipDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 }
 func (zeroMembershipDB) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
@@ -403,10 +406,10 @@ func TestEveryTenantScopedRouteResolvesOrgContext(t *testing.T) {
 		"POST /api/v1/auth/forgot-password":       true,
 		"POST /api/v1/access/evaluate":            true,
 		"POST /api/v1/enrollment/device-identity": true,
-		"GET /scim/v2/ServiceProviderConfig":       true,
-		"GET /scim/v2/ResourceTypes":               true,
-		"GET /scim/v2/Schemas":                     true,
-		"GET /scim/v2/Users": true, "POST /scim/v2/Users": true,
+		"GET /scim/v2/ServiceProviderConfig":      true,
+		"GET /scim/v2/ResourceTypes":              true,
+		"GET /scim/v2/Schemas":                    true,
+		"GET /scim/v2/Users":                      true, "POST /scim/v2/Users": true,
 		"GET /scim/v2/Users/{id}": true, "PATCH /scim/v2/Users/{id}": true, "DELETE /scim/v2/Users/{id}": true,
 		"GET /scim/v2/Groups": true, "POST /scim/v2/Groups": true,
 		"GET /scim/v2/Groups/{id}": true, "PATCH /scim/v2/Groups/{id}": true, "DELETE /scim/v2/Groups/{id}": true,

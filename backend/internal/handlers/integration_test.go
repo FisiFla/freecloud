@@ -12,10 +12,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/Nerzal/gocloak/v13"
-	"github.com/jackc/pgx/v5"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/Nerzal/gocloak/v13"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 )
 
@@ -209,7 +209,6 @@ func TestHealthKeycloakWithFakePingError(t *testing.T) {
 	}
 }
 
-
 func TestOnboardKeycloakFailure(t *testing.T) {
 	logger := zap.NewNop()
 	kc := &fakeKeycloak{createUserFn: func(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -402,6 +401,9 @@ func TestOnboardDuplicateEmailConflict(t *testing.T) {
 		return nil, nil
 	}}
 	db := &fakeDB{queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+		if isCanonicalQuery(sql) {
+			return fakeCanonicalRow(args)
+		}
 		return fakeRow{scanFn: func(dest ...any) error {
 			if p, ok := dest[0].(*string); ok {
 				*p = "existing-kc-id"

@@ -174,7 +174,7 @@ func (h *Handler) UpsertSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		// Best-effort — do not fail the whole request.
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "smtp_config.upsert", "smtp_config", "1",
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "smtp_config.upsert", "smtp_config", "1",
 		map[string]interface{}{"host": req.Host, "port": req.Port, "password_updated": req.Password != ""})
 
 	respondJSON(w, http.StatusOK, map[string]bool{"saved": true})

@@ -31,6 +31,9 @@ func TestReadyzNotReadyWhenDBMissing(t *testing.T) {
 
 func readyDB() *fakeDB {
 	return &fakeDB{queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+		if isCanonicalQuery(sql) {
+			return fakeCanonicalRow(args)
+		}
 		return fakeRow{scanFn: func(dest ...any) error { return nil }}
 	}}
 }

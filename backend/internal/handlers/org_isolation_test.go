@@ -121,6 +121,9 @@ func TestCrossOrgIsolation_Users(t *testing.T) {
 func TestCrossOrgIsolation_GetUser(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// GetUser's query is `WHERE keycloak_user_id = $1 AND org_id = $2`.
 			// Simulate a real Postgres: the row only exists for org A.
 			if len(args) < 2 {
@@ -225,6 +228,9 @@ func TestCrossOrgIsolation_APITokens(t *testing.T) {
 	const orgAToken = "aaaaaaaa-0000-0000-0000-000000000001"
 	tx := &fakeTx{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// A successful revoke also writes an audit entry, whose hash-chain
 			// bookkeeping (internal/audit.chainHead) issues its OWN QueryRow
 			// with unrelated args on the same tx — only treat this as the
@@ -316,6 +322,9 @@ func TestCrossOrgIsolation_SCIM(t *testing.T) {
 			}}, nil
 		},
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// SCIMListUsers now issues COUNT(*) with only org_id before the page query.
 			if strings.Contains(sql, "COUNT(") {
 				return fakeRow{scanFn: func(dest ...any) error {
@@ -394,6 +403,9 @@ func TestCrossOrgIsolation_Devices(t *testing.T) {
 	// requireDeviceInCallerOrg's ownership check: device only "found" for org A.
 	ownershipDB := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if len(args) < 2 {
 				t.Fatalf("device ownership check missing org_id argument: %v", args)
 			}
@@ -471,6 +483,9 @@ func TestCrossOrgIsolation_MoveHostToTeam(t *testing.T) {
 
 	ownershipDB := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if len(args) < 2 {
 				t.Fatalf("device ownership check missing org_id argument: %v", args)
 			}
@@ -542,6 +557,9 @@ func TestCrossOrgIsolation_AddOrgMember(t *testing.T) {
 
 	db := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// SELECT keycloak_user_id FROM users WHERE keycloak_user_id = $1 AND org_id = $2
 			if len(args) < 2 {
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
@@ -748,6 +766,9 @@ func TestCrossOrgIsolation_Campaigns(t *testing.T) {
 	const itemID = "aaaaaaaa-0000-0000-0000-000000000001"
 	ownershipDB := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			campaignID, _ := args[0].(string)
 			orgID, _ := args[1].(string)
 			if campaignID == orgACampaign && orgID == testIsoOrgA {
@@ -799,6 +820,9 @@ func TestCrossOrgIsolation_ReviewSchedules(t *testing.T) {
 	const orgASchedule = "aaaaaaaa-0000-0000-0000-00000000000d"
 	ownershipDB := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			schedID, _ := args[0].(string)
 			orgID, _ := args[1].(string)
 			if schedID == orgASchedule && orgID == testIsoOrgA {
@@ -849,6 +873,9 @@ func TestCrossOrgIsolation_AccessRequests(t *testing.T) {
 		beginFn: func(_ context.Context) (pgx.Tx, error) {
 			return &fakeTx{
 				queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+					if isCanonicalQuery(sql) {
+						return fakeCanonicalRow(args)
+					}
 					// UPDATE access_requests ... WHERE id=$3 AND status='pending' AND org_id=$4
 					if len(args) < 4 {
 						return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
@@ -906,6 +933,9 @@ func TestCrossOrgIsolation_ApprovalRequests(t *testing.T) {
 	const orgAApproval = "aaaaaaaa-0000-0000-0000-00000000000f"
 	decideDB := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// SELECT ... FROM approval_requests WHERE id = $1 AND org_id = $2
 			if len(args) < 2 {
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
@@ -962,6 +992,9 @@ func TestCrossOrgIsolation_FederationSources(t *testing.T) {
 	const orgASource = "fed-org-a"
 	getDB := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if len(args) < 2 {
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			}
@@ -994,6 +1027,9 @@ func TestCrossOrgIsolation_Provisioning(t *testing.T) {
 	// requireAppInCallerOrg's ownership check: app only "found" for org A.
 	appOwnershipDB := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if len(args) < 2 {
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			}

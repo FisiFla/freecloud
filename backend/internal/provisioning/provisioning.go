@@ -119,16 +119,29 @@ func (e *Engine) ProvisionUser(ctx context.Context, appID string, user Provision
 	}
 
 	// Upsert a pending state row so we have something to update on completion.
-	_, err := e.db.Exec(ctx,
-		`INSERT INTO provisioning_state (app_id, user_id, status)
-		 VALUES ($1, $2, 'pending')
+	//
+	// org_id is taken from the users row (the authoritative tenant for this
+	// user) rather than left to the column default. Leaving it to the default
+	// stamped every row with the Default Organization, and ReconcileAll joins
+	// provisioning_state to users on BOTH keycloak_user_id and org_id — so for
+	// any non-default tenant the join never matched and reconciliation never
+	// ran. The INSERT is skipped (0 rows) when the user is unknown, which is
+	// reported as an error rather than silently doing nothing.
+	tag, err := e.db.Exec(ctx,
+		`INSERT INTO provisioning_state (app_id, user_id, org_id, status)
+		 SELECT $1, u.keycloak_user_id, u.org_id, 'pending'
+		 FROM users u WHERE u.keycloak_user_id = $2
 		 ON CONFLICT (app_id, user_id) DO UPDATE
 		   SET status = CASE WHEN provisioning_state.status = 'provisioned' THEN 'provisioned' ELSE 'pending' END,
+		       org_id = EXCLUDED.org_id,
 		       updated_at = NOW()`,
 		appID, user.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("provisioning: upsert pending state: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("provisioning: no user row for %s", user.ID)
 	}
 
 	// Check whether already provisioned — if so, update instead.

@@ -55,6 +55,9 @@ func TestEnrollmentCallbackUnknownToken(t *testing.T) {
 	db := &fakeDB{
 		beginFn: func(ctx context.Context) (pgx.Tx, error) {
 			return &fakeTx{queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			}}, nil
 		},
@@ -80,10 +83,16 @@ func TestEnrollmentCallbackUsedToken(t *testing.T) {
 	db := &fakeDB{
 		beginFn: func(ctx context.Context) (pgx.Tx, error) {
 			return &fakeTx{queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			}}, nil
 		},
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(**time.Time)) = &usedAt
 				*(dest[1].(*time.Time)) = expiresAt
@@ -109,10 +118,16 @@ func TestEnrollmentCallbackExpiredToken(t *testing.T) {
 	db := &fakeDB{
 		beginFn: func(ctx context.Context) (pgx.Tx, error) {
 			return &fakeTx{queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			}}, nil
 		},
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(**time.Time)) = nil
 				*(dest[1].(*time.Time)) = expiresAt
@@ -143,6 +158,9 @@ func TestEnrollmentCallbackLooksUpByHash(t *testing.T) {
 		beginFn: func(ctx context.Context) (pgx.Tx, error) {
 			return &fakeTx{
 				queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+					if isCanonicalQuery(sql) {
+						return fakeCanonicalRow(args)
+					}
 					if strings.Contains(sql, "UPDATE enrollment_tokens") && len(args) > 0 {
 						gotArg, _ = args[0].(string)
 					}
@@ -183,6 +201,9 @@ func TestEnrollmentCallbackSetsDeviceOrgFromToken(t *testing.T) {
 		beginFn: func(ctx context.Context) (pgx.Tx, error) {
 			return &fakeTx{
 				queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+					if isCanonicalQuery(sql) {
+						return fakeCanonicalRow(args)
+					}
 					if strings.Contains(sql, "UPDATE enrollment_tokens") {
 						return fakeRow{scanFn: func(dest ...any) error {
 							*(dest[0].(*string)) = "user-1"

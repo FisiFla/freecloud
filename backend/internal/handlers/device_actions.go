@@ -64,7 +64,7 @@ func (h *Handler) RemoteLock(w http.ResponseWriter, r *http.Request) {
 
 	// Detached audit write — client disconnect must not drop the record.
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "device_lock", "device", deviceID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "device_lock", "device", deviceID, map[string]interface{}{
 			"device_id": deviceID,
 		}); err != nil {
 			h.logger.Warn("failed to write audit log for remote lock", zap.Error(err))
@@ -484,7 +484,7 @@ func (h *Handler) RemoteRestart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "device_restart", "device", deviceID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "device_restart", "device", deviceID, map[string]interface{}{
 			"device_id": deviceID,
 		}); err != nil {
 			h.logger.Warn("failed to write audit log for remote restart", zap.Error(err))
@@ -536,7 +536,7 @@ func (h *Handler) RemoteLockWithMessage(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "device_lock_message", "device", deviceID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "device_lock_message", "device", deviceID, map[string]interface{}{
 			"device_id": deviceID,
 			"message":   body.Message,
 		}); err != nil {
@@ -574,7 +574,7 @@ func (h *Handler) RemoteClearPasscode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "device_clear_passcode", "device", deviceID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "device_clear_passcode", "device", deviceID, map[string]interface{}{
 			"device_id": deviceID,
 		}); err != nil {
 			h.logger.Warn("failed to write audit log for remote clear-passcode", zap.Error(err))
