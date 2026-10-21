@@ -1,5 +1,5 @@
-# golang 1.22-alpine
-FROM golang:1.22-alpine@sha256:1699c10032ca2582ec89a24a1312d986a3f094aed3d5c1147b19880afe40e052 AS builder
+# golang 1.26.10-alpine
+FROM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder
 WORKDIR /app
 COPY main.go .
 RUN CGO_ENABLED=0 go build -o fleetdm-mock main.go

@@ -2,7 +2,7 @@
 # Multi-stage build for the FreeCloud Go backend.
 # Build context is the backend/ directory.
 
-FROM golang:1.26-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS build
+FROM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
