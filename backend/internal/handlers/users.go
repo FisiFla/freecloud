@@ -71,7 +71,9 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.db.Query(ctx,
 		`WITH page AS (
 		     SELECT u.keycloak_user_id, u.email, u.first_name, u.last_name,
-		            COALESCE(u.department, ''), COALESCE(u.role, ''), COALESCE(u.disabled, false),
+		            COALESCE(u.department, '') AS department,
+		            COALESCE(u.role, '') AS role,
+		            COALESCE(u.disabled, false) AS disabled,
 		            u.created_at, u.updated_at
 		     FROM users u
 		     WHERE u.org_id = $1
