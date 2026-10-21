@@ -20,7 +20,7 @@ func TestGetSAMLIdPInitiatedURL(t *testing.T) {
 	const wantURL = "https://keycloak.local/realms/freecloud/protocol/saml/clients/my-app"
 
 	db := &fakeDB{
-		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, args ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = kcClientID
 				*(dest[1].(*string)) = "SAML"
@@ -72,7 +72,7 @@ func TestGetSAMLIdPInitiatedURL(t *testing.T) {
 // app returns 400.
 func TestGetSAMLIdPInitiatedURLNotSAML(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, args ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "kc-oidc-client"
 				*(dest[1].(*string)) = "OIDC"
@@ -103,7 +103,7 @@ func TestGetSAMLMetadata(t *testing.T) {
 	const stubXML = `<?xml version="1.0" encoding="UTF-8"?><EntityDescriptor entityID="https://keycloak.local/realms/freecloud"/>`
 
 	db := &fakeDB{
-		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, args ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "SAML"
 				return nil
@@ -142,7 +142,7 @@ func TestGetSAMLMetadata(t *testing.T) {
 // TestGetSAMLMetadataNotSAML verifies 400 for OIDC apps.
 func TestGetSAMLMetadataNotSAML(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, args ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "OIDC"
 				return nil

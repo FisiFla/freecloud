@@ -245,7 +245,10 @@ func TestPortalGenerateRecoveryCodes_NoDB(t *testing.T) {
 
 func TestPortalRecoveryCodesStatus_HasCodes(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*int)) = 5
 				return nil
@@ -266,7 +269,10 @@ func TestPortalRecoveryCodesStatus_HasCodes(t *testing.T) {
 
 func TestPortalRecoveryCodesStatus_NoCodes(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*int)) = 0
 				return nil
@@ -326,7 +332,10 @@ func TestHashRecoveryCode_Deterministic(t *testing.T) {
 
 func TestCheckAndConsumeRecoveryCode_ValidCode(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if len(dest) > 0 {
 					if p, ok := dest[0].(*string); ok {
@@ -348,7 +357,10 @@ func TestCheckAndConsumeRecoveryCode_ValidCode(t *testing.T) {
 
 func TestCheckAndConsumeRecoveryCode_InvalidCode(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}

@@ -83,6 +83,10 @@ func (h *Handler) GetAppAccessPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil {
 		policy.UpdatedAt = updatedAt.Format(time.RFC3339)
+		// Postgres TIME columns are rendered by pgx as "09:00:00.000000";
+		// the API contract is "HH:MM".
+		policy.AllowedTimeStart = normalisePolicyTime(policy.AllowedTimeStart)
+		policy.AllowedTimeEnd = normalisePolicyTime(policy.AllowedTimeEnd)
 	}
 
 	respondJSON(w, http.StatusOK, policy)
@@ -127,6 +131,20 @@ func (h *Handler) UpsertAppAccessPolicy(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Time window: both bounds must be present and parsable. A half-specified
+	// window used to be stored and then silently ignored at evaluation time,
+	// which failed open (no time gating at all).
+	timeStart, timeEnd, timeField, timeErr := validatePolicyTimeWindow(req.AllowedTimeStart, req.AllowedTimeEnd)
+	if timeErr != "" {
+		respondValidationErrors(w, []ValidationError{{Field: timeField, Message: timeErr}})
+		return
+	}
+	var timeStartPtr, timeEndPtr *string
+	if timeStart != "" {
+		timeStartPtr = &timeStart
+		timeEndPtr = &timeEnd
+	}
+
 	ctx := r.Context()
 
 	// Verify the app exists AND belongs to the caller's org.
@@ -164,7 +182,7 @@ func (h *Handler) UpsertAppAccessPolicy(w http.ResponseWriter, r *http.Request) 
 		     updated_at                = NOW()
 		 RETURNING updated_at`,
 		appID, req.RequireEnrolled, req.RequireDiskEncrypted, req.RequireNoCriticalVulns,
-		req.MaxOsAgeDays, req.AllowedTimeStart, req.AllowedTimeEnd,
+		req.MaxOsAgeDays, timeStartPtr, timeEndPtr,
 		networkAllowlist, geoCountryAllowlist,
 	).Scan(&updatedAt)
 	if err != nil {
@@ -189,8 +207,8 @@ func (h *Handler) UpsertAppAccessPolicy(w http.ResponseWriter, r *http.Request) 
 		RequireDiskEncrypted:   req.RequireDiskEncrypted,
 		RequireNoCriticalVulns: req.RequireNoCriticalVulns,
 		MaxOsAgeDays:           req.MaxOsAgeDays,
-		AllowedTimeStart:       req.AllowedTimeStart,
-		AllowedTimeEnd:         req.AllowedTimeEnd,
+		AllowedTimeStart:       timeStartPtr,
+		AllowedTimeEnd:         timeEndPtr,
 		NetworkAllowlist:       networkAllowlist,
 		GeoCountryAllowlist:    geoCountryAllowlist,
 		UpdatedAt:              updatedAt.Format(time.RFC3339),

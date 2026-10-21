@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/go-chi/chi/v5"
@@ -18,6 +19,9 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
+
+// groupSyncTimeout bounds the detached background group→app provisioning sync.
+const groupSyncTimeout = 30 * time.Second
 
 // ---- response types ----
 
@@ -112,7 +116,7 @@ func (h *Handler) CreateGroup(w http.ResponseWriter, r *http.Request) {
 
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "group_create", "group", groupID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "group_create", "group", groupID, map[string]interface{}{
 			"name": req.Name,
 		}); err != nil {
 			h.logger.Warn("failed to write group create audit log", zap.Error(err))
@@ -158,7 +162,7 @@ func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "user_group_assign", "user", userID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "user_group_assign", "user", userID, map[string]interface{}{
 			"group_id": req.GroupID,
 		}); err != nil {
 			h.logger.Warn("failed to write group assignment audit log", zap.Error(err))
@@ -168,8 +172,7 @@ func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 	// A3: Sync group membership to provisioning-enabled apps (best-effort).
 	if h.provisionEngine != nil {
 		capturedUserID := userID
-		capturedCtx := ctx
-		go h.triggerGroupSyncForUser(capturedCtx, capturedUserID)
+		go h.triggerGroupSyncForUser(capturedUserID)
 	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"assigned": true})
@@ -200,7 +203,7 @@ func (h *Handler) UnassignUserFromGroup(w http.ResponseWriter, r *http.Request) 
 
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "user_group_unassign", "user", userID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "user_group_unassign", "user", userID, map[string]interface{}{
 			"group_id": groupID,
 		}); err != nil {
 			h.logger.Warn("failed to write group unassignment audit log", zap.Error(err))
@@ -210,8 +213,7 @@ func (h *Handler) UnassignUserFromGroup(w http.ResponseWriter, r *http.Request) 
 	// A3: Sync group membership to provisioning-enabled apps (best-effort).
 	if h.provisionEngine != nil {
 		capturedUserID := userID
-		capturedCtx := ctx
-		go h.triggerGroupSyncForUser(capturedCtx, capturedUserID)
+		go h.triggerGroupSyncForUser(capturedUserID)
 	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"unassigned": true})
@@ -219,7 +221,15 @@ func (h *Handler) UnassignUserFromGroup(w http.ResponseWriter, r *http.Request) 
 
 // triggerGroupSyncForUser fetches the user's current Keycloak groups and pushes
 // membership to all provisioning-enabled apps for that user.
-func (h *Handler) triggerGroupSyncForUser(ctx context.Context, userID string) {
+//
+// It runs in a goroutine after the handler has returned, so it must NOT use
+// the request context: net/http cancels that as soon as the handler returns,
+// which made every group sync fail with "context canceled" before it did any
+// work. The context is therefore detached and given its own timeout.
+func (h *Handler) triggerGroupSyncForUser(userID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), groupSyncTimeout)
+	defer cancel()
+
 	kcGroups, err := h.keycloak.GetUserGroups(ctx, userID)
 	if err != nil {
 		h.logger.Warn("triggerGroupSync: failed to get keycloak groups",
@@ -329,7 +339,7 @@ func (h *Handler) AssignRealmRoleToUser(w http.ResponseWriter, r *http.Request) 
 
 	actorID := middleware.GetActorID(ctx)
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "user_role_assign", "user", userID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "user_role_assign", "user", userID, map[string]interface{}{
 			"role_id":   req.RoleID,
 			"role_name": req.RoleName,
 		}); err != nil {

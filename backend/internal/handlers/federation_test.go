@@ -112,7 +112,10 @@ func TestCreateFederationSource_Success(t *testing.T) {
 		ldapBindPassword: "secret",
 		logger:           zap.NewNop(),
 		db: &fakeDB{
-			queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return stubFederationRow()
 			},
 		},
@@ -194,7 +197,10 @@ func TestGetFederationSource_Found(t *testing.T) {
 		keycloak: &fakeKeycloak{},
 		logger:   zap.NewNop(),
 		db: &fakeDB{
-			queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return stubFederationRow()
 			},
 		},
@@ -237,7 +243,10 @@ func TestDeleteFederationSource_Success(t *testing.T) {
 		keycloak: &fakeKeycloak{},
 		logger:   zap.NewNop(),
 		db: &fakeDB{
-			queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return fakeRow{scanFn: func(dest ...any) error {
 					if p, ok := dest[0].(*string); ok {
 						*p = federationComponentID
@@ -273,7 +282,10 @@ func TestTestFederationConnection_Success(t *testing.T) {
 		ldapBindPassword: "secret",
 		logger:           zap.NewNop(),
 		db: &fakeDB{
-			queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return fakeRow{scanFn: func(dest ...any) error {
 					vals := []any{
 						federationID, federationComponentID,
@@ -332,7 +344,10 @@ func TestTriggerFederationSync_Success(t *testing.T) {
 		keycloak: &fakeKeycloak{},
 		logger:   zap.NewNop(),
 		db: &fakeDB{
-			queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return fakeRow{scanFn: func(dest ...any) error {
 					if p, ok := dest[0].(*string); ok {
 						*p = federationComponentID

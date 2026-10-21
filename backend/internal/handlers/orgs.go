@@ -91,7 +91,7 @@ func (h *Handler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.writeAuditEntryBestEffort(actorID, "org.create", "organization", id, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "org.create", "organization", id, map[string]interface{}{
 		"name": req.Name,
 		"slug": req.Slug,
 	}); err != nil {
@@ -351,7 +351,7 @@ func (h *Handler) AddOrgMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.writeAuditEntryBestEffort(actorID, "org.member_add", "organization", orgID, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "org.member_add", "organization", orgID, map[string]interface{}{
 		"user_id": req.UserID,
 		"role":    req.Role,
 	}); err != nil {
@@ -395,7 +395,7 @@ func (h *Handler) RemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.writeAuditEntryBestEffort(actorID, "org.member_remove", "organization", orgID, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "org.member_remove", "organization", orgID, map[string]interface{}{
 		"user_id": userID,
 	}); err != nil {
 		h.logger.Warn("failed to write org member remove audit log", zap.Error(err))

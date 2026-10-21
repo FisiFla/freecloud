@@ -100,7 +100,7 @@ func (h *Handler) FleetEnrollmentCallback(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if auditErr := h.writeAuditEntryBestEffort("fleet-webhook", "device_enroll", "device", req.HostID, map[string]interface{}{
+	if auditErr := h.writeAuditEntryBestEffort(r.Context(), "fleet-webhook", "device_enroll", "device", req.HostID, map[string]interface{}{
 		"host_id":  req.HostID,
 		"hostname": req.Hostname,
 	}); auditErr != nil {

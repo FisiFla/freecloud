@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,12 +26,27 @@ type DBPool interface {
 
 const auditChainLockID int64 = 0x4652434c4f5544 // "FRCLOUD" within signed int64 range.
 
+// DefaultOrgID is the seeded "Default Organization" UUID used for audit rows
+// that are not attributable to a specific tenant (for example the system
+// prune marker). It mirrors middleware.DefaultOrgID; the audit package is a
+// leaf and must not depend on the HTTP layer, so the constant is repeated
+// here. chain_test.go asserts the two stay in sync.
+const DefaultOrgID = "00000000-0000-0000-0000-000000000001"
+
 // WriteEntry inserts one audit log row and computes row_hash + prev_hash in the
 // same database round-trip. It reads the max-seq row's hash first, then inserts
 // with a hash computed over the canonical fields + prevHash.
+//
+// orgID attributes the entry to a tenant. It is required: an audit row that
+// cannot be attributed to an org would land in the Default Organization and be
+// invisible to the tenant it describes.
+//
 // actorID, action, targetType, targetID must be stable strings; details must be
 // a JSON-marshalable value (use nil for no details).
-func WriteEntry(ctx context.Context, db DBPool, actorID, action, targetType, targetID string, details interface{}) error {
+func WriteEntry(ctx context.Context, db DBPool, orgID, actorID, action, targetType, targetID string, details interface{}) error {
+	if orgID == "" {
+		return errors.New("audit: org id is required")
+	}
 	var detailsBytes []byte
 	if details != nil {
 		var err error
@@ -64,12 +80,28 @@ func WriteEntry(ctx context.Context, db DBPool, actorID, action, targetType, tar
 		return fmt.Errorf("read chain head: %w", err)
 	}
 
-	rowHash := computeHash(actorID, action, targetType, targetID, string(detailsBytes), prevHash)
+	// Canonical details text.
+	//
+	// VerifyChain re-hashes the value it reads back from the database, which is
+	// Postgres' own JSONB rendering (details::text). Go's json.Marshal output
+	// is NOT byte-identical to that rendering — Postgres orders object keys by
+	// length-then-byte, inserts a space after ':' and ',', and does not
+	// HTML-escape. Hashing Go's bytes and verifying against Postgres' bytes
+	// therefore never matched, which made every multi-key entry look like
+	// tampering. Ask Postgres to render the exact value that is about to be
+	// stored, so both sides hash the same bytes by construction. This also
+	// matches the Migration028 backfill, which hashed details::text.
+	var detailsText string
+	if err := tx.QueryRow(ctx, `SELECT ($1::jsonb)::text`, detailsBytes).Scan(&detailsText); err != nil {
+		return fmt.Errorf("canonicalise audit details: %w", err)
+	}
+
+	rowHash := computeHash(actorID, action, targetType, targetID, detailsText, prevHash)
 
 	_, err = tx.Exec(ctx,
-		`INSERT INTO audit_logs (actor_id, action, target_type, target_id, details, row_hash, prev_hash)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		actorID, action, targetType, targetID, detailsBytes, rowHash, prevHash,
+		`INSERT INTO audit_logs (org_id, actor_id, action, target_type, target_id, details, row_hash, prev_hash)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		orgID, actorID, action, targetType, targetID, detailsBytes, rowHash, prevHash,
 	)
 	if err != nil {
 		return err
@@ -98,6 +130,10 @@ func chainHead(ctx context.Context, db DBPool) (string, error) {
 
 // computeHash returns the hex-encoded SHA-256 over the canonical representation
 // of one row plus the previous hash.
+//
+// detailsJSON must be the exact text that VerifyChain reads back for the row
+// (i.e. Postgres' details::text rendering of the stored value). The writer
+// obtains it from Postgres itself so the two sides can never disagree.
 func computeHash(actorID, action, targetType, targetID, detailsJSON, prevHash string) string {
 	h := sha256.New()
 	// Fixed-length field separator to prevent length-extension confusion.

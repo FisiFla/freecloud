@@ -129,6 +129,9 @@ func TestSetDeviceIdentityCookie_AllowsRefererFallback(t *testing.T) {
 func TestSetDeviceIdentityCookie_TokenNotFound(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}
@@ -150,6 +153,9 @@ func TestSetDeviceIdentityCookie_LooksUpByHash(t *testing.T) {
 	var gotArg string
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if len(args) > 0 {
 				gotArg, _ = args[0].(string)
 			}
@@ -173,6 +179,9 @@ func TestSetDeviceIdentityCookie_HostIDNil(t *testing.T) {
 	// Token found (used_at IS NOT NULL) but used_by_host_id is NULL.
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				// dest[0] is *(*string) — the pointer-to-pointer. Leave it as nil.
 				if p, ok := dest[0].(**string); ok {
@@ -197,6 +206,9 @@ func TestSetDeviceIdentityCookie_Success(t *testing.T) {
 	const secret = "device-cookie-test-secret"
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			if !strings.Contains(sql, "expires_at > NOW()") {
 				t.Errorf("expected the M3 expires_at guard in the lookup query, got: %s", sql)
 			}

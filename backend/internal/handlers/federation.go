@@ -116,7 +116,7 @@ func (h *Handler) CreateFederationSource(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "federation_source.created", "federation_source", fs.ID, map[string]interface{}{
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.created", "federation_source", fs.ID, map[string]interface{}{
 		"name": req.Name, "vendor": req.Vendor,
 	})
 	respondJSON(w, http.StatusCreated, fs)
@@ -278,7 +278,7 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "federation_source.updated", "federation_source", id, map[string]interface{}{"name": newName})
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.updated", "federation_source", id, map[string]interface{}{"name": newName})
 	respondJSON(w, http.StatusOK, FederationSource{
 		ID: cur.ID, Name: newName, ProviderType: cur.ProviderType, Vendor: newVendor,
 		KeycloakComponentID: cur.KeycloakComponentID,
@@ -325,7 +325,7 @@ func (h *Handler) DeleteFederationSource(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "federation_source.deleted", "federation_source", id, map[string]interface{}{"keycloak_component_id": componentID})
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.deleted", "federation_source", id, map[string]interface{}{"keycloak_component_id": componentID})
 	respondJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
 
@@ -360,13 +360,13 @@ func (h *Handler) TestFederationConnection(w http.ResponseWriter, r *http.Reques
 
 	if testErr := h.keycloak.TestLDAPConnection(ctx, fs.KeycloakComponentID, connURL, bindDN, bindPassword); testErr != nil {
 		h.logger.Warn("ldap test connection failed", zap.String("id", id), zap.Error(testErr))
-		_ = h.writeAuditEntryBestEffort(actorID, "federation_source.test_connection", "federation_source", id,
+		_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.test_connection", "federation_source", id,
 			map[string]interface{}{"success": false, "error": testErr.Error()})
 		respondJSON(w, http.StatusOK, map[string]interface{}{"success": false, "error": testErr.Error()})
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "federation_source.test_connection", "federation_source", id,
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.test_connection", "federation_source", id,
 		map[string]interface{}{"success": true})
 	respondJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
@@ -408,7 +408,7 @@ func (h *Handler) TriggerFederationSync(w http.ResponseWriter, r *http.Request) 
 		syncStatus = "failed: " + syncErr.Error()
 		_, _ = h.db.Exec(ctx,
 			`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2 AND org_id=$3`, syncStatus, id, oc.OrgID)
-		_ = h.writeAuditEntryBestEffort(actorID, "federation_source.sync", "federation_source", id,
+		_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.sync", "federation_source", id,
 			map[string]interface{}{"action": action, "status": "failed"})
 		respondJSON(w, http.StatusOK, map[string]interface{}{"synced": false, "status": syncStatus})
 		return
@@ -416,7 +416,7 @@ func (h *Handler) TriggerFederationSync(w http.ResponseWriter, r *http.Request) 
 
 	_, _ = h.db.Exec(ctx,
 		`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2 AND org_id=$3`, syncStatus, id, oc.OrgID)
-	_ = h.writeAuditEntryBestEffort(actorID, "federation_source.sync", "federation_source", id,
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.sync", "federation_source", id,
 		map[string]interface{}{"action": action, "status": "success"})
 	respondJSON(w, http.StatusOK, map[string]bool{"synced": true})
 }

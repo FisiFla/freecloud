@@ -22,9 +22,9 @@ func TestPolicyParam(t *testing.T) {
 	}{
 		{"length(12) and upperCase(1)", "length", 12},
 		{"length(12) and upperCase(1)", "upperCase", 1},
-		{"length(12) and upperCase(1)", "digits", 0},          // absent → 0
-		{"", "length", 0},                                      // empty policy
-		{"length(0) and upperCase(1)", "length", 0},            // explicit zero
+		{"length(12) and upperCase(1)", "digits", 0}, // absent → 0
+		{"", "length", 0}, // empty policy
+		{"length(0) and upperCase(1)", "length", 0}, // explicit zero
 		{"specialChars(3) and digits(2)", "specialChars", 3},
 		{"forceExpiredPasswordChange(90)", "forceExpiredPasswordChange", 90},
 		{"passwordHistory(5)", "passwordHistory", 5},
@@ -43,9 +43,9 @@ func TestPolicyParam(t *testing.T) {
 
 func TestBuildPolicyString(t *testing.T) {
 	cases := []struct {
-		name string
-		req  UpdateAccountPolicyRequest
-		want []string // all of these substrings must appear in the result
+		name   string
+		req    UpdateAccountPolicyRequest
+		want   []string // all of these substrings must appear in the result
 		absent []string // none of these should appear
 	}{
 		{
@@ -58,9 +58,9 @@ func TestBuildPolicyString(t *testing.T) {
 			want: []string{"length(12)", "upperCase(1)", "lowerCase(1)", "digits(1)", "specialChars(1)", "passwordHistory(5)", "forceExpiredPasswordChange(90)"},
 		},
 		{
-			name: "zeroes omitted",
-			req:  UpdateAccountPolicyRequest{MinLength: 8},
-			want: []string{"length(8)"},
+			name:   "zeroes omitted",
+			req:    UpdateAccountPolicyRequest{MinLength: 8},
+			want:   []string{"length(8)"},
 			absent: []string{"upperCase", "lowerCase", "digits", "specialChars", "passwordHistory", "forceExpiredPasswordChange"},
 		},
 		{
@@ -106,9 +106,9 @@ func TestValidateAccountPolicy(t *testing.T) {
 	})
 
 	cases := []struct {
-		name  string
+		name   string
 		mutate func(r *UpdateAccountPolicyRequest)
-		field string
+		field  string
 	}{
 		{"minLength negative", func(r *UpdateAccountPolicyRequest) { r.MinLength = -1 }, "minLength"},
 		{"minLength too high", func(r *UpdateAccountPolicyRequest) { r.MinLength = 257 }, "minLength"},
@@ -162,7 +162,7 @@ func TestGetAccountPolicy(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 	var resp struct {
-		Success bool `json:"success"`
+		Success bool                  `json:"success"`
 		Data    AccountPolicyResponse `json:"data"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {

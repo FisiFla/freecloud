@@ -69,7 +69,7 @@ func (h *Handler) CreateIdentityProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "identity_provider.create", "identity_provider", req.Alias,
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "identity_provider.create", "identity_provider", req.Alias,
 		map[string]interface{}{"provider_type": req.ProviderType})
 
 	respondJSON(w, http.StatusCreated, map[string]string{"alias": req.Alias})
@@ -99,7 +99,7 @@ func (h *Handler) UpdateIdentityProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "identity_provider.update", "identity_provider", alias, nil)
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "identity_provider.update", "identity_provider", alias, nil)
 
 	respondJSON(w, http.StatusOK, map[string]string{"alias": alias})
 }
@@ -122,7 +122,7 @@ func (h *Handler) DeleteIdentityProvider(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "identity_provider.delete", "identity_provider", alias, nil)
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "identity_provider.delete", "identity_provider", alias, nil)
 
 	respondJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }

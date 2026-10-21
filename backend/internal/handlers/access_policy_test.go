@@ -69,6 +69,9 @@ func TestGetAppPolicyFound(t *testing.T) {
 	ts := time.Now().UTC().Truncate(time.Second)
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				// require_enrolled, require_disk_encrypted, require_no_critical_vulns, max_os_age_days, updated_at
 				if len(dest) < 5 {
@@ -140,6 +143,9 @@ func TestUpsertAppPolicyRejectsUnsupportedMaxOSAge(t *testing.T) {
 func TestUpsertAppPolicyAppNotFound(t *testing.T) {
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}
@@ -158,6 +164,9 @@ func TestUpsertAppPolicySuccess(t *testing.T) {
 	callN := 0
 	db := &fakeDB{
 		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			callN++
 			if callN == 1 {
 				// app existence check — found

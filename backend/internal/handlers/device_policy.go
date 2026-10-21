@@ -188,7 +188,7 @@ func (h *Handler) CreateTeam(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "team created in Fleet but org mapping failed")
 			return
 		}
-		if err := h.writeAuditEntryBestEffort(actorID, "fleet_team_create", "team", team.Name, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "fleet_team_create", "team", team.Name, map[string]interface{}{
 			"team_name": team.Name,
 			"team_id":   team.ID,
 			"org_id":    oc.OrgID,
@@ -237,7 +237,7 @@ func (h *Handler) AssignTeamPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "fleet_team_policy_assign", "team", fmt.Sprintf("%d", teamID), map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "fleet_team_policy_assign", "team", fmt.Sprintf("%d", teamID), map[string]interface{}{
 			"team_id":   teamID,
 			"policy_id": req.PolicyID,
 		}); err != nil {
@@ -319,7 +319,7 @@ func (h *Handler) MoveHostToTeam(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if err := h.writeAuditEntryBestEffort(actorID, "fleet_host_move_team", "team", fmt.Sprintf("%d", teamID), map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "fleet_host_move_team", "team", fmt.Sprintf("%d", teamID), map[string]interface{}{
 			"team_id":  teamID,
 			"host_ids": req.HostIDs,
 		}); err != nil {

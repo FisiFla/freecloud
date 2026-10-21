@@ -41,7 +41,10 @@ func (k *keycloakNotCalledFake) DisableUser(_ context.Context, _ string) error {
 func TestSubmitApprovalHelpdeskDoesNotCallKeycloak(t *testing.T) {
 	insertedID := "00000000-0000-0000-0000-000000000001"
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// RETURNING id from INSERT
 			return fakeRow{scanFn: func(dest ...any) error {
 				if p, ok := dest[0].(*string); ok {
@@ -98,7 +101,10 @@ func TestDecideApprovalRejectAudited(t *testing.T) {
 
 	auditInserted := false
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// Return pending offboard request
 			return fakeRow{scanFn: func(dest ...any) error {
 				// action_type, status, payload
@@ -119,8 +125,8 @@ func TestDecideApprovalRejectAudited(t *testing.T) {
 			}}
 		},
 		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-			if len(args) >= 2 {
-				if s, ok := args[1].(string); ok && s == "approval.rejected" {
+			if len(args) >= 3 {
+				if s, ok := args[2].(string); ok && s == "approval.rejected" {
 					auditInserted = true
 				}
 			}
@@ -133,7 +139,10 @@ func TestDecideApprovalRejectAudited(t *testing.T) {
 	db.beginFn = func(_ context.Context) (pgx.Tx, error) {
 		return &fakeTx{
 			execFn: db.execFn,
-			queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+				if isCanonicalQuery(sql) {
+					return fakeCanonicalRow(args)
+				}
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			},
 		}, nil
@@ -173,7 +182,10 @@ func TestDecideApprovalAlreadyDecidedConflict(t *testing.T) {
 	approvalID := "00000000-0000-0000-0000-000000000003"
 
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if len(dest) < 3 {
 					return nil
@@ -220,7 +232,10 @@ func TestDecideApprovalExecutionFailureResetsPending(t *testing.T) {
 	sawReset := false
 	sawApproved := false
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				if len(dest) < 3 {
 					return nil
@@ -291,7 +306,10 @@ func TestDecideApprovalSelfApprovalForbidden(t *testing.T) {
 
 	executeCalled := false
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			// Return a pending request whose requester_id == actorID.
 			return fakeRow{scanFn: func(dest ...any) error {
 				if len(dest) < 4 {

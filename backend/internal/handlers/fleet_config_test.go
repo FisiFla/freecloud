@@ -34,7 +34,10 @@ func TestGetFleetConfig_NoDB(t *testing.T) {
 // when the singleton row is absent (ErrNoRows path).
 func TestGetFleetConfig_NoRow(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 		},
 	}
@@ -65,7 +68,10 @@ func TestGetFleetConfig_Row(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	hash := "abc123hash"
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "https://fleet.example.com"
 				*(dest[1].(**string)) = &hash
@@ -160,7 +166,10 @@ func TestDynamicFleetClientUsesStoredConfig(t *testing.T) {
 		t.Fatalf("encrypt token: %v", err)
 	}
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = srv.URL
 				*(dest[1].(**string)) = &enc
@@ -183,7 +192,10 @@ func TestDynamicFleetClientUsesStoredConfig(t *testing.T) {
 // when no server URL is configured.
 func TestTestFleetConfig_NoServerURL(t *testing.T) {
 	db := &fakeDB{
-		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = "" // empty server URL
 				*(dest[1].(**string)) = nil

@@ -20,7 +20,7 @@ func TestAssignAppCompensatesWhenAssignmentInsertFails(t *testing.T) {
 	const userID = "00000000-0000-0000-0000-000000000099"
 
 	db := &fakeDB{
-		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: ownershipFoundQueryRowFn(func(_ context.Context, sql string, args ...any) pgx.Row {
 			return fakeRow{scanFn: func(dest ...any) error {
 				*(dest[0].(*string)) = keycloakClientID
 				return nil

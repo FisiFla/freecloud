@@ -113,7 +113,7 @@ func (h *Handler) CreateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "review_schedule.create", "schedule", id,
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "review_schedule.create", "schedule", id,
 		map[string]interface{}{"name": req.Name, "cadence": req.Cadence})
 
 	resp := ReviewSchedule{
@@ -257,7 +257,7 @@ func (h *Handler) UpdateReviewSchedule(w http.ResponseWriter, r *http.Request) {
 		s.LastRunAt = &str
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "review_schedule.update", "schedule", schedID,
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "review_schedule.update", "schedule", schedID,
 		map[string]interface{}{})
 
 	respondJSON(w, http.StatusOK, s)
@@ -289,7 +289,7 @@ func (h *Handler) DeleteReviewSchedule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "review_schedule.delete", "schedule", schedID,
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "review_schedule.delete", "schedule", schedID,
 		map[string]interface{}{})
 
 	respondJSON(w, http.StatusOK, map[string]bool{"deleted": true})

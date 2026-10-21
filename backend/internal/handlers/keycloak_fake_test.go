@@ -29,8 +29,8 @@ type fakeKeycloak struct {
 	// C1: org-aware group operations. Both default to delegating to the
 	// plain (non-org) fakes above when unset, so existing tests that only
 	// wire listGroupsFn/createGroupFn keep working unchanged.
-	createGroupWithOrgIDFn func(ctx context.Context, name, orgID string) (string, error)
-	listGroupsByOrgFn      func(ctx context.Context, orgID string, first, max int) ([]*gocloak.Group, error)
+	createGroupWithOrgIDFn   func(ctx context.Context, name, orgID string) (string, error)
+	listGroupsByOrgFn        func(ctx context.Context, orgID string, first, max int) ([]*gocloak.Group, error)
 	addUserToGroupFn         func(ctx context.Context, userID, groupID string) error
 	removeUserFromGroupFn    func(ctx context.Context, userID, groupID string) error
 	listRealmRolesFn         func(ctx context.Context) ([]*gocloak.Role, error)
@@ -68,10 +68,10 @@ type fakeKeycloak struct {
 	// D2: SMTP
 	updateRealmSMTPFn func(ctx context.Context, cfg keycloak.SMTPConfig) error
 	// D3: Identity providers
-	listIdentityProvidersFn   func(ctx context.Context) ([]*gocloak.IdentityProviderRepresentation, error)
-	createIdentityProviderFn  func(ctx context.Context, alias, displayName, providerType string, config map[string]string) error
-	updateIdentityProviderFn  func(ctx context.Context, alias, displayName string, config map[string]string) error
-	deleteIdentityProviderFn  func(ctx context.Context, alias string) error
+	listIdentityProvidersFn  func(ctx context.Context) ([]*gocloak.IdentityProviderRepresentation, error)
+	createIdentityProviderFn func(ctx context.Context, alias, displayName, providerType string, config map[string]string) error
+	updateIdentityProviderFn func(ctx context.Context, alias, displayName string, config map[string]string) error
+	deleteIdentityProviderFn func(ctx context.Context, alias string) error
 }
 
 func (f *fakeKeycloak) CreateUser(ctx context.Context, firstName, lastName, email, department string) (*keycloak.CreateUserResult, error) {
@@ -352,6 +352,7 @@ func (f *fakeKeycloak) UpdateRealmPolicy(ctx context.Context, req keycloak.Updat
 	}
 	return nil
 }
+
 // C1: LDAP/AD federation fakes
 
 func (f *fakeKeycloak) CreateFederationComponent(ctx context.Context, name, connectionURL, bindDN, bindPassword, usersDN, vendor string) (string, error) {

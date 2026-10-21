@@ -133,7 +133,7 @@ func (h *Handler) Offboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.db != nil {
-		if auditErr := h.writeAuditEntryBestEffort(actorID, "offboard", "user", userID, map[string]interface{}{
+		if auditErr := h.writeAuditEntryBestEffort(r.Context(), actorID, "offboard", "user", userID, map[string]interface{}{
 			"devices_wiped":  devicesWiped,
 			"devices_failed": devicesFailed,
 			"device_ids":     deviceIDs,
@@ -207,10 +207,10 @@ func (h *Handler) triggerDeprovisioningForUser(ctx context.Context, userID strin
 		if err := h.provisionEngine.DeprovisionUser(ctx, appID, userID); err != nil {
 			h.logger.Warn("triggerDeprovisioning: deprovision failed",
 				zap.String("app_id", appID), zap.String("user_id", userID), zap.Error(err))
-			_ = h.writeAuditEntryBestEffort("system:provisioning", "deprovision_failed", "user", userID,
+			_ = h.writeAuditEntryBestEffort(ctx, "system:provisioning", "deprovision_failed", "user", userID,
 				map[string]interface{}{"app_id": appID, "error": err.Error()})
 		} else {
-			_ = h.writeAuditEntryBestEffort("system:provisioning", "deprovision_success", "user", userID,
+			_ = h.writeAuditEntryBestEffort(ctx, "system:provisioning", "deprovision_success", "user", userID,
 				map[string]interface{}{"app_id": appID})
 		}
 	}

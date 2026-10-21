@@ -119,7 +119,7 @@ func (h *Handler) PortalEnrollTOTP(w http.ResponseWriter, r *http.Request) {
 
 	if h.db != nil {
 		actorID := middleware.GetActorID(r.Context())
-		if auditErr := h.writeAuditEntryBestEffort(actorID, "mfa_totp_enroll_requested", "user", uid, map[string]interface{}{
+		if auditErr := h.writeAuditEntryBestEffort(r.Context(), actorID, "mfa_totp_enroll_requested", "user", uid, map[string]interface{}{
 			"action": action,
 		}); auditErr != nil {
 			h.logger.Warn("mfa: failed to write audit log", zap.Error(auditErr))
@@ -157,7 +157,7 @@ func (h *Handler) PortalEnrollWebAuthn(w http.ResponseWriter, r *http.Request) {
 
 	if h.db != nil {
 		actorID := middleware.GetActorID(r.Context())
-		if auditErr := h.writeAuditEntryBestEffort(actorID, "mfa_webauthn_enroll_requested", "user", uid, map[string]interface{}{
+		if auditErr := h.writeAuditEntryBestEffort(r.Context(), actorID, "mfa_webauthn_enroll_requested", "user", uid, map[string]interface{}{
 			"action": action,
 		}); auditErr != nil {
 			h.logger.Warn("mfa: failed to write audit log", zap.Error(auditErr))
@@ -229,7 +229,7 @@ func (h *Handler) PortalRemoveMFAFactor(w http.ResponseWriter, r *http.Request) 
 
 	if h.db != nil {
 		actorID := middleware.GetActorID(r.Context())
-		if auditErr := h.writeAuditEntryBestEffort(actorID, "mfa_factor_removed", "user", uid, map[string]interface{}{
+		if auditErr := h.writeAuditEntryBestEffort(r.Context(), actorID, "mfa_factor_removed", "user", uid, map[string]interface{}{
 			"credential_id": credID,
 		}); auditErr != nil {
 			h.logger.Warn("mfa: failed to write audit log", zap.Error(auditErr))
@@ -311,7 +311,7 @@ func (h *Handler) PortalGenerateRecoveryCodes(w http.ResponseWriter, r *http.Req
 	}
 
 	actorID := middleware.GetActorID(r.Context())
-	if auditErr := h.writeAuditEntryBestEffort(actorID, "mfa_recovery_codes_generated", "user", uid, map[string]interface{}{
+	if auditErr := h.writeAuditEntryBestEffort(r.Context(), actorID, "mfa_recovery_codes_generated", "user", uid, map[string]interface{}{
 		"count": codeCount,
 	}); auditErr != nil {
 		h.logger.Warn("mfa: failed to write audit log", zap.Error(auditErr))

@@ -85,7 +85,7 @@ func (h *Handler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.writeAuditEntryBestEffort(actorID, "approval.submitted", "approval_request", id, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "approval.submitted", "approval_request", id, map[string]interface{}{
 		"action_type": req.ActionType,
 	}); err != nil {
 		h.logger.Warn("failed to write approval submission audit log", zap.Error(err))
@@ -232,7 +232,7 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusConflict, "approval request already decided")
 			return
 		}
-		if err := h.writeAuditEntryBestEffort(actorID, "approval.rejected", "approval_request", approvalID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "approval.rejected", "approval_request", approvalID, map[string]interface{}{
 			"action_type": actionType,
 		}); err != nil {
 			h.logger.Warn("failed to write approval rejection audit log", zap.Error(err))
@@ -282,7 +282,7 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 				zap.Error(resetErr),
 			)
 		}
-		if auditErr := h.writeAuditEntryBestEffort(actorID, "approval.execution_failed", "approval_request", approvalID, map[string]interface{}{
+		if auditErr := h.writeAuditEntryBestEffort(r.Context(), actorID, "approval.execution_failed", "approval_request", approvalID, map[string]interface{}{
 			"action_type": actionType,
 			"error":       err.Error(),
 		}); auditErr != nil {
@@ -308,7 +308,7 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "approval request changed state during execution")
 		return
 	}
-	if err := h.writeAuditEntryBestEffort(actorID, "approval.approved", "approval_request", approvalID, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "approval.approved", "approval_request", approvalID, map[string]interface{}{
 		"action_type": actionType,
 	}); err != nil {
 		h.logger.Warn("failed to write approval approval audit log", zap.Error(err))
@@ -402,7 +402,7 @@ func (h *Handler) executeApprovedAction(ctx context.Context, approverID, actionT
 			`UPDATE users SET disabled = true, updated_at = NOW() WHERE keycloak_user_id = $1`,
 			userID,
 		)
-		if err := h.writeAuditEntryBestEffort(approverID, "offboard", "user", userID, map[string]interface{}{
+		if err := h.writeAuditEntryBestEffort(ctx, approverID, "offboard", "user", userID, map[string]interface{}{
 			"approval_id": approvalID,
 		}); err != nil {
 			h.logger.Warn("failed to write approved offboard audit log", zap.Error(err))

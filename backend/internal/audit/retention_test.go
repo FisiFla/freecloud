@@ -39,7 +39,10 @@ func TestPruneDeletesRows(t *testing.T) {
 			}
 			return pgconn.CommandTag{}, nil
 		},
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if strings.Contains(sql, "::jsonb)::text") {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "WHERE created_at >= $1") {
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			}
@@ -76,7 +79,10 @@ func TestPruneWritesAnchorForRetainedSuffix(t *testing.T) {
 			}
 			return pgconn.CommandTag{}, nil
 		},
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if strings.Contains(sql, "::jsonb)::text") {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "WHERE created_at >= $1") {
 				return fakeRow{scanFn: func(dest ...any) error {
 					*dest[0].(*int64) = 3
@@ -86,7 +92,9 @@ func TestPruneWritesAnchorForRetainedSuffix(t *testing.T) {
 			}
 			return fakeRow{scanFn: func(dest ...any) error {
 				head := "retained-chain-head"
-				*dest[0].(**string) = &head
+				if p, ok := dest[0].(**string); ok {
+					*p = &head
+				}
 				return nil
 			}}
 		},
@@ -112,7 +120,10 @@ func TestPruneWindowBoundary(t *testing.T) {
 			called = true
 			return pgconn.NewCommandTag("DELETE 0"), nil
 		},
-		queryRowFn: func(_ context.Context, sql string, _ ...any) pgx.Row {
+		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
+			if strings.Contains(sql, "::jsonb)::text") {
+				return fakeCanonicalRow(args)
+			}
 			if strings.Contains(sql, "WHERE created_at >= $1") {
 				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
 			}

@@ -130,7 +130,7 @@ func (h *Handler) UpsertFleetConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_ = h.writeAuditEntryBestEffort(actorID, "fleet_config.upsert", "fleet_config", "1",
+	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "fleet_config.upsert", "fleet_config", "1",
 		map[string]interface{}{"server_url": req.ServerURL, "token_updated": req.APIToken != ""})
 
 	respondJSON(w, http.StatusOK, map[string]bool{"saved": true})

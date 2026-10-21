@@ -67,6 +67,7 @@ type fakeDB struct {
 	mu         sync.Mutex
 	execSQL    []string
 	execArgs   [][]any
+	execFn     func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	queryRowFn func(ctx context.Context, sql string, args ...any) pgx.Row
 	queryFn    func(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	beginFn    func(ctx context.Context) (pgx.Tx, error)
@@ -77,7 +78,13 @@ func (d *fakeDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.Comm
 	defer d.mu.Unlock()
 	d.execSQL = append(d.execSQL, sql)
 	d.execArgs = append(d.execArgs, args)
-	return pgconn.CommandTag{}, nil
+	if d.execFn != nil {
+		return d.execFn(ctx, sql, args...)
+	}
+	// Report one affected row: the fake has no users table, so the
+	// INSERT…SELECT that resolves the org from `users` is treated as hitting
+	// an existing user.
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
 
 func (d *fakeDB) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
@@ -184,6 +191,73 @@ func TestEngineProvisionUser_HappyPath(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected UPDATE to provisioned status in execSQL: %v", db.execSQL)
+	}
+}
+
+func TestEngineProvisionUser_WritesOrgIDFromUserRow(t *testing.T) {
+	// The pending-state upsert must carry the tenant's org_id, taken from the
+	// authoritative users row. Without it, every row fell back to the column
+	// default (the Default Organization) and the ReconcileAll join
+	// "u.org_id = ps.org_id" never matched for a real tenant.
+	db := &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	mc := &mockConnector{}
+	eng := NewEngine(db, zap.NewNop())
+	eng.RegisterConnector("app-1", mc)
+
+	user := ProvisionableUser{ID: "user-1", Email: "a@b.com", FirstName: "A", LastName: "B"}
+	if err := eng.ProvisionUser(context.Background(), "app-1", user); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	var insertSQL string
+	for _, sql := range db.execSQL {
+		if strings.Contains(sql, "INSERT INTO provisioning_state") {
+			insertSQL = sql
+			break
+		}
+	}
+	if insertSQL == "" {
+		t.Fatalf("expected an INSERT INTO provisioning_state, got: %v", db.execSQL)
+	}
+	if !strings.Contains(insertSQL, "org_id") {
+		t.Errorf("expected the INSERT to set org_id, got: %s", insertSQL)
+	}
+	if !strings.Contains(insertSQL, "u.org_id") || !strings.Contains(insertSQL, "FROM users u") {
+		t.Errorf("expected org_id to be taken from the users row, got: %s", insertSQL)
+	}
+	if !strings.Contains(insertSQL, "org_id = EXCLUDED.org_id") {
+		t.Errorf("expected the ON CONFLICT branch to refresh org_id, got: %s", insertSQL)
+	}
+}
+
+func TestEngineProvisionUser_FailsClosedForUnknownUser(t *testing.T) {
+	// The INSERT…SELECT inserts no row when the user is unknown. That must be
+	// an error, not a silent no-op.
+	db := &fakeDB{
+		execFn: func(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			return pgconn.NewCommandTag("INSERT 0 0"), nil
+		},
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		},
+	}
+	mc := &mockConnector{}
+	eng := NewEngine(db, zap.NewNop())
+	eng.RegisterConnector("app-1", mc)
+
+	user := ProvisionableUser{ID: "ghost", Email: "g@b.com"}
+	err := eng.ProvisionUser(context.Background(), "app-1", user)
+	if err == nil {
+		t.Fatal("expected an error when the user row does not exist")
+	}
+	if mc.provisionCalls != 0 {
+		t.Errorf("expected no remote provisioning for an unknown user, got %d calls", mc.provisionCalls)
 	}
 }
 
