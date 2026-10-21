@@ -28,12 +28,20 @@ RUN mvn -q package -DskipTests
 FROM quay.io/keycloak/keycloak:25.0@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2 AS keycloak
 
 # Copy the shaded fat jar into Keycloak's providers directory.
-COPY --from=builder /build/target/keycloak-posture-authenticator-1.0.0.jar \
+# --chown=1000:0 matches the Keycloak image's own uid/gid (the documented
+# pattern in Keycloak's own container guide); the base image runs as uid 1000,
+# so a root-owned copy is still readable, but keeping the ownership consistent
+# avoids surprises if Keycloak ever rewrites anything under providers/.
+COPY --from=builder --chown=1000:0 /build/target/keycloak-posture-authenticator-1.0.0.jar \
     /opt/keycloak/providers/keycloak-posture-authenticator.jar
 
 # FreeCloud entrypoint: reads the mounted Docker secrets (<VAR>_FILE) and
 # exports them under the names Keycloak expects, then execs kc.sh.
-COPY docker/keycloak-entrypoint.sh /opt/keycloak/bin/freecloud-entrypoint.sh
+# The base image sets USER 1000, so the copied file must be owned by that uid:
+# a root-owned copy makes the `chmod` below fail with EPERM, which broke the
+# image build. The explicit `chmod` is kept so the executable bit does not
+# depend on the git file mode surviving the checkout.
+COPY --chown=1000:0 docker/keycloak-entrypoint.sh /opt/keycloak/bin/freecloud-entrypoint.sh
 RUN chmod +x /opt/keycloak/bin/freecloud-entrypoint.sh
 
 # Pre-build Keycloak so startup is fast and providers are compiled-in.
