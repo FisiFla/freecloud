@@ -319,18 +319,18 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 	// COUNT(*) with the same WHERE (before LIMIT) so SCIM clients paginate correctly.
 	countQuery := `SELECT COUNT(*) FROM users u WHERE u.org_id = $1`
 	countArgs := []interface{}{oc.OrgID}
-	countArgIdx := 2
+	// The count query numbers its own parameters: $1 is org_id, so the
+	// filter value is always $2 regardless of which branch is taken.
+	const countFilterArgIdx = 2
 	switch filterOp {
 	case "eq":
-		countQuery += ` AND u.email = $` + strconv.Itoa(countArgIdx)
+		countQuery += ` AND u.email = $` + strconv.Itoa(countFilterArgIdx)
 		countArgs = append(countArgs, filterVal)
-		countArgIdx++
 	case "co":
-		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countArgIdx)
+		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countFilterArgIdx)
 		countArgs = append(countArgs, "%"+filterVal+"%")
-		countArgIdx++
 	case "sw":
-		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countArgIdx)
+		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countFilterArgIdx)
 		countArgs = append(countArgs, filterVal+"%")
 	}
 	var totalResults int

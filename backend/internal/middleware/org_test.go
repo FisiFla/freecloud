@@ -14,7 +14,6 @@ import (
 // (org_id, role) rows, as Postgres would render them (lower-case uuid text).
 type orgDB struct {
 	memberships [][2]string
-	orgs        map[string]bool
 }
 
 func (d *orgDB) QueryRow(_ context.Context, _ string, _ ...any) pgx.Row {

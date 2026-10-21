@@ -197,8 +197,6 @@ func (t *memAuditTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.
 }
 func (t *memAuditTx) Conn() *pgx.Conn { return nil }
 
-func itoa(n int64) string { return fmt.Sprintf("%d", n) }
-
 // TestWriteEntryThenVerifyChainRoundTrip is the regression test for the
 // broken hash chain: a row written by WriteEntry must verify, even when its
 // details contain several keys, characters that Go's JSON encoder escapes

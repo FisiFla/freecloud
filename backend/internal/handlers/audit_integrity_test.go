@@ -45,7 +45,7 @@ func (d *auditChainDB) Begin(_ context.Context) (pgx.Tx, error) {
 }
 
 // emptyRows is a pgx.Rows with no rows.
-type emptyRows struct{ idx int }
+type emptyRows struct{}
 
 func (r *emptyRows) Next() bool                                   { return false }
 func (r *emptyRows) Err() error                                   { return nil }
