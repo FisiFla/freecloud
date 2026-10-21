@@ -34,6 +34,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/FisiFla/freecloud/backend/internal/config"
 	"github.com/FisiFla/freecloud/backend/internal/handlers"
 )
 
@@ -53,10 +54,16 @@ func envOr(key, def string) string {
 }
 
 // signedDeviceID mints a freecloud-device-id cookie value so access/evaluate
-// accepts the host under HMAC verification (FLEET_WEBHOOK_SECRET).
+// accepts the host under HMAC verification.
+//
+// The key must be the DOMAIN-SEPARATED device-cookie key, derived from the
+// master secret exactly as the server does (config.DeriveDeviceCookieSecret).
+// Signing with the raw master secret yields a cookie the server rejects as
+// "invalid or expired device identity".
 func signedDeviceID(t *testing.T, hostID string) string {
 	t.Helper()
-	v, err := handlers.MintDeviceCookieValue(hostID, *flagWebhookSecret, time.Now().UTC())
+	key := config.DeriveDeviceCookieSecret(*flagWebhookSecret)
+	v, err := handlers.MintDeviceCookieValue(hostID, key, time.Now().UTC())
 	if err != nil {
 		t.Fatalf("mint signed device cookie: %v", err)
 	}

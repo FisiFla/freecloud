@@ -480,6 +480,18 @@ func (c *Config) DeviceCookieSigningSecret() string {
 	if master == "" {
 		master = c.FleetWebhookSecret
 	}
+	return DeriveDeviceCookieSecret(master)
+}
+
+// DeriveDeviceCookieSecret derives the domain-separated freecloud-device-id
+// HMAC key from a master secret.
+//
+// It is exported so that anything which has to produce or verify a device
+// cookie outside the request path (the e2e suite mints one) derives the key
+// through the SAME function the server uses. Minting with the raw master
+// secret instead produces a cookie the server rejects as
+// "invalid or expired device identity".
+func DeriveDeviceCookieSecret(master string) string {
 	if master == "" {
 		return ""
 	}
