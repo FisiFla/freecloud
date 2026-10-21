@@ -1,0 +1,17 @@
+# Author identity mapping.
+#
+# This repository's work is owned by a single GitHub account: FisiFla
+# <flavio@fisicaro.xyz>. Commits were authored under several other addresses
+# depending on which machine or tool produced them, which made GitHub split
+# the contribution graph across a second account ("Fisicaro") and several
+# unclaimed identities.
+#
+# The format below is "Proper Name <proper@email> <commit@email>": any commit
+# authored with the right-hand address is attributed to the left-hand identity.
+# The commit hashes themselves are untouched — this only changes who the work
+# is credited to.
+
+FisiFla <flavio@fisicaro.xyz> <fisicaro@users.noreply.github.com>
+FisiFla <flavio@fisicaro.xyz> <flavio.fisicaro@gmail.com>
+FisiFla <flavio@fisicaro.xyz> <flopio97@gmail.com>
+FisiFla <flavio@fisicaro.xyz> <zcode@local>
