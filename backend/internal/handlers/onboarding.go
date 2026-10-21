@@ -312,11 +312,15 @@ func (h *Handler) triggerProvisioningForUser(ctx context.Context, userID, email,
 		if err := h.provisionEngine.ProvisionUser(ctx, appID, user); err != nil {
 			h.logger.Warn("triggerProvisioning: provision failed",
 				zap.String("app_id", appID), zap.String("user_id", userID), zap.Error(err))
-			_ = h.writeAuditEntryBestEffort(ctx, "system:provisioning", "provision_failed", "user", userID,
-				map[string]interface{}{"app_id": appID, "error": err.Error()})
+			if auditErr := h.writeAuditEntryBestEffort(ctx, "system:provisioning", "provision_failed", "user", userID,
+				map[string]interface{}{"app_id": appID, "error": err.Error()}); auditErr != nil {
+				h.logger.Warn("failed to write provision failure audit log", zap.Error(auditErr))
+			}
 		} else {
-			_ = h.writeAuditEntryBestEffort(ctx, "system:provisioning", "provision_success", "user", userID,
-				map[string]interface{}{"app_id": appID})
+			if auditErr := h.writeAuditEntryBestEffort(ctx, "system:provisioning", "provision_success", "user", userID,
+				map[string]interface{}{"app_id": appID}); auditErr != nil {
+				h.logger.Warn("failed to write provision success audit log", zap.Error(auditErr))
+			}
 		}
 	}
 	return rows.Err()

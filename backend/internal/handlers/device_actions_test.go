@@ -491,7 +491,10 @@ func TestListPolicies_FleetError(t *testing.T) {
 		},
 	}, zap.NewNop())
 
+	// Only a system admin reaches Fleet: the permission check runs first.
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+	req = req.WithContext(middleware.SetClaims(req.Context(),
+		&middleware.JWTClaims{Sub: "admin", Role: middleware.RoleSuperAdmin}))
 	rec := httptest.NewRecorder()
 
 	h.ListPolicies(rec, req)

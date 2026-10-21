@@ -365,6 +365,11 @@ type AuthMiddleware struct {
 	// guards the JWKS cache) so the two caches never contend with each other.
 	disabledCacheMu sync.Mutex
 	disabledCache   map[string]disabledCacheEntry
+	// disabledCacheOrder is the insertion order of the disabledCache entries.
+	// It is swept from the front to reclaim expired entries, so the cache does
+	// not grow by one entry per distinct JWT subject for the lifetime of the
+	// process (issue #135).
+	disabledCacheOrder []disabledCacheRecord
 }
 
 // disabledCacheEntry is one entry of AuthMiddleware.disabledCache.
@@ -373,13 +378,27 @@ type disabledCacheEntry struct {
 	expiresAt time.Time
 }
 
+// disabledCacheRecord records when a subject was added to the disabled-user
+// cache, so the FIFO sweep can tell an expired entry from a refreshed one.
+type disabledCacheRecord struct {
+	sub       string
+	expiresAt time.Time
+}
+
 // NewAuthMiddleware creates a new AuthMiddleware.
+//
+// The Keycloak URL is trailing-slash-trimmed: the issuer and the JWKS URL are
+// built by concatenation, so "https://kc.example.com/" would otherwise yield
+// the issuer "https://kc.example.com//realms/freecloud" and a JWKS URL with a
+// double slash — neither of which matches what Keycloak actually issues, so
+// every token would be rejected (issue #132).
 func NewAuthMiddleware(keycloakURL, realm, audience string) *AuthMiddleware {
+	baseURL := strings.TrimRight(keycloakURL, "/")
 	return &AuthMiddleware{
-		keycloakURL:    keycloakURL,
+		keycloakURL:    baseURL,
 		realm:          realm,
 		audience:       audience,
-		expectedIssuer: fmt.Sprintf("%s/realms/%s", keycloakURL, realm),
+		expectedIssuer: fmt.Sprintf("%s/realms/%s", baseURL, realm),
 		// One reused client instead of allocating per fetch.
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
@@ -552,11 +571,20 @@ func (a *AuthMiddleware) isUserDisabled(ctx context.Context, sub string) (bool, 
 	return disabled, nil
 }
 
+// disabledCacheGet returns the cached disabled-status for sub.
+//
+// An EXPIRED entry is DELETED on access: the cache maps one entry per distinct
+// JWT subject ever seen, so without eviction it grows for the lifetime of the
+// process — a slow unbounded leak on a long-running server (issue #135).
 func (a *AuthMiddleware) disabledCacheGet(sub string) (bool, bool) {
 	a.disabledCacheMu.Lock()
 	defer a.disabledCacheMu.Unlock()
 	e, ok := a.disabledCache[sub]
-	if !ok || time.Now().After(e.expiresAt) {
+	if !ok {
+		return false, false
+	}
+	if time.Now().After(e.expiresAt) {
+		delete(a.disabledCache, sub)
 		return false, false
 	}
 	return e.disabled, true
@@ -568,7 +596,41 @@ func (a *AuthMiddleware) disabledCacheSet(sub string, disabled bool) {
 	if a.disabledCache == nil {
 		a.disabledCache = make(map[string]disabledCacheEntry)
 	}
-	a.disabledCache[sub] = disabledCacheEntry{disabled: disabled, expiresAt: time.Now().Add(disabledStatusCacheTTL)}
+	expiresAt := time.Now().Add(disabledStatusCacheTTL)
+	a.disabledCache[sub] = disabledCacheEntry{disabled: disabled, expiresAt: expiresAt}
+	a.disabledCacheOrder = append(a.disabledCacheOrder, disabledCacheRecord{sub: sub, expiresAt: expiresAt})
+	// Reclaim expired entries. Without this the map keeps one entry per
+	// distinct JWT subject forever, even for subjects that are never seen
+	// again (issue #135).
+	a.sweepDisabledCacheLocked()
+}
+
+// sweepDisabledCacheLocked drops expired entries from the disabled-user cache.
+//
+// The cache is swept in FIFO order of insertion: every entry has the same TTL,
+// so the oldest records expire first. A record is skipped when the subject was
+// refreshed in the meantime (its current expiry is later), in which case the
+// newer record still in the queue will sweep it.
+func (a *AuthMiddleware) sweepDisabledCacheLocked() {
+	now := time.Now()
+	for len(a.disabledCacheOrder) > 0 {
+		rec := a.disabledCacheOrder[0]
+		if now.Before(rec.expiresAt) {
+			// The head has not expired yet, so nothing behind it has either.
+			return
+		}
+		a.disabledCacheOrder = a.disabledCacheOrder[1:]
+		cur, ok := a.disabledCache[rec.sub]
+		if !ok {
+			continue
+		}
+		if cur.expiresAt.After(rec.expiresAt) {
+			// Refreshed after this record was queued; the newer record
+			// queued by that refresh will sweep it when it expires.
+			continue
+		}
+		delete(a.disabledCache, rec.sub)
+	}
 }
 
 // Middleware is an HTTP middleware that validates the Bearer token.
@@ -647,25 +709,20 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 					if email, ok := claims["email"].(string); ok {
 						jc.Email = email
 					}
-					// Validate audience
+					// Validate audience.
+					//
+					// The authoritative check is that `aud` contains the
+					// configured audience. The `azp` (authorized party) claim is
+					// accepted ONLY as a narrowly scoped, documented exception: a
+					// stock Keycloak realm with no audience mapper issues tokens
+					// whose `aud` is ["account"], so a token minted for this client
+					// carries the audience only in `azp`. That exception applies
+					// only when the token's `aud` is absent or is exactly the
+					// default account audience — a token whose `aud` names a
+					// DIFFERENT resource server is rejected even when its `azp`
+					// matches (issue #124).
 					if a.audience != "" {
-						audOK := false
-						if aud, ok := claims["aud"].(string); ok && aud == a.audience {
-							audOK = true
-						}
-						if auds, ok := claims["aud"].([]interface{}); ok {
-							for _, v := range auds {
-								if s, ok := v.(string); ok && s == a.audience {
-									audOK = true
-									break
-								}
-							}
-						}
-						// Also check azp (authorized party)
-						if azp, ok := claims["azp"].(string); ok && azp == a.audience {
-							audOK = true
-						}
-						if !audOK {
+						if !audienceAccepted(claims, a.audience) {
 							w.Header().Set("Content-Type", "application/json")
 							w.WriteHeader(http.StatusUnauthorized)
 							w.Write([]byte(`{"success":false,"error":"unauthorized: invalid audience"}`))
@@ -733,6 +790,74 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// defaultAccountAudience is the audience a stock Keycloak realm puts in the
+// `aud` claim when no audience mapper is configured. It is the ONLY value for
+// which the `azp` fallback in audienceAccepted applies.
+const defaultAccountAudience = "account"
+
+// audienceAccepted reports whether the token's claims authorise the given
+// audience.
+//
+// The authoritative rule: the `aud` claim must contain the configured
+// audience.
+//
+// The `azp` (authorized party) claim is a deliberate, BOUNDED exception for
+// stock Keycloak deployments: with no audience mapper configured, Keycloak
+// issues tokens whose `aud` is ["account"], so the only place the target
+// audience appears is `azp`. The exception is accepted only when the token's
+// `aud` is absent or is exactly the default account audience — a token whose
+// `aud` names a different resource server is rejected even when `azp` matches,
+// so `azp` can no longer widen the audience gate (issue #124).
+//
+// Operators that want the strict behaviour should configure a Keycloak
+// audience mapper so `aud` really carries the audience; then this fallback
+// never applies.
+func audienceAccepted(claims jwt.MapClaims, audience string) bool {
+	auds := claimStrings(claims["aud"])
+	for _, aud := range auds {
+		if aud == audience {
+			return true
+		}
+	}
+
+	azp, _ := claims["azp"].(string)
+	if azp != audience {
+		return false
+	}
+	// Bounded exception: only an absent `aud` or the default account
+	// audience may be substituted by `azp`.
+	if len(auds) == 0 {
+		return true
+	}
+	for _, aud := range auds {
+		if aud != defaultAccountAudience {
+			return false
+		}
+	}
+	return true
+}
+
+// claimStrings normalises a JWT claim that may be a single string or an array
+// of strings into a slice.
+func claimStrings(v interface{}) []string {
+	switch t := v.(type) {
+	case string:
+		return []string{t}
+	case []interface{}:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return t
+	default:
+		return nil
+	}
 }
 
 // writeAuthError writes a JSON error response using proper encoding so the

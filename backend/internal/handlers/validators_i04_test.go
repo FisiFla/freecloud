@@ -15,6 +15,10 @@ import (
 
 func TestI04_ListPolicies_NonAdminGetsEmpty(t *testing.T) {
 	// Production path: non–system-admin never sees Fleet global policies inventory.
+	//
+	// The permission check runs BEFORE the Fleet call, so a non-admin never
+	// triggers an upstream request: a 502 from Fleet would otherwise be an
+	// availability oracle for a resource the caller may not see.
 	called := false
 	f := &fakeFleet{
 		listPoliciesFn: func(ctx context.Context) ([]fleet.Policy, error) {
@@ -30,8 +34,8 @@ func TestI04_ListPolicies_NonAdminGetsEmpty(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if !called {
-		t.Fatal("Fleet ListPolicies should still be called (upstream failure path)")
+	if called {
+		t.Fatal("Fleet ListPolicies must not be called for a non-admin")
 	}
 	var resp struct {
 		Data ListPoliciesResponse `json:"data"`

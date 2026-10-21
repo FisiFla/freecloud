@@ -4,10 +4,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -116,9 +118,11 @@ func (h *Handler) CreateFederationSource(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.created", "federation_source", fs.ID, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.created", "federation_source", fs.ID, map[string]interface{}{
 		"name": req.Name, "vendor": req.Vendor,
-	})
+	}); err != nil {
+		h.logger.Warn("failed to write federation source creation audit log", zap.Error(err))
+	}
 	respondJSON(w, http.StatusCreated, fs)
 }
 
@@ -193,7 +197,7 @@ func (h *Handler) GetFederationSource(w http.ResponseWriter, r *http.Request) {
 	).Scan(&fs.ID, &fs.Name, &fs.ProviderType, &fs.Vendor, &configStr,
 		&fs.KeycloakComponentID, &fs.LastSyncAt, &fs.LastSyncStatus, &createdAt, &updatedAt)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "federation source not found")
+		h.respondFederationDBError(w, err, "federation source not found")
 		return
 	}
 	_ = json.Unmarshal([]byte(configStr), &fs.Config)
@@ -236,7 +240,7 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 	).Scan(&cur.ID, &cur.Name, &cur.ProviderType, &cur.Vendor, &configStr,
 		&cur.KeycloakComponentID, &cur.LastSyncAt, &cur.LastSyncStatus, &createdAt, &updatedAt)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "federation source not found")
+		h.respondFederationDBError(w, err, "federation source not found")
 		return
 	}
 	_ = json.Unmarshal([]byte(configStr), &cur.Config)
@@ -264,8 +268,14 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 
 	bindPassword := h.ldapBindPassword
 	if cur.KeycloakComponentID != "" && bindPassword != "" {
+		// Fail closed: if Keycloak still holds the old bind DN / URL while
+		// the DB row shows the new ones, the two sides disagree about where
+		// the directory lives. The request must not report success.
 		if err := h.keycloak.UpdateFederationComponent(ctx, cur.KeycloakComponentID, newName, newConnURL, newBindDN, bindPassword, newUsersDN, newVendor); err != nil {
-			h.logger.Warn("failed to update keycloak federation component", zap.Error(err))
+			h.logger.Error("failed to update keycloak federation component",
+				zap.String("component_id", cur.KeycloakComponentID), zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "failed to update federation source in identity provider")
+			return
 		}
 	}
 
@@ -278,7 +288,9 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.updated", "federation_source", id, map[string]interface{}{"name": newName})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.updated", "federation_source", id, map[string]interface{}{"name": newName}); err != nil {
+		h.logger.Warn("failed to write federation source update audit log", zap.Error(err))
+	}
 	respondJSON(w, http.StatusOK, FederationSource{
 		ID: cur.ID, Name: newName, ProviderType: cur.ProviderType, Vendor: newVendor,
 		KeycloakComponentID: cur.KeycloakComponentID,
@@ -308,14 +320,19 @@ func (h *Handler) DeleteFederationSource(w http.ResponseWriter, r *http.Request)
 		`SELECT COALESCE(keycloak_component_id, '') FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID,
 	).Scan(&componentID)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "federation source not found")
+		h.respondFederationDBError(w, err, "federation source not found")
 		return
 	}
 
 	if componentID != "" {
+		// Fail closed: deleting the DB row while the Keycloak component
+		// still exists orphans the component forever — nothing references
+		// component_id any more, so it can never be cleaned up.
 		if err := h.keycloak.DeleteFederationComponent(ctx, componentID); err != nil {
-			h.logger.Warn("failed to delete keycloak federation component",
+			h.logger.Error("failed to delete keycloak federation component",
 				zap.String("component_id", componentID), zap.Error(err))
+			respondError(w, http.StatusInternalServerError, "failed to delete federation source in identity provider")
+			return
 		}
 	}
 
@@ -325,7 +342,9 @@ func (h *Handler) DeleteFederationSource(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.deleted", "federation_source", id, map[string]interface{}{"keycloak_component_id": componentID})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.deleted", "federation_source", id, map[string]interface{}{"keycloak_component_id": componentID}); err != nil {
+		h.logger.Warn("failed to write federation source deletion audit log", zap.Error(err))
+	}
 	respondJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 }
 
@@ -350,7 +369,7 @@ func (h *Handler) TestFederationConnection(w http.ResponseWriter, r *http.Reques
 		`SELECT id, COALESCE(keycloak_component_id, ''), config::text FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID,
 	).Scan(&fs.ID, &fs.KeycloakComponentID, &configStr)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "federation source not found")
+		h.respondFederationDBError(w, err, "federation source not found")
 		return
 	}
 	_ = json.Unmarshal([]byte(configStr), &fs.Config)
@@ -359,16 +378,32 @@ func (h *Handler) TestFederationConnection(w http.ResponseWriter, r *http.Reques
 	bindPassword := h.ldapBindPassword
 
 	if testErr := h.keycloak.TestLDAPConnection(ctx, fs.KeycloakComponentID, connURL, bindDN, bindPassword); testErr != nil {
+		// The LDAP error can contain the bind DN and the connection URL —
+		// internal topology that must not be echoed to the caller. The
+		// detail goes to the log and to the audit trail.
 		h.logger.Warn("ldap test connection failed", zap.String("id", id), zap.Error(testErr))
-		_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.test_connection", "federation_source", id,
-			map[string]interface{}{"success": false, "error": testErr.Error()})
-		respondJSON(w, http.StatusOK, map[string]interface{}{"success": false, "error": testErr.Error()})
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.test_connection", "federation_source", id,
+			map[string]interface{}{"success": false, "error": testErr.Error()}); err != nil {
+			h.logger.Warn("failed to write federation test audit log", zap.Error(err))
+		}
+		respondJSON(w, http.StatusOK, map[string]interface{}{"success": false, "error": "connection test failed"})
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.test_connection", "federation_source", id,
-		map[string]interface{}{"success": true})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.test_connection", "federation_source", id,
+		map[string]interface{}{"success": true}); err != nil {
+		h.logger.Warn("failed to write federation test audit log", zap.Error(err))
+	}
 	respondJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// federationSyncActions is the allowlist of sync actions the Keycloak admin
+// API accepts. The action is interpolated into the admin URL, so an
+// unvalidated value would let a caller inject arbitrary query parameters
+// (action=x&foo=bar).
+var federationSyncActions = map[string]bool{
+	"triggerFullSync":         true,
+	"triggerChangedUsersSync": true,
 }
 
 // TriggerFederationSync — POST /api/v1/federation/sources/{id}/sync
@@ -379,6 +414,11 @@ func (h *Handler) TriggerFederationSync(w http.ResponseWriter, r *http.Request) 
 	action := r.URL.Query().Get("action")
 	if action == "" {
 		action = "triggerFullSync"
+	}
+	// Whitelist the action: it flows verbatim into the Keycloak admin URL.
+	if !federationSyncActions[action] {
+		respondError(w, http.StatusBadRequest, "action must be triggerFullSync or triggerChangedUsersSync")
+		return
 	}
 	ctx := r.Context()
 
@@ -394,7 +434,7 @@ func (h *Handler) TriggerFederationSync(w http.ResponseWriter, r *http.Request) 
 	var componentID string
 	err := h.db.QueryRow(ctx, `SELECT COALESCE(keycloak_component_id, '') FROM federation_sources WHERE id = $1 AND org_id = $2`, id, oc.OrgID).Scan(&componentID)
 	if err != nil {
-		respondError(w, http.StatusNotFound, "federation source not found")
+		h.respondFederationDBError(w, err, "federation source not found")
 		return
 	}
 	if componentID == "" {
@@ -404,19 +444,42 @@ func (h *Handler) TriggerFederationSync(w http.ResponseWriter, r *http.Request) 
 
 	syncStatus := "success"
 	if syncErr := h.keycloak.TriggerFederationSync(ctx, componentID, action); syncErr != nil {
+		// The Keycloak error can carry the bind DN / directory URL, so only
+		// a generic status is stored and returned; the detail goes to the log.
 		h.logger.Warn("federation sync failed", zap.String("id", id), zap.Error(syncErr))
-		syncStatus = "failed: " + syncErr.Error()
-		_, _ = h.db.Exec(ctx,
-			`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2 AND org_id=$3`, syncStatus, id, oc.OrgID)
-		_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.sync", "federation_source", id,
-			map[string]interface{}{"action": action, "status": "failed"})
+		syncStatus = "failed"
+		if _, dbErr := h.db.Exec(ctx,
+			`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2 AND org_id=$3`, syncStatus, id, oc.OrgID); dbErr != nil {
+			h.logger.Error("federation sync: failed to record failure status", zap.Error(dbErr))
+		}
+		if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.sync", "federation_source", id,
+			map[string]interface{}{"action": action, "status": "failed"}); err != nil {
+			h.logger.Warn("failed to write federation sync audit log", zap.Error(err))
+		}
 		respondJSON(w, http.StatusOK, map[string]interface{}{"synced": false, "status": syncStatus})
 		return
 	}
 
-	_, _ = h.db.Exec(ctx,
-		`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2 AND org_id=$3`, syncStatus, id, oc.OrgID)
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.sync", "federation_source", id,
-		map[string]interface{}{"action": action, "status": "success"})
+	if _, dbErr := h.db.Exec(ctx,
+		`UPDATE federation_sources SET last_sync_at=NOW(), last_sync_status=$1 WHERE id=$2 AND org_id=$3`, syncStatus, id, oc.OrgID); dbErr != nil {
+		h.logger.Error("federation sync: failed to record success status", zap.Error(dbErr))
+	}
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.sync", "federation_source", id,
+		map[string]interface{}{"action": action, "status": "success"}); err != nil {
+		h.logger.Warn("failed to write federation sync audit log", zap.Error(err))
+	}
 	respondJSON(w, http.StatusOK, map[string]bool{"synced": true})
+}
+
+// respondFederationDBError maps a database error to a response: 404 only when
+// the row genuinely does not exist (pgx.ErrNoRows), 500 for every other
+// error. A real outage must not be reported as "not found" — that sends
+// operators and callers down the wrong debugging path and hides incidents.
+func (h *Handler) respondFederationDBError(w http.ResponseWriter, err error, notFoundMsg string) {
+	if errors.Is(err, pgx.ErrNoRows) {
+		respondError(w, http.StatusNotFound, notFoundMsg)
+		return
+	}
+	h.logger.Error("federation: database query failed", zap.Error(err))
+	respondError(w, http.StatusInternalServerError, "internal error")
 }

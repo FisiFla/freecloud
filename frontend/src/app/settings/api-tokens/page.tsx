@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Key, Trash2, AlertCircle, Copy, Check } from "lucide-react";
 import ErrorBanner from "@/components/ErrorBanner";
 import ConfirmDialog from "@/components/ConfirmDialog";
@@ -30,6 +30,18 @@ export default function APITokensPage() {
   // Revoke dialog
   const [revokeTarget, setRevokeTarget] = useState<APIToken | null>(null);
   const [revoking, setRevoking] = useState(false);
+  // Timer that resets the "copied" flag — cleared on unmount so a pending
+  // timeout cannot fire after the component is gone.
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) {
+        clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const fetchTokens = async () => {
     try {
@@ -95,7 +107,8 @@ export default function APITokensPage() {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
       // clipboard write failed silently
     }
@@ -145,8 +158,9 @@ export default function APITokensPage() {
         <h2 className="font-semibold text-slate-800 dark:text-slate-100">Create New Token</h2>
         <form onSubmit={handleCreate} className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Name</label>
+            <label htmlFor="api-token-name" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Name</label>
             <input
+              id="api-token-name"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -157,8 +171,9 @@ export default function APITokensPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Role</label>
+            <label htmlFor="api-token-role" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Role</label>
             <select
+              id="api-token-role"
               value={role}
               onChange={(e) => setRole(e.target.value)}
               className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm shadow-sm focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100 dark:placeholder-slate-500"
@@ -171,8 +186,9 @@ export default function APITokensPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Identity</label>
+            <label htmlFor="api-token-service-identity" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Identity</label>
             <input
+              id="api-token-service-identity"
               type="text"
               value={serviceIdentity}
               onChange={(e) => setServiceIdentity(e.target.value)}
@@ -183,10 +199,11 @@ export default function APITokensPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+            <label htmlFor="api-token-expires-in-days" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
               Expires in days <span className="text-slate-400 dark:text-slate-500">(0 = never)</span>
             </label>
             <input
+              id="api-token-expires-in-days"
               type="number"
               min={0}
               value={expiresInDays}

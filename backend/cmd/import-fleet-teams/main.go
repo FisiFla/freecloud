@@ -56,10 +56,17 @@ func main() {
 	}
 
 	if !*apply {
+		// The statement is PARAMETERIZED: the values are never interpolated
+		// into the SQL text, so there is no hand-rolled quoting to get
+		// wrong (issue #162). The bound values are printed alongside for
+		// review; -apply executes them through the driver's parameter
+		// binding.
 		for _, row := range rows {
-			fmt.Println(fleetteams.SQLInsert(row))
+			stmt, args := fleetteams.SQLInsert(row)
+			fmt.Println(stmt)
+			fmt.Printf("-- values: %v\n", args)
 		}
-		fmt.Fprintf(os.Stderr, "ok: %d mapping row(s) (SQL printed; use -apply to execute)\n", len(rows))
+		fmt.Fprintf(os.Stderr, "ok: %d mapping row(s) (SQL printed; use -apply to execute safely)\n", len(rows))
 		return
 	}
 

@@ -1,4 +1,11 @@
-.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db prod-build prod-up prod-down localhost-up localhost-down prod-secrets-init verify-provisioning-live
+.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db test-integration prod-build prod-up prod-down localhost-up localhost-down prod-secrets-init verify-provisioning-live
+
+# Host uid/gid of the operator running make. Exported so the secret generator
+# (docker/init-secrets/generate.sh) can create .secrets/* owned by that user
+# instead of by root — otherwise the 0600 secrets file is unreadable by the
+# operator on a Linux host and `make prod-up` aborts with "Permission denied".
+export FREECLOUD_UID := $(shell id -u)
+export FREECLOUD_GID := $(shell id -g)
 
 dev-up:
 	docker compose -f docker/docker-compose.yml up -d
@@ -36,7 +43,7 @@ build-backend:
 	cd backend && go build -o ../bin/freecloud-server ./cmd/server
 
 build-frontend:
-	cd frontend && npm install && npm run build
+	cd frontend && npm ci && npm run build
 
 # Production stack (docker/docker-compose.prod.yml). Requires a populated
 # .env.prod (copy from .env.prod.example). The backend serves on the internal
@@ -66,12 +73,15 @@ localhost-down:
 
 # C1/C3 — Generate production secrets (first-boot only, idempotent).
 # Run before `make prod-up` if you want to generate secrets ahead of time.
+# The generator runs as the host user so the 0600 files it writes stay
+# readable by the operator (dockerd would otherwise create them as root).
 prod-secrets-init:
 	@mkdir -p .secrets
 	docker run --rm \
+		--user "$(FREECLOUD_UID):$(FREECLOUD_GID)" \
 		-v "$$(pwd)/.secrets:/run/freecloud" \
 		-v "$$(pwd)/docker/init-secrets/generate.sh:/generate.sh:ro" \
-		busybox:1.36 /bin/sh /generate.sh
+		busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662 /bin/sh /generate.sh
 
 clean:
 	rm -rf bin/
@@ -82,20 +92,32 @@ verify: verify-secrets
 	@echo "==> Go vet + test..."
 	cd backend && go vet ./... && go test ./...
 	@echo "==> Frontend type-check + build..."
-	cd frontend && npm install --no-audit --no-fund --include=dev && npm run verify
+	cd frontend && npm ci --no-audit --no-fund --include=dev && npm run verify
 	@echo "==> All checks passed."
 
 verify-secrets:
 	@echo "==> Production secret generator..."
 	@tmp="$$(mktemp -d)"; \
 		trap 'rm -rf "$$tmp"' EXIT; \
-		SECRETS_FILE="$$tmp/secrets.env" sh docker/init-secrets/generate.sh >/dev/null; \
+		SECRETS_FILE="$$tmp/secrets.env" SECRETS_DIR="$$tmp/files" sh docker/init-secrets/generate.sh >/dev/null; \
 		for key in POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY; do \
-			if ! grep -q "^$$key=" "$$tmp/secrets.env"; then \
-				echo "missing $$key in generated secrets.env"; \
+			value=$$(sed -n "s/^$$key=//p" "$$tmp/secrets.env" | head -n 1); \
+			if [ -z "$$value" ]; then \
+				echo "missing or empty $$key in generated secrets.env"; \
 				exit 1; \
 			fi; \
-		done
+			lower=$$(printf '%s' "$$key" | tr '[:upper:]' '[:lower:]'); \
+			if [ ! -s "$$tmp/files/$$lower" ]; then \
+				echo "missing per-key secret file files/$$lower"; \
+				exit 1; \
+			fi; \
+		done; \
+		cp "$$tmp/secrets.env" "$$tmp/snapshot"; \
+		SECRETS_FILE="$$tmp/secrets.env" SECRETS_DIR="$$tmp/files" sh docker/init-secrets/generate.sh >/dev/null; \
+		if ! cmp -s "$$tmp/snapshot" "$$tmp/secrets.env"; then \
+			echo "secret generator is not idempotent: a re-run changed secrets.env"; \
+			exit 1; \
+		fi
 
 # DB-backed integration tests against TEST_DATABASE_URL (or a spun-up Postgres).
 # These are NOT part of the fast `verify` gate.

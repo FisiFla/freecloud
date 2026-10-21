@@ -106,7 +106,12 @@ func TestGetFleetConfig_Row(t *testing.T) {
 }
 
 // TestUpsertFleetConfig_SavesURL verifies that UpsertFleetConfig persists the URL.
+//
+// The URL has to pass the SSRF guard, so it is a public IP literal: a
+// hostname would have to resolve, and the guard fails closed on a DNS
+// failure.
 func TestUpsertFleetConfig_SavesURL(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
 	var execSQL string
 	db := &fakeDB{
 		execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -117,7 +122,7 @@ func TestUpsertFleetConfig_SavesURL(t *testing.T) {
 	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
 	r := newTestRouter(h)
 
-	body := `{"serverUrl":"https://fleet.example.com"}`
+	body := `{"serverUrl":"https://203.0.113.10"}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/fleet", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -128,6 +133,47 @@ func TestUpsertFleetConfig_SavesURL(t *testing.T) {
 	}
 	if !strings.Contains(execSQL, "fleet_config") {
 		t.Errorf("expected SQL to touch fleet_config, got: %s", execSQL)
+	}
+}
+
+// TestUpsertFleetConfig_RejectsSSRFTargets proves the Fleet server URL goes
+// through the same SSRF guard as the provisioning endpoint URL: a link-local
+// (cloud metadata) or private destination is rejected.
+func TestUpsertFleetConfig_RejectsSSRFTargets(t *testing.T) {
+	// The guard allows plain HTTP and private addresses in development/test,
+	// so pin the environment to production for this check.
+	t.Setenv("APP_ENV", "production")
+	cases := []struct {
+		name string
+		url  string
+	}{
+		{"link-local metadata", "https://169.254.169.254"},
+		{"loopback", "https://127.0.0.1:8082"},
+		{"private", "https://10.0.0.5:8082"},
+		{"metadata hostname", "https://metadata.google.internal"},
+		{"plain http", "http://fleet.example.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &fakeDB{
+				execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+					t.Errorf("the config must not be persisted for %q", tc.url)
+					return pgconn.CommandTag{}, nil
+				},
+			}
+			h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+			r := newTestRouter(h)
+
+			body := `{"serverUrl":"` + tc.url + `"}`
+			req := httptest.NewRequest(http.MethodPut, "/api/v1/settings/fleet", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected 400 for %q, got %d: %s", tc.url, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

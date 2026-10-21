@@ -10,7 +10,17 @@ frontend/.env
 frontend/tsconfig.tsbuildinfo
 # C1: auto-generated secrets — never commit
 .secrets/
+# Production env file with live credentials (operator-created from
+# .env.prod.example). The example file itself stays tracked.
+.env.prod
+# Local secret files (Next.js, tooling) — never commit.
+.env.local
+.env.*.local
+frontend/.env.local
 
 # A2: generated e2e-only GeoIP fixture mmdb (go run ./cmd/genfixturemmdb) —
 # never a real MaxMind database, never committed.
 backend/.e2e-fixtures/
+
+# Maven build output (keycloak-authenticator)
+keycloak-authenticator/target/

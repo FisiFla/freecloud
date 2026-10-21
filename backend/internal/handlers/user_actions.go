@@ -4,6 +4,7 @@ package handlers
 // A5 — POST  /api/v1/users/{id}/reset-password : admin-triggered password reset
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -159,6 +160,17 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 		newFirst, newLast, newDept, newRole, !newEnabled, userID)
 	if dbErr != nil {
 		h.logger.Error("failed to update user in db", zap.String("user_id", userID), zap.Error(dbErr))
+		// Compensating write: Keycloak was already updated, so a failed DB
+		// write would leave the identity provider and the local record
+		// permanently split-brain. Restore the previous attribute values in
+		// the IdP. A fresh context is used so the restore still runs if the
+		// client disconnected (mirrors the cleanup in apps.go).
+		restoreCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if restoreErr := h.keycloak.UpdateUser(restoreCtx, userID, curFirstName, curLastName, curDepartment, !curDisabled); restoreErr != nil {
+			h.logger.Error("failed to restore keycloak user after db failure",
+				zap.String("user_id", userID), zap.Error(restoreErr))
+		}
 		respondError(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}

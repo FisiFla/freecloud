@@ -109,10 +109,11 @@ export default function SetupPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
+            <label htmlFor="setup-org-name" className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
               Organization name
             </label>
             <input
+              id="setup-org-name"
               type="text"
               value={orgName}
               onChange={(e) => setOrgName(e.target.value)}
@@ -126,10 +127,11 @@ export default function SetupPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
+            <label htmlFor="setup-admin-email" className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
               Admin email
             </label>
             <input
+              id="setup-admin-email"
               type="email"
               value={adminEmail}
               onChange={(e) => setAdminEmail(e.target.value)}
@@ -143,10 +145,11 @@ export default function SetupPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
+            <label htmlFor="setup-admin-password" className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
               Password
             </label>
             <input
+              id="setup-admin-password"
               type="password"
               value={adminPassword}
               onChange={(e) => setAdminPassword(e.target.value)}
@@ -160,10 +163,11 @@ export default function SetupPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
+            <label htmlFor="setup-confirm-password" className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
               Confirm password
             </label>
             <input
+              id="setup-confirm-password"
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}

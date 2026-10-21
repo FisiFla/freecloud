@@ -38,10 +38,19 @@ type Device struct {
 	CreatedAt   string `json:"createdAt,omitempty"`
 }
 
-// ListUsers returns all users with their associated devices.
+// ListUsers returns the users of the caller's org with their associated
+// devices.
 //
 // Devices are fetched in the same query via a LEFT JOIN to avoid an N+1
 // pattern (previously one extra query per user).
+//
+// The query is bounded: it is a users × devices join, so an unbounded list
+// materialised every row of both tables in memory. `limit` (default and
+// maximum 1000) and `offset` are clamped server-side — see listPageParams.
+//
+// The LIMIT bounds the number of USERS (a CTE), not the number of join
+// rows: applying it to the joined result would cut a user's device list in
+// half whenever the page ended in the middle of a user.
 func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -57,21 +66,31 @@ func (h *Handler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	limit, offset := listPageParams(r, maxListLimit)
+
 	rows, err := h.db.Query(ctx,
-		`SELECT u.keycloak_user_id, u.email, u.first_name, u.last_name,
-		        COALESCE(u.department, ''), COALESCE(u.role, ''), COALESCE(u.disabled, false),
-		        u.created_at, u.updated_at,
+		`WITH page AS (
+		     SELECT u.keycloak_user_id, u.email, u.first_name, u.last_name,
+		            COALESCE(u.department, ''), COALESCE(u.role, ''), COALESCE(u.disabled, false),
+		            u.created_at, u.updated_at
+		     FROM users u
+		     WHERE u.org_id = $1
+		     ORDER BY u.created_at DESC
+		     LIMIT $2 OFFSET $3
+		 )
+		 SELECT page.keycloak_user_id, page.email, page.first_name, page.last_name,
+		        page.department, page.role, page.disabled,
+		        page.created_at, page.updated_at,
 		        COALESCE(d.fleet_host_id::TEXT, ''),
 		        COALESCE(d.hostname, ''),
 		        COALESCE(d.os_version, ''),
 		        COALESCE(d.last_seen_at::TEXT, ''),
 		        COALESCE(d.created_at::TEXT, '')
-		 FROM users u
-		 LEFT JOIN users_devices_mapping m ON m.user_id = u.keycloak_user_id
+		 FROM page
+		 LEFT JOIN users_devices_mapping m ON m.user_id = page.keycloak_user_id
 		 LEFT JOIN devices d ON d.fleet_host_id = m.device_id
-		 WHERE u.org_id = $1
-		 ORDER BY u.created_at DESC, d.hostname`,
-		oc.OrgID,
+		 ORDER BY page.created_at DESC, d.hostname`,
+		oc.OrgID, limit, offset,
 	)
 	if err != nil {
 		h.logger.Error("failed to query users", zap.Error(err))

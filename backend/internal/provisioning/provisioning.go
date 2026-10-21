@@ -179,7 +179,12 @@ func (e *Engine) ProvisionUser(ctx context.Context, appID string, user Provision
 		appID, user.ID, remoteID,
 	)
 	if err != nil {
+		// Surface the error: the caller must not believe the provision
+		// succeeded while the state row still says 'pending' — that is what
+		// the reconciler and the UI read to decide whether the remote
+		// account exists.
 		e.logger.Error("provisioning: update state after success", zap.Error(err))
+		return fmt.Errorf("provisioning: update state after success: %w", err)
 	}
 	e.logger.Info("provisioning: user provisioned",
 		zap.String("app_id", appID), zap.String("user_id", user.ID), zap.String("remote_id", remoteID))
@@ -227,7 +232,10 @@ func (e *Engine) DeprovisionUser(ctx context.Context, appID string, userID strin
 		appID, userID,
 	)
 	if err != nil {
+		// Same contract as ProvisionUser: a failed state write is reported
+		// to the caller instead of being logged and swallowed.
 		e.logger.Error("provisioning: update state after deprovision", zap.Error(err))
+		return fmt.Errorf("provisioning: update state after deprovision: %w", err)
 	}
 	e.logger.Info("provisioning: user deprovisioned",
 		zap.String("app_id", appID), zap.String("user_id", userID))
@@ -397,10 +405,7 @@ func (e *Engine) reconcileOne(ctx context.Context, appID, userID, remoteID, stat
 			e.logger.Warn("provisioning: permanent error — max retries exceeded",
 				zap.String("app_id", appID), zap.String("user_id", userID))
 		} else {
-			backoff := time.Duration(5*1<<retryCount) * time.Minute
-			if backoff > 2*time.Hour {
-				backoff = 2 * time.Hour
-			}
+			backoff := provisioningBackoff(retryCount)
 			nextRetry := time.Now().Add(backoff)
 			_, _ = e.db.Exec(ctx,
 				`UPDATE provisioning_state SET status = 'error', last_error = $3, retry_count = $4, next_retry_at = $5, updated_at = NOW() WHERE app_id = $1 AND user_id = $2`,
@@ -422,10 +427,20 @@ func (e *Engine) reconcileOne(ctx context.Context, appID, userID, remoteID, stat
 // After maxRetries, it transitions to permanent_error.
 func (e *Engine) recordError(ctx context.Context, appID, userID, remoteID string, cause error) error {
 	var retryCount int
-	_ = e.db.QueryRow(ctx,
+	if err := e.db.QueryRow(ctx,
 		`SELECT retry_count FROM provisioning_state WHERE app_id = $1 AND user_id = $2`,
 		appID, userID,
-	).Scan(&retryCount)
+	).Scan(&retryCount); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		// Fail closed: without a trustworthy retry count we cannot tell
+		// whether maxRetries has been reached. Silently treating the read
+		// failure as "retry 0" would write retry_count = 1 over the real
+		// value, so the counter would never escalate and the retry loop
+		// would never terminate. Leave the stored counter alone and report
+		// the read failure instead.
+		e.logger.Error("provisioning: failed to read retry count; leaving the retry counter untouched",
+			zap.String("app_id", appID), zap.String("user_id", userID), zap.Error(err))
+		return fmt.Errorf("provisioning: read retry count: %w", err)
+	}
 
 	newRetryCount := retryCount + 1
 	newStatus := string(StatusError)
@@ -433,11 +448,10 @@ func (e *Engine) recordError(ctx context.Context, appID, userID, remoteID string
 		newStatus = string(StatusPermanentErr)
 	}
 
-	// Exponential backoff: 5m × 2^retryCount, capped at 2h.
-	backoff := time.Duration(5*1<<retryCount) * time.Minute
-	if backoff > 2*time.Hour {
-		backoff = 2 * time.Hour
-	}
+	// Exponential backoff: 5m × 2^retryCount, capped at 2h. The computation
+	// saturates — retry_count comes from the database and is not bounded by
+	// maxRetries, so a large value must not overflow the shift.
+	backoff := provisioningBackoff(retryCount)
 	nextRetry := time.Now().Add(backoff)
 
 	ridPtr := &remoteID
@@ -474,9 +488,51 @@ func (e *Engine) recordError(ctx context.Context, appID, userID, remoteID string
 	return fmt.Errorf("provisioning: connector error (retry %d/%d): %w", newRetryCount, maxRetries, cause)
 }
 
+// provisioningBackoff returns the retry delay for a given retry count:
+// 5 minutes × 2^retryCount, capped at 2 hours.
+//
+// The shift saturates: retry_count is read from the database and is not
+// bounded by maxRetries, so `5 << retryCount` would overflow int64 for a
+// retryCount of 61 or more and produce a NEGATIVE duration — i.e. a
+// next_retry_at in the past, which turns the backoff into an immediate
+// retry loop.
+func provisioningBackoff(retryCount int) time.Duration {
+	const (
+		baseBackoff = 5 * time.Minute
+		maxBackoff  = 2 * time.Hour
+		// 5min << 20 is ~10 years — far past the 2h cap and still well
+		// inside int64, so the multiplication can never overflow.
+		maxShift = 20
+	)
+	shift := retryCount
+	if shift < 0 {
+		shift = 0
+	}
+	if shift > maxShift {
+		shift = maxShift
+	}
+	backoff := baseBackoff * time.Duration(int64(1)<<shift)
+	if backoff <= 0 || backoff > maxBackoff {
+		return maxBackoff
+	}
+	return backoff
+}
+
+// defaultAttributeFields lists the default SCIM attribute names in a stable,
+// sorted order. ApplyAttributeMap walks this list (not a Go map) so the
+// result never depends on Go's randomised map iteration order.
+var defaultAttributeFields = []string{"department", "familyName", "givenName", "userName"}
+
 // ApplyAttributeMap applies the attribute map overrides to the default SCIM field mapping.
 // Default fields: userName=user.Email, givenName=user.FirstName, familyName=user.LastName, department=user.Department.
 // For each entry in attrMap, if the key matches a default field name, the key is renamed to the value.
+//
+// The default fields are applied in a fixed (sorted) order. Two defaults that
+// map to the SAME remote key would otherwise race, and Go's randomised map
+// iteration order made the winner differ between runs — the same user could
+// produce two different SCIM payloads. The collision is now resolved
+// deterministically: the first default in sorted order wins and the later one
+// is dropped.
 func ApplyAttributeMap(user ProvisionableUser, attrMap map[string]string) map[string]any {
 	defaults := map[string]any{
 		"userName":   user.Email,
@@ -488,12 +544,21 @@ func ApplyAttributeMap(user ProvisionableUser, attrMap map[string]string) map[st
 		return defaults
 	}
 	result := make(map[string]any, len(defaults))
-	for field, value := range defaults {
-		if remoteKey, ok := attrMap[field]; ok && remoteKey != "" {
-			result[remoteKey] = value
-		} else {
-			result[field] = value
+	for _, field := range defaultAttributeFields {
+		value, ok := defaults[field]
+		if !ok {
+			continue
 		}
+		remoteKey := field
+		if mapped, ok := attrMap[field]; ok && mapped != "" {
+			remoteKey = mapped
+		}
+		if _, taken := result[remoteKey]; taken {
+			// Collision: a previous default already claimed this remote
+			// key. Keep the first (sorted) winner so the payload is stable.
+			continue
+		}
+		result[remoteKey] = value
 	}
 	return result
 }

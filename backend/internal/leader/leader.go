@@ -69,6 +69,9 @@ type Elector struct {
 	lockID   int64
 	logger   *zap.Logger
 	interval time.Duration // base retry/re-check interval
+	// unlockTimeout bounds the pg_advisory_unlock query. Zero means
+	// defaultUnlockTimeout.
+	unlockTimeout time.Duration
 
 	conn     PoolConn // owned by the loop goroutine only; non-nil while leader
 	isLeader atomic.Bool
@@ -84,11 +87,12 @@ func New(pool Pool, job string, lockID int64, logger *zap.Logger) *Elector {
 		logger = zap.NewNop()
 	}
 	return &Elector{
-		pool:     pool,
-		job:      job,
-		lockID:   lockID,
-		logger:   logger.With(zap.String("leader_job", job)),
-		interval: 5 * time.Second,
+		pool:          pool,
+		job:           job,
+		lockID:        lockID,
+		logger:        logger.With(zap.String("leader_job", job)),
+		interval:      5 * time.Second,
+		unlockTimeout: defaultUnlockTimeout,
 	}
 }
 
@@ -176,6 +180,16 @@ func (e *Elector) tryAcquire(ctx context.Context) bool {
 	return true
 }
 
+// defaultUnlockTimeout bounds the pg_advisory_unlock query.
+//
+// The unlock runs on a connection that may already be wedged (that is often
+// WHY the unlock is needed: a failed Ping left the connection in an unknown
+// state). With context.Background() and no deadline, an unresponsive Postgres
+// would block the leader loop goroutine forever while holding a pooled
+// connection (issue #165). A short timeout lets the loop give up, drop the
+// connection and retry.
+const defaultUnlockTimeout = 5 * time.Second
+
 // releaseIfLeader explicitly unlocks the session advisory lock, then returns
 // the dedicated connection to the pool and clears leader state.
 //
@@ -194,8 +208,15 @@ func (e *Elector) releaseIfLeader() {
 	isLeaderGauge.WithLabelValues(e.job).Set(0)
 	if e.conn != nil {
 		// Best-effort unlock; if the connection is already dead, Postgres will
-		// drop the lock when the backend session ends.
-		_ = e.conn.QueryRow(context.Background(), `SELECT pg_advisory_unlock($1)`, e.lockID).Scan(new(bool))
+		// drop the lock when the backend session ends. The timeout keeps a
+		// wedged database from blocking this goroutine indefinitely.
+		timeout := e.unlockTimeout
+		if timeout <= 0 {
+			timeout = defaultUnlockTimeout
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		_ = e.conn.QueryRow(ctx, `SELECT pg_advisory_unlock($1)`, e.lockID).Scan(new(bool))
+		cancel()
 		e.conn.Release()
 		e.conn = nil
 	}

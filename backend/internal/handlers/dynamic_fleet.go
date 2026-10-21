@@ -4,12 +4,24 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/fleet"
 )
+
+// fleetClientCacheTTL bounds how long a built Fleet client is reused.
+//
+// The Fleet configuration (server URL + API token) changes rarely — an
+// operator edits it in the settings UI — but the client itself is cheap to
+// rebuild only in appearance: every fleet.NewClient allocates a NEW
+// http.Client, and therefore a NEW connection pool, so building one per
+// request threw away keep-alive connections and re-ran the config query and
+// the AES decryption on every single call (issue #177).
+const fleetClientCacheTTL = 30 * time.Second
 
 // NewDynamicFleetClient returns a Fleet client facade that reads the saved
 // Fleet settings on each call. Env config remains the fallback for bootstrap.
@@ -27,9 +39,24 @@ type dynamicFleetClient struct {
 	fallbackURL   string
 	fallbackToken string
 	logger        *zap.Logger
+
+	// mu guards the cached client below.
+	mu sync.Mutex
+	// cached is the most recently built client, cached until it expires.
+	cached fleet.FleetClientInterface
+	// cachedAt is when the cached client was built.
+	cachedAt time.Time
 }
 
 func (d *dynamicFleetClient) client(ctx context.Context) fleet.FleetClientInterface {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Reuse the cached client while it is fresh.
+	if d.cached != nil && time.Since(d.cachedAt) < fleetClientCacheTTL {
+		return d.cached
+	}
+
 	baseURL := d.fallbackURL
 	token := d.fallbackToken
 
@@ -56,7 +83,10 @@ func (d *dynamicFleetClient) client(ctx context.Context) fleet.FleetClientInterf
 		}
 	}
 
-	return fleet.NewClient(baseURL, token)
+	built := fleet.NewClient(baseURL, token)
+	d.cached = built
+	d.cachedAt = time.Now()
+	return built
 }
 
 func (d *dynamicFleetClient) CreateEnrollmentToken(ctx context.Context) (string, error) {

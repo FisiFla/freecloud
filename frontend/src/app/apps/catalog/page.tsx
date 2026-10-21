@@ -223,8 +223,9 @@ export default function AppCatalogPage() {
 
                 {/* App name */}
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">Application Name</label>
+                  <label htmlFor="catalog-app-name" className="block text-sm font-medium text-slate-700 dark:text-slate-300">Application Name</label>
                   <input
+                    id="catalog-app-name"
                     type="text"
                     required
                     value={appName}
@@ -237,11 +238,12 @@ export default function AppCatalogPage() {
                 {/* Dynamic required fields */}
                 {selected.requiredFields.map((field) => (
                   <div key={field.name}>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <label htmlFor={`catalog-field-${field.name}`} className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                       {field.label}
                       {field.required && <span className="ml-1 text-red-500">*</span>}
                     </label>
                     <input
+                      id={`catalog-field-${field.name}`}
                       type="text"
                       required={field.required}
                       value={fields[field.name] ?? ""}

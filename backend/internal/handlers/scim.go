@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -273,7 +274,15 @@ func (h *Handler) SCIMListUsers(w http.ResponseWriter, r *http.Request) {
 	// filterOp: "eq", "co", "sw" — derived from the SCIM filter node.
 	var filterOp, filterVal string
 	if filterRaw != "" {
-		f := parseSCIMFilter(filterRaw)
+		// A logical filter (and/or/not) cannot be expressed as a single
+		// SQL predicate. Ignoring it silently returned every user instead
+		// of the filtered set, so it is rejected with 400 invalidFilter as
+		// RFC 7644 §3.4.2.2 requires.
+		f, err := parseSCIMFilterStrict(filterRaw)
+		if err != nil {
+			scimRespondError(w, http.StatusBadRequest, "filter: logical expressions (and/or/not) are not supported", "invalidFilter")
+			return
+		}
 		if f != nil && (f.attr == "username" || f.attr == "emails.value") {
 			filterOp = f.op
 			filterVal = strings.ToLower(f.value)
@@ -473,11 +482,24 @@ func (h *Handler) SCIMCreateUser(w http.ResponseWriter, r *http.Request) {
 	// Idempotency: check for existing user. Email is unique realm-wide (see
 	// docs/adr/0005), so this check is intentionally NOT org-scoped: a
 	// duplicate email across orgs is always a conflict.
+	//
+	// Only "no rows" means "create the user". Any other DB error (a dead
+	// connection, a permission problem) is surfaced as a 500 — treating it
+	// as "not found" created a duplicate Keycloak user on every transient
+	// database hiccup.
 	var existingID string
-	if err := h.db.QueryRow(ctx,
+	lookupErr := h.db.QueryRow(ctx,
 		`SELECT keycloak_user_id FROM users WHERE email = $1`, email,
-	).Scan(&existingID); err == nil {
+	).Scan(&existingID)
+	switch {
+	case lookupErr == nil:
 		scimRespondError(w, http.StatusConflict, "user with this userName already exists", "uniqueness")
+		return
+	case errors.Is(lookupErr, pgx.ErrNoRows):
+		// No existing user — proceed.
+	default:
+		h.logger.Error("scim create user: idempotency lookup failed", zap.Error(lookupErr))
+		scimRespondError(w, http.StatusInternalServerError, "internal error", "")
 		return
 	}
 
@@ -610,8 +632,32 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// RFC 7644 §3.14: honour If-Match. The handler emits an ETag on every
+	// read, so a client that read-then-writes can protect against a
+	// concurrent modification. A stale precondition is 412, not a silent
+	// overwrite.
+	if ifMatch, present, ok := scimIfMatchVersion(r); present {
+		if !ok {
+			scimRespondError(w, http.StatusBadRequest, "If-Match header is malformed", "invalidValue")
+			return
+		}
+		// A negative version is the "*" wildcard: it matches any existing
+		// resource and imposes no version constraint.
+		if ifMatch >= 0 && ifMatch != version {
+			h.logger.Info("scim patch: If-Match precondition failed",
+				zap.String("user_id", userID),
+				zap.Int64("if_match", ifMatch),
+				zap.Int64("current_version", version))
+			scimRespondError(w, http.StatusPreconditionFailed, "resource version does not match If-Match", "")
+			return
+		}
+	}
+
 	// Apply operations
 	newEmail := email
+	// The pre-PATCH attribute values, kept for the compensating write to
+	// the identity provider when the local DB write fails.
+	origFirstName, origLastName, origDisabled := firstName, lastName, disabled
 	for _, op := range patch.Operations {
 		opLow := strings.ToLower(op.Op)
 		pathLow := strings.ToLower(op.Path)
@@ -713,22 +759,53 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Take the optimistic lock BEFORE mutating anything.
+	//
+	// The version bump is a CONDITIONAL write: it only succeeds while the
+	// stored version still equals the version this request read. Two
+	// concurrent PATCHes therefore cannot both write the same version — the
+	// loser gets 412 instead of silently overwriting the winner. Doing this
+	// first means the loser never applies its changes at all.
+	newVersion := version + 1
+	tag, verErr := h.db.Exec(ctx,
+		`INSERT INTO scim_resource_versions (user_id, version, updated_at) VALUES ($1, $2, NOW())
+		 ON CONFLICT (user_id) DO UPDATE SET version = EXCLUDED.version, updated_at = NOW()
+		 WHERE scim_resource_versions.version = $3`,
+		userID, newVersion, version)
+	if verErr != nil {
+		h.logger.Error("scim patch: version bump failed", zap.String("user_id", userID), zap.Error(verErr))
+		scimRespondError(w, http.StatusInternalServerError, "failed to update resource version", "")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		h.logger.Info("scim patch: concurrent modification detected",
+			zap.String("user_id", userID), zap.Int64("expected_version", version))
+		scimRespondError(w, http.StatusPreconditionFailed, "resource was modified concurrently", "")
+		return
+	}
+
 	// Propagate to Keycloak
 	if err := h.keycloak.UpdateUser(ctx, userID, firstName, lastName, "", !disabled); err != nil {
 		h.logger.Error("scim patch: keycloak update failed", zap.String("user_id", userID), zap.Error(err))
+		h.scimRestoreVersion(ctx, userID, version, newVersion)
 		scimRespondError(w, http.StatusInternalServerError, "failed to update user in identity provider", "")
 		return
 	}
 
-	// Persist changes. Include email if it changed.
-	newVersion := version + 1
+	// Persist changes. Include email if it changed. A failed DB write is a
+	// 5xx, not a 200: the client must not believe the local record was
+	// updated when it was not.
 	if newEmail != email {
 		_, dbErr := h.db.Exec(ctx,
 			`UPDATE users SET email=$1, first_name=$2, last_name=$3, disabled=$4, updated_at=NOW()
 			 WHERE keycloak_user_id=$5`,
 			newEmail, firstName, lastName, disabled, userID)
 		if dbErr != nil {
-			h.logger.Warn("scim patch: db update (with email) failed", zap.String("user_id", userID), zap.Error(dbErr))
+			h.logger.Error("scim patch: db update (with email) failed", zap.String("user_id", userID), zap.Error(dbErr))
+			h.scimRestoreVersion(ctx, userID, version, newVersion)
+			h.scimRestoreKeycloakUser(ctx, userID, origFirstName, origLastName, origDisabled)
+			scimRespondError(w, http.StatusInternalServerError, "failed to persist user changes", "")
+			return
 		}
 		email = newEmail
 	} else {
@@ -737,13 +814,13 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 			 WHERE keycloak_user_id=$4`,
 			firstName, lastName, disabled, userID)
 		if dbErr != nil {
-			h.logger.Warn("scim patch: db update failed", zap.String("user_id", userID), zap.Error(dbErr))
+			h.logger.Error("scim patch: db update failed", zap.String("user_id", userID), zap.Error(dbErr))
+			h.scimRestoreVersion(ctx, userID, version, newVersion)
+			h.scimRestoreKeycloakUser(ctx, userID, origFirstName, origLastName, origDisabled)
+			scimRespondError(w, http.StatusInternalServerError, "failed to persist user changes", "")
+			return
 		}
 	}
-	_, _ = h.db.Exec(ctx,
-		`INSERT INTO scim_resource_versions (user_id, version, updated_at) VALUES ($1, $2, NOW())
-		 ON CONFLICT (user_id) DO UPDATE SET version = $2, updated_at = NOW()`,
-		userID, newVersion)
 
 	if err := h.writeAuditEntryBestEffort(r.Context(), "scim-provisioner", "scim_patch_user", "user", userID, map[string]interface{}{
 		"disabled": disabled,
@@ -755,6 +832,57 @@ func (h *Handler) SCIMPatchUser(w http.ResponseWriter, r *http.Request) {
 	u := scimUserFromRow(userID, email, firstName, lastName, disabled, createdAt, updatedAt, newVersion)
 	w.Header().Set("ETag", u.Meta.Version)
 	scimRespond(w, http.StatusOK, u)
+}
+
+// scimRestoreVersion rolls the SCIM resource version back from attempted to
+// prev after a PATCH could not be applied. The write is conditional so it
+// never clobbers a concurrent writer's bump.
+func (h *Handler) scimRestoreVersion(ctx context.Context, userID string, prev, attempted int64) {
+	if _, err := h.db.Exec(ctx,
+		`UPDATE scim_resource_versions SET version = $2, updated_at = NOW()
+		 WHERE user_id = $1 AND version = $3`, userID, prev, attempted); err != nil {
+		h.logger.Warn("scim patch: failed to roll back resource version",
+			zap.String("user_id", userID), zap.Error(err))
+	}
+}
+
+// scimRestoreKeycloakUser writes the pre-PATCH attribute values back to the
+// identity provider. It is the compensating write for the case where
+// Keycloak was updated but the local DB write failed — without it the two
+// sides stay split-brain forever.
+func (h *Handler) scimRestoreKeycloakUser(ctx context.Context, userID, firstName, lastName string, disabled bool) {
+	restoreCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := h.keycloak.UpdateUser(restoreCtx, userID, firstName, lastName, "", !disabled); err != nil {
+		h.logger.Error("scim patch: failed to restore keycloak user after a db failure",
+			zap.String("user_id", userID), zap.Error(err))
+	}
+}
+
+// scimIfMatchVersion parses the If-Match request header (RFC 7232 §3.1).
+//
+// It returns (version, present, ok):
+//   - present is false when the header is absent — no precondition.
+//   - ok is false when the header is present but malformed.
+//   - version is negative for the "*" wildcard, which matches any existing
+//     resource and imposes no version constraint.
+func scimIfMatchVersion(r *http.Request) (int64, bool, bool) {
+	raw := strings.TrimSpace(r.Header.Get("If-Match"))
+	if raw == "" {
+		return 0, false, true
+	}
+	if raw == "*" {
+		return -1, true, true
+	}
+	// A weak validator: W/"3".
+	value := strings.TrimPrefix(raw, "W/")
+	value = strings.TrimPrefix(value, "w/")
+	value = strings.Trim(value, `"`)
+	version, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		return 0, true, false
+	}
+	return version, true, true
 }
 
 // SCIMDeleteUser handles DELETE /scim/v2/Users/{id} — maps to the offboard flow.
@@ -879,7 +1007,13 @@ func (h *Handler) SCIMListGroups(w http.ResponseWriter, r *http.Request) {
 	filterRaw := r.URL.Query().Get("filter")
 	var displayNameFilter string
 	if filterRaw != "" {
-		f := parseSCIMFilter(filterRaw)
+		// Logical expressions are rejected rather than silently ignored —
+		// see SCIMListUsers.
+		f, err := parseSCIMFilterStrict(filterRaw)
+		if err != nil {
+			scimRespondError(w, http.StatusBadRequest, "filter: logical expressions (and/or/not) are not supported", "invalidFilter")
+			return
+		}
 		if f != nil && f.op == "eq" && strings.EqualFold(f.attr, "displayname") {
 			displayNameFilter = f.value
 		}
@@ -1216,7 +1350,19 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 			// Replace all members: first remove all, then add new set. The
 			// removal side doesn't need an org check (it's un-binding
 			// whatever is already there); the new set does (C1), same as add.
-			existing, _ := h.keycloak.ListGroupMembers(ctx, groupID)
+			//
+			// The current member list MUST be read successfully: if the read
+			// fails and the error is ignored, `existing` is empty, the
+			// removal loop removes nothing and the new set is added on top —
+			// the group ends up with the UNION of the old and new members
+			// instead of the requested replacement.
+			existing, listErr := h.keycloak.ListGroupMembers(ctx, groupID)
+			if listErr != nil {
+				h.logger.Error("scim patch group: failed to list current members; refusing to replace",
+					zap.String("group_id", groupID), zap.Error(listErr))
+				scimRespondError(w, http.StatusInternalServerError, "failed to list current group members", "")
+				return
+			}
 			for _, m := range existing {
 				if m.ID == nil {
 					continue
@@ -1247,7 +1393,15 @@ func (h *Handler) SCIMPatchGroup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Return current state
-	members, _ := h.keycloak.ListGroupMembers(ctx, groupID)
+	members, membersErr := h.keycloak.ListGroupMembers(ctx, groupID)
+	if membersErr != nil {
+		// Reporting an empty member list would tell the client the group
+		// has no members when in fact the membership is unknown.
+		h.logger.Error("scim patch group: failed to list members for the response",
+			zap.String("group_id", groupID), zap.Error(membersErr))
+		scimRespondError(w, http.StatusInternalServerError, "failed to list group members", "")
+		return
+	}
 	scimMembers := make([]scimGroupMember, 0, len(members))
 	for _, m := range members {
 		if m.ID == nil {
@@ -1329,9 +1483,13 @@ func extractMemberValues(v interface{}) []string {
 }
 
 // isNotFound checks if a pgx error is a not-found (ErrNoRows) condition.
+//
+// The check uses errors.Is against the sentinel error rather than matching
+// on the error text: a substring match on "no rows" breaks on driver or
+// locale changes and can misclassify an unrelated error as "not found".
 func isNotFound(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(err.Error(), "no rows") || err.Error() == "no rows in result set"
+	return errors.Is(err, pgx.ErrNoRows)
 }

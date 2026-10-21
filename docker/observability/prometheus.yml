@@ -12,3 +12,21 @@ scrape_configs:
     static_configs:
       - targets: ["backend:8080"]
     metrics_path: /metrics
+
+  # Active readiness probe. The backend's own request counter only moves when
+  # something calls /readyz, so it cannot be used to alert on a dead backend.
+  # The blackbox exporter probes the endpoint directly and exports
+  # probe_success, which the ReadyzDown alert rule evaluates.
+  - job_name: freecloud-backend-readyz
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets: ["backend:8080"]
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115

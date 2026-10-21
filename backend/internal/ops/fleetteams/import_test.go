@@ -29,9 +29,36 @@ func TestI08_ParseMappingCSV(t *testing.T) {
 	if err != nil || len(rows) != 2 {
 		t.Fatalf("got %v %v", rows, err)
 	}
-	sql := SQLInsert(rows[0])
+	sql, args := SQLInsert(rows[0])
 	if sql == "" || !strings.Contains(sql, "fleet_team_orgs") {
 		t.Fatalf("sql: %s", sql)
+	}
+	// The statement must be PARAMETERIZED: the values are bound, never
+	// interpolated into the SQL text (issue #162).
+	if !strings.Contains(sql, "$1") || !strings.Contains(sql, "$2") || !strings.Contains(sql, "$3") {
+		t.Errorf("expected placeholders in the statement, got: %s", sql)
+	}
+	if strings.Contains(sql, "org-a") || strings.Contains(sql, "TeamA") {
+		t.Errorf("values must not be inlined into the SQL text, got: %s", sql)
+	}
+	if len(args) != 3 {
+		t.Fatalf("expected 3 bound arguments, got %d", len(args))
+	}
+	if args[0] != rows[0].FleetTeamID || args[1] != rows[0].OrgID || args[2] != rows[0].TeamName {
+		t.Errorf("unexpected bound arguments: %v", args)
+	}
+}
+
+// TestI08_SQLInsertDoesNotInlineQuotes proves a value containing a quote is
+// passed as a bound argument, not spliced into the SQL text.
+func TestI08_SQLInsertDoesNotInlineQuotes(t *testing.T) {
+	row := MappingRow{FleetTeamID: 7, OrgID: "org'; DROP TABLE fleet_team_orgs; --", TeamName: "O'Brien"}
+	sql, args := SQLInsert(row)
+	if strings.Contains(sql, "DROP TABLE") {
+		t.Errorf("the value must not appear in the SQL text, got: %s", sql)
+	}
+	if args[1] != row.OrgID {
+		t.Errorf("expected the raw value to be bound, got %v", args[1])
 	}
 }
 

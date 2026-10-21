@@ -130,10 +130,11 @@ export default function SMTPConfigPage() {
 
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label htmlFor="smtp-host" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                     Host
                   </label>
                   <input
+                    id="smtp-host"
                     type="text"
                     required
                     value={host}
@@ -144,10 +145,11 @@ export default function SMTPConfigPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label htmlFor="smtp-port" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                     Port
                   </label>
                   <input
+                    id="smtp-port"
                     type="text"
                     required
                     value={port}
@@ -158,10 +160,11 @@ export default function SMTPConfigPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label htmlFor="smtp-username" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                     Username
                   </label>
                   <input
+                    id="smtp-username"
                     type="text"
                     value={username}
                     onChange={(e) => { setUsername(e.target.value); setSaveSuccess(false); }}
@@ -171,7 +174,7 @@ export default function SMTPConfigPage() {
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label htmlFor="smtp-password" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                     Password
                   </label>
                   {config?.passwordConfigured && password === "" && (
@@ -181,6 +184,7 @@ export default function SMTPConfigPage() {
                     </p>
                   )}
                   <input
+                    id="smtp-password"
                     type="password"
                     value={password}
                     onChange={(e) => { setPassword(e.target.value); setSaveSuccess(false); }}
@@ -190,10 +194,11 @@ export default function SMTPConfigPage() {
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  <label htmlFor="smtp-from-address" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                     From Address
                   </label>
                   <input
+                    id="smtp-from-address"
                     type="email"
                     required
                     value={fromAddress}
@@ -249,10 +254,11 @@ export default function SMTPConfigPage() {
             </p>
             <form onSubmit={handleSendTest} className="mt-4 flex flex-wrap items-end gap-3">
               <div className="flex-1 min-w-48">
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                <label htmlFor="smtp-test-recipient" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                   Recipient
                 </label>
                 <input
+                  id="smtp-test-recipient"
                   type="email"
                   required
                   value={testEmail}

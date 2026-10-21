@@ -40,6 +40,12 @@ Calls `pg_dumpall` to produce a single plain-SQL cluster dump that covers both
 databases. The dump is written to `OUTPUT_DIR/freecloud-backup-<timestamp>.sql`
 with owner-only permissions (`0600`).
 
+The dump is written to a temporary file first and only published (renamed into
+place) after it has been validated: non-empty, and containing a
+`CREATE DATABASE <source database>` statement. A failed or truncated dump
+therefore never leaves a file that looks like a valid backup — which is what a
+cron job would otherwise ship off-host as "the backup".
+
 The dump contains Keycloak realm data, user records, audit logs, API-token hashes,
 and enrollment tokens. Treat it as sensitive production data: encrypt it before
 copying it off-host and restrict access to the backup directory.
@@ -53,7 +59,7 @@ DATABASE_URL=postgres://user:pass@host:5432/freecloud \
 
 | Variable | Required | Description |
 |---|---|---|
-| `DATABASE_URL` | yes | libpq URI to any database in the cluster |
+| `DATABASE_URL` | yes | libpq URI to the **FreeCloud database** (`freecloud`) in the cluster. The dump covers the whole cluster, but the database named in the URL is the one the script validates the dump against. |
 | `OUTPUT_DIR` | no | directory for the dump file (default: `.`) |
 
 Schedule via cron (daily is a good minimum):
@@ -80,6 +86,15 @@ RESTORE_DATABASE_URL=postgres://user:pass@target:5432/postgres \
   scripts/restore.sh freecloud-backup-20260619T020000Z.sql
 ```
 
+A `pg_dumpall` script is not expected to run without errors — the bootstrap
+superuser already exists on the target ("role already exists"), and the
+`--clean` `DROP ROLE IF EXISTS` statements fail whenever the role still owns
+objects. The script therefore runs `psql` with `ON_ERROR_STOP=0` instead of
+aborting on the first (benign) error, and then **verifies the result**: every
+database the dump creates must exist on the target, otherwise the script exits
+non-zero. Restoring against a target that already has the roles completes
+successfully.
+
 After restore, restart the backend so it runs any pending schema migrations
 against the restored database:
 
@@ -102,8 +117,16 @@ SCRATCH_DATABASE_URL=postgres://user:pass@scratch:5432/postgres \
 ```
 
 If `dump_file.sql` is omitted the script calls `backup.sh` first to create a
-fresh dump. The scratch database (`freecloud_verify_<pid>`) is dropped
-automatically when the script exits.
+fresh dump.
+
+The dump is a **cluster** dump: it contains `CREATE DATABASE` statements and
+`\connect` commands. Feeding it to `psql --dbname=<scratch>` as-is would
+create databases named after the production ones on the scratch host and leave
+the scratch database empty. The script therefore extracts **only the section
+belonging to the source database** and drops the cluster-level statements
+before restoring. The scratch database (`freecloud_verify_<pid>`) is dropped
+automatically when the script exits, and so is any database that appeared
+during the run — the scratch host is left exactly as it was found.
 
 Assertions:
 - Row count in `users` matches source

@@ -9,8 +9,15 @@ import org.keycloak.models.KeycloakSessionFactory;
 import org.keycloak.provider.ProviderConfigProperty;
 
 import java.util.List;
+import java.util.logging.Logger;
 
 public class PostureCheckAuthenticatorFactory implements AuthenticatorFactory {
+
+    // The Keycloak SPI does not put a logging facade on this module's
+    // compile classpath, so the JDK logger is used: the message still reaches
+    // the container's stderr, which is what `docker compose logs keycloak`
+    // shows.
+    private static final Logger LOG = Logger.getLogger(PostureCheckAuthenticatorFactory.class.getName());
 
     private static final AuthenticationExecutionModel.Requirement[] REQUIREMENT_CHOICES = {
         AuthenticationExecutionModel.Requirement.REQUIRED,
@@ -64,7 +71,21 @@ public class PostureCheckAuthenticatorFactory implements AuthenticatorFactory {
 
     @Override
     public void init(Config.Scope scope) {
-        // No initialization needed
+        // The posture check is a FEATURE FLAG that fails OPEN: when it is
+        // disabled the authenticator returns success without evaluating the
+        // device at all. A production stack that sets the variable wrongly
+        // would therefore run with no device, network, geo or time-window
+        // enforcement and show no other symptom. Warn loudly, once, at
+        // startup — but not in development, where turning it off is the point
+        // (issue #202).
+        boolean enabled = "true".equalsIgnoreCase(System.getenv("POSTURE_CHECK_ENABLED"));
+        String appEnv = System.getenv("APP_ENV");
+        boolean dev = "development".equals(appEnv) || "test".equals(appEnv);
+        if (!enabled && !dev) {
+            LOG.warning("SECURITY: device posture enforcement is DISABLED (POSTURE_CHECK_ENABLED is not \"true\","
+                    + " APP_ENV=" + appEnv + "). Logins are NOT gated on device, network, geo or time-window"
+                    + " policy. Set POSTURE_CHECK_ENABLED=true unless this is a development stack.");
+        }
     }
 
     @Override

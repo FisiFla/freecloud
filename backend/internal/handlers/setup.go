@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -64,7 +65,8 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 		errs = append(errs, ValidationError{Field: "adminEmail", Message: "invalid email address"})
 	}
 	if !isStrongEnough(body.AdminPassword) {
-		errs = append(errs, ValidationError{Field: "adminPassword", Message: "password must be at least 8 characters"})
+		errs = append(errs, ValidationError{Field: "adminPassword",
+			Message: fmt.Sprintf("password must be at least %d characters", minAdminPasswordLength)})
 	}
 	if strings.TrimSpace(body.OrgName) == "" {
 		errs = append(errs, ValidationError{Field: "orgName", Message: "organization name is required"})
@@ -148,11 +150,17 @@ func (h *Handler) acquireSetupLock(ctx context.Context) (unlock func(), err erro
 	}, nil
 }
 
-// isStrongEnough requires length ≥ 12 and at least one letter + one digit.
+// minAdminPasswordLength is the minimum length of the first-admin password.
+// The validation error message is derived from this constant so the message
+// can never drift away from what is actually enforced.
+const minAdminPasswordLength = 12
+
+// isStrongEnough requires length ≥ minAdminPasswordLength and at least one
+// letter + one digit.
 // First-admin is the highest-privilege account and is created over an
 // unauthenticated endpoint during the setup window.
 func isStrongEnough(s string) bool {
-	if len(s) < 12 {
+	if len(s) < minAdminPasswordLength {
 		return false
 	}
 	hasLetter, hasDigit, hasNonSpace := false, false, false

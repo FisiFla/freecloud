@@ -5,7 +5,7 @@
 
 services:
   postgres-e2e:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea  # postgres 16-alpine
     environment:
       POSTGRES_USER: freecloud
       POSTGRES_PASSWORD: freecloud
@@ -75,7 +75,7 @@ services:
 
   # B1 (v1.7 HA): dedicated Redis for the backend rate limiter in e2e.
   redis-e2e:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499  # redis 7-alpine
     ports:
       - "56379:6379"
     healthcheck:
@@ -103,7 +103,7 @@ services:
   # X-Forwarded-For (never replaces an existing value), which is exactly the
   # "trust only the rightmost hop" contract ClientIPResolver implements.
   keycloak-proxy-e2e:
-    image: caddy:2-alpine
+    image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f  # caddy 2-alpine
     ports:
       # NOT 8086/8087 — those are claimed by the B4 HA overlay's lb-e2e and
       # backend-e2e-2 (docker-compose.e2e-ha.yml), which layers on top of
@@ -154,8 +154,11 @@ services:
   # F2: OpenLDAP container for LDAP/AD federation e2e tests.
   openldap-e2e:
     # Bitnami relocated free images to the bitnamilegacy namespace (Aug 2025);
-    # bitnami/openldap:latest now 404s with "manifest unknown".
-    image: bitnamilegacy/openldap:latest
+    # the bitnami/openldap floating tag now 404s with "manifest unknown". The
+    # legacy image is frozen: its "latest" tag and 2.6.10 are the same image,
+    # so the tag is pinned to the explicit version (plus its digest) instead of
+    # a moving tag.
+    image: bitnamilegacy/openldap:2.6.10@sha256:687f14a22b5c74fb057a57221acdbe7b8c82e2d3619fc380db3af48ec4aa04ed  # openldap 2.6.10
     ports:
       - "1389:1389"
     environment:

@@ -2,6 +2,7 @@
 
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useBodyScrollLock, useFocusTrap } from "./useFocusTrap";
 
 interface ConfirmDialogProps {
   isOpen: boolean;
@@ -24,6 +25,13 @@ export default function ConfirmDialog({
 }: ConfirmDialogProps) {
   const [busy, setBusy] = useState(false);
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Trap Tab inside the dialog and restore focus to the trigger on close.
+  // Declared before the focus effect below so the trap captures the
+  // previously-focused element before focus moves to Cancel.
+  useFocusTrap(dialogRef, isOpen);
+  useBodyScrollLock(isOpen);
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -62,6 +70,8 @@ export default function ConfirmDialog({
       {/* Modal */}
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div
+          ref={dialogRef}
+          tabIndex={-1}
           className="w-full max-w-md rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900"
           role="dialog"
           aria-modal="true"

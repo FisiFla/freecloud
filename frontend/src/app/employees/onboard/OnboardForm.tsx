@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, FormEvent, useEffect } from "react";
+import { useState, FormEvent, useEffect, useRef } from "react";
 import { CheckCircle, Copy, AlertCircle } from "lucide-react";
 import { ApiError, onboardEmployee } from "@/lib/api";
 import { Button, Field, Input, Select } from "@/components/ui";
@@ -27,6 +27,18 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
   const [copied, setCopied] = useState(false);
   const [emailError, setEmailError] = useState<string | undefined>(undefined);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  // Timer that resets the "copied" flag — cleared on unmount so a pending
+  // timeout cannot fire after the component is gone.
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimerRef.current) {
+        clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Track dirty state: any form field filled in
   useEffect(() => {
@@ -74,7 +86,8 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
       try {
         await navigator.clipboard.writeText(text);
         setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
+        if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = setTimeout(() => setCopied(false), 2000);
       } catch {
         setError("Could not copy to clipboard — check browser permissions.");
       }
@@ -171,7 +184,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       <div className="grid grid-cols-2 gap-4">
-        <Field label="First Name" required error={fieldErrors.firstName}>
+        <Field label="First Name" required error={fieldErrors.firstName} id="firstName">
           <Input
             id="firstName"
             value={firstName}
@@ -182,7 +195,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
             placeholder="Jane"
           />
         </Field>
-        <Field label="Last Name" required error={fieldErrors.lastName}>
+        <Field label="Last Name" required error={fieldErrors.lastName} id="lastName">
           <Input
             id="lastName"
             value={lastName}
@@ -195,7 +208,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
         </Field>
       </div>
 
-      <Field label="Email" required error={fieldErrors.email || emailError}>
+      <Field label="Email" required error={fieldErrors.email || emailError} id="email">
         <Input
           id="email"
           type="email"
@@ -209,7 +222,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
         />
       </Field>
 
-      <Field label="Department" error={fieldErrors.department}>
+      <Field label="Department" error={fieldErrors.department} id="department">
         <Select
           id="department"
           value={department}
@@ -225,7 +238,7 @@ export default function OnboardForm({ onSuccess, onDirtyChange }: OnboardFormPro
         </Select>
       </Field>
 
-      <Field label="Role" required error={fieldErrors.role}>
+      <Field label="Role" required error={fieldErrors.role} id="role">
         <Input
           id="role"
           value={role}

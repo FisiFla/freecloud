@@ -1,0 +1,14 @@
+# blackbox_exporter configuration for FreeCloud.
+#
+# The `http_2xx` module is used by the `freecloud-backend-readyz` probe job in
+# prometheus.yml: it probes the backend's /readyz endpoint on the internal
+# network and exports probe_success (1 = healthy, 0 = failed), which is what
+# the ReadyzDown alert rule evaluates.
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      preferred_ip_protocol: ip4

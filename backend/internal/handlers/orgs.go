@@ -14,6 +14,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -407,6 +409,18 @@ func (h *Handler) RemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 // isUniqueViolation reports whether err is a Postgres unique-constraint
 // violation (SQLSTATE 23505), used to turn a slug collision into a clean
 // 400 validation error instead of a 500.
+//
+// The check reads the SQLSTATE from the driver's structured error type
+// instead of matching on the error text: a substring match on "23505" or
+// "duplicate key" depends on the server's message wording and locale, and
+// can misclassify an unrelated error.
 func isUniqueViolation(err error) bool {
-	return strings.Contains(err.Error(), "23505") || strings.Contains(err.Error(), "duplicate key")
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return false
 }

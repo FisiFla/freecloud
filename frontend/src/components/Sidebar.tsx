@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession, signOut } from "next-auth/react";
 import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers, Lock, Plug2, FileBarChart2, Server, Mail, Link2, Building2, Menu, X } from "lucide-react";
 import DarkModeToggle from "./DarkModeToggle";
+import { useBodyScrollLock, useFocusTrap } from "./useFocusTrap";
 import { useOrg } from "@/app/providers";
 
 const navLinks = [
@@ -32,6 +33,26 @@ export default function Sidebar() {
   const { data: session } = useSession();
   const { me, activeOrgId, setActiveOrg } = useOrg();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const drawerRef = useRef<HTMLElement>(null);
+
+  // Mobile drawer: trap Tab inside it, close on Escape, and restore focus to
+  // the trigger when it closes. Declared before the focus effect below so the
+  // trap captures the trigger before focus moves into the drawer.
+  useFocusTrap(drawerRef, mobileOpen);
+  useBodyScrollLock(mobileOpen);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMobileOpen(false);
+    };
+    document.addEventListener("keydown", handleEscape);
+    return () => document.removeEventListener("keydown", handleEscape);
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    if (mobileOpen) drawerRef.current?.focus();
+  }, [mobileOpen]);
 
   // Close mobile menu on navigation
   const closeMobile = () => setMobileOpen(false);
@@ -157,10 +178,18 @@ export default function Sidebar() {
       {/* Mobile drawer (overlay) */}
       {mobileOpen && (
         <div className="fixed inset-0 z-30 lg:hidden">
-          {/* Backdrop */}
-          <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} />
+          {/* Backdrop — decorative (aria-hidden); the keyboard equivalents are
+              the Escape key and the hamburger button that toggles the drawer. */}
+          <div className="absolute inset-0 bg-black/30" onClick={() => setMobileOpen(false)} aria-hidden="true" />
           {/* Drawer */}
-          <aside className="relative flex h-full w-60 flex-col border-r border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-700 shadow-xl">
+          <aside
+            ref={drawerRef}
+            tabIndex={-1}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Navigation"
+            className="relative flex h-full w-60 flex-col border-r border-slate-200 bg-white dark:bg-slate-900 dark:border-slate-700 shadow-xl"
+          >
             {sidebarContent}
           </aside>
         </div>

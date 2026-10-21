@@ -8,13 +8,16 @@ must pass.
 ```bash
 make dev-up            # Postgres + Keycloak + FleetDM mock (Docker)
 make db-migrate        # apply migrations
-make kc-setup          # create the realm, groups, and freecloud-service client
+
+# The backend self-bootstraps the Keycloak realm, roles and the
+# freecloud-service client on startup — there is no `make kc-setup` target
+# and no setup_realm.sh script.
 
 # Backend (dev defaults require APP_ENV=development; see README)
 cd backend && APP_ENV=development go run cmd/server/main.go
 
 # Frontend
-cd frontend && npm install && npm run dev
+cd frontend && npm ci && npm run dev
 ```
 
 Requires Go 1.25+, Node 26, and Docker.
@@ -27,12 +30,13 @@ make verify-db    # + DB-backed integration tests (ephemeral Postgres)
 make verify-all   # + go test -race across all packages
 ```
 
-CI additionally runs `staticcheck`, `govulncheck`, `go test -race`, `npm audit`,
-and the DB integration suite. To match locally:
+CI additionally runs `staticcheck`, `govulncheck`, `go test -race`, `npm audit`
+(blocking for high/critical advisories), and the DB integration suite. To
+match locally — use the same pinned versions as CI (`.github/workflows/verify.yml`):
 
 ```bash
-cd backend && go install honnef.co/go/tools/cmd/staticcheck@latest && "$(go env GOPATH)/bin/staticcheck" ./...
-cd backend && go install golang.org/x/vuln/cmd/govulncheck@latest && "$(go env GOPATH)/bin/govulncheck" ./...
+cd backend && go install honnef.co/go/tools/cmd/staticcheck@v0.8.2 && "$(go env GOPATH)/bin/staticcheck" ./...
+cd backend && go install golang.org/x/vuln/cmd/govulncheck@v1.9.0 && "$(go env GOPATH)/bin/govulncheck" ./...
 ```
 
 ## Conventions

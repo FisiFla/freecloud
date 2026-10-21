@@ -267,7 +267,11 @@ func newUserCRUDRouter(t *testing.T) (chi.Router, *Handler, func() map[string]in
 			if strings.Contains(sql, "SET first_name") {
 				// Update state from args if provided
 			}
-			return pgconn.CommandTag{}, nil
+			// Report one affected row: the SCIM PATCH bumps the resource
+			// version with a CONDITIONAL write
+			// (INSERT … ON CONFLICT DO UPDATE … WHERE version = $3) and
+			// treats "no rows affected" as a concurrent modification.
+			return pgconn.NewCommandTag("UPDATE 1"), nil
 		},
 		// SCIMCreateUser persists via persistOnboard, which runs its INSERTs
 		// inside a transaction — the fake must provide a working tx.

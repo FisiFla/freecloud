@@ -150,8 +150,9 @@ export default function AnalyticsDashboardPage() {
       {window === "custom" && (
         <div className="mt-4 flex items-center gap-3 flex-wrap">
           <div className="flex items-center gap-2">
-            <label className="text-sm text-slate-600 dark:text-slate-400">From</label>
+            <label htmlFor="analytics-from" className="text-sm text-slate-600 dark:text-slate-400">From</label>
             <input
+              id="analytics-from"
               type="date"
               value={customFrom}
               onChange={(e) => setCustomFrom(e.target.value)}
@@ -159,8 +160,9 @@ export default function AnalyticsDashboardPage() {
             />
           </div>
           <div className="flex items-center gap-2">
-            <label className="text-sm text-slate-600 dark:text-slate-400">To</label>
+            <label htmlFor="analytics-to" className="text-sm text-slate-600 dark:text-slate-400">To</label>
             <input
+              id="analytics-to"
               type="date"
               value={customTo}
               onChange={(e) => setCustomTo(e.target.value)}

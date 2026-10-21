@@ -60,6 +60,12 @@ func runMigrate() {
 	zap.ReplaceGlobals(logger)
 
 	cfg := config.Load()
+	if cfg.DatabaseURL == "" {
+		// The DSN could not be resolved (e.g. an unreadable DATABASE_URL_FILE
+		// or a failed Vault read). Fail with a clear message instead of the
+		// confusing pgx parse error that an empty DSN produces.
+		logger.Fatal("migrate: DATABASE_URL could not be resolved", zap.Strings("secret_errors", cfg.SecretErrors()))
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -333,7 +339,17 @@ func runServer() {
 	snap.Start(lifecycleCtx, cfg.SnapshotInterval)
 
 	// D3 — SIEM streamer (leader-gated so multi-replica does not double-deliver).
-	siemSink := siem.BuildSink(cfg.SIEMSyslogNet, cfg.SIEMSyslogAddr, cfg.SIEMHTTPUrl, cfg.SIEMHTTPToken, logger)
+	//
+	// A missing or broken SIEM sink must NOT look healthy: the no-op sink
+	// refuses to advance the SIEM cursor, so the events stay in the audit
+	// table instead of being dropped with a "streamed N entries" log line
+	// (issue #128).
+	siemSink, siemErr := siem.BuildSink(cfg.SIEMSyslogNet, cfg.SIEMSyslogAddr, cfg.SIEMHTTPUrl, cfg.SIEMHTTPToken, logger)
+	if siemErr != nil {
+		logger.Warn("siem: no usable SIEM sink; audit events will NOT be streamed to a SIEM "+
+			"(they remain in the audit log and the SIEM cursor is not advanced)", zap.Error(siemErr))
+		siemSink = siem.NewNoopSink()
+	}
 	siemStreamer := siem.New(pool, siemSink, logger)
 	siemStreamer.SetLeaderGate(siemLeader.IsLeader)
 	siemStreamer.Start(lifecycleCtx, cfg.SIEMInterval)
@@ -353,7 +369,16 @@ func runServer() {
 	// Create handler
 	handler := handlers.NewHandler(pool, kcClient, fleetClient, logger)
 	handler.SetFleetWebhookSecret(cfg.FleetWebhookSecret)
-	handler.SetDeviceCookieSecret(cfg.DeviceCookieSecret)
+	// The device-identity cookie is signed with a DOMAIN-SEPARATED key, so
+	// the browser-facing cookie trust domain never shares key material with
+	// the Fleet enrollment webhook (issue #125). The Fleet side deliberately
+	// keeps the raw secret: FleetDM signs the callback with it itself.
+	if !cfg.DeviceCookieSecretConfigured() {
+		logger.Warn("device cookie: DEVICE_COOKIE_SECRET is not set — the cookie HMAC key is derived from " +
+			"FLEET_WEBHOOK_SECRET with a domain-separation label, so the two trust domains do not share key " +
+			"material, but the cookie key is not independently rotatable. Set DEVICE_COOKIE_SECRET to rotate it on its own.")
+	}
+	handler.SetDeviceCookieSecret(cfg.DeviceCookieSigningSecret())
 	handler.SetSCIMBearerToken(cfg.SCIMBearerToken)
 	handler.SetAccessEvalToken(cfg.AccessEvalToken)
 	handler.SetReconciler(rec)
@@ -363,6 +388,12 @@ func runServer() {
 	handler.SetSnapshotter(snap)
 	handler.SetProvisionEngine(provisionEngine)
 	handler.SetLDAPBindPassword(cfg.LDAPBindPassword)
+	// The provisioning master key must be the RESOLVED value (file → Vault →
+	// env, see config.resolveSecret), not the raw environment variable. The
+	// handler used to read os.Getenv directly, so a deployment that set
+	// PROVISIONING_MASTER_KEY_FILE passed startup validation against the file
+	// and then encrypted with a different (or missing) key (issue #127).
+	handlers.SetProvisioningMasterKey(cfg.ProvisioningMasterKey)
 
 	// E3 — Recurring access-review schedule runner (leader-gated).
 	handler.StartReviewScheduleRunner(lifecycleCtx, 1*time.Minute, reviewScheduleLeader.IsLeader)
@@ -386,8 +417,11 @@ func runServer() {
 	baseAuth := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)
 	authMW := middleware.NewAPITokenMiddleware(baseAuth, pool)
 
-	// CORS origin from env or secure default
-	corsOrigin := os.Getenv("CORS_ORIGIN")
+	// CORS origin from config. The default is the local dashboard, used only
+	// in dev/test (config.Validate() requires an explicit https origin outside
+	// dev/test and rejects the "*" wildcard, which the CORS handler's
+	// Allow-Credentials: true makes invalid — issue #131).
+	corsOrigin := cfg.CORSOrigin
 	if corsOrigin == "" {
 		corsOrigin = "http://localhost:3000"
 	}
@@ -445,7 +479,17 @@ func runServer() {
 	// replicas) when REDIS_URL is set, in-memory otherwise. config.Validate()
 	// already refused to start in production without REDIS_URL, so this only
 	// falls back to in-memory in dev/test.
-	newLimiter, closeLimiterFactory, err := middleware.NewLimiterFactory(cfg.RedisURL, logger)
+	//
+	// TRUSTED_PROXY_CIDRS lists the reverse proxies whose X-Forwarded-For
+	// header may be trusted when deriving the client key. Without it, every
+	// request that arrives through the single reverse proxy shares ONE bucket,
+	// so one attacker can rate-limit every other tenant (issue #129).
+	if len(cfg.TrustedProxyCIDRs) == 0 {
+		logger.Warn("rate limiter: TRUSTED_PROXY_CIDRS is not set — every request that arrives through a reverse " +
+			"proxy shares ONE rate-limit bucket, so a single client can exhaust the budget for all tenants. " +
+			"Set TRUSTED_PROXY_CIDRS to the proxy's network range to derive per-client buckets.")
+	}
+	newLimiter, closeLimiterFactory, err := middleware.NewLimiterFactory(cfg.RedisURL, cfg.TrustedProxyCIDRs, logger)
 	if err != nil {
 		logger.Fatal("failed to initialize rate limiter", zap.Error(err))
 	}

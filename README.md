@@ -223,13 +223,12 @@ make prod-up                        # build images + bring the stack up (detache
 - The backend image is `distroless:nonroot`; the frontend runs as a non-root node
   user. `NEXT_PUBLIC_API_URL` is baked at build time from `API_PUBLIC_URL`.
 
-After first boot, run `make kc-setup` against the Keycloak instance to create the
-realm, groups, and the `freecloud-service` confidential client (least-privilege:
-`manage-users` + `manage-clients`) without creating the development demo user:
-
-```bash
-APP_ENV=production ALLOW_DEV_SETUP=true CREATE_DEMO_USER=false make kc-setup
-```
+There is no separate Keycloak setup step. On first boot the backend's bootstrap
+engine creates the realm, the default groups, and the `freecloud-service`
+confidential client (least-privilege: `manage-users` + `manage-clients`)
+automatically, and manages the client secret from then on. To build the
+Keycloak image on its own, use `make kc-build`; to run the full verification
+suite, use `make verify`.
 
 ## Documentation
 

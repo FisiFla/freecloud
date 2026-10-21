@@ -149,8 +149,9 @@ export default function FederationPage() {
           {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
           <form onSubmit={handleCreate} className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Display name</label>
+              <label htmlFor="federation-display-name" className="block text-sm font-medium text-gray-700">Display name</label>
               <input
+                id="federation-display-name"
                 required
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none"
                 value={form.name}
@@ -159,8 +160,9 @@ export default function FederationPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Vendor</label>
+              <label htmlFor="federation-vendor" className="block text-sm font-medium text-gray-700">Vendor</label>
               <select
+                id="federation-vendor"
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none"
                 value={form.vendor}
                 onChange={(e) => setForm({ ...form, vendor: e.target.value })}
@@ -170,8 +172,9 @@ export default function FederationPage() {
               </select>
             </div>
             <div className="sm:col-span-2">
-              <label className="block text-sm font-medium text-gray-700">Connection URL</label>
+              <label htmlFor="federation-connection-url" className="block text-sm font-medium text-gray-700">Connection URL</label>
               <input
+                id="federation-connection-url"
                 required
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none"
                 value={form.connectionUrl}
@@ -180,8 +183,9 @@ export default function FederationPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Bind DN</label>
+              <label htmlFor="federation-bind-dn" className="block text-sm font-medium text-gray-700">Bind DN</label>
               <input
+                id="federation-bind-dn"
                 required
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none"
                 value={form.bindDn}
@@ -190,8 +194,9 @@ export default function FederationPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Users DN</label>
+              <label htmlFor="federation-users-dn" className="block text-sm font-medium text-gray-700">Users DN</label>
               <input
+                id="federation-users-dn"
                 required
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none"
                 value={form.usersDn}

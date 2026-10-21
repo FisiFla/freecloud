@@ -17,10 +17,21 @@ reports within a few days.
   `development`/`test` (including unset) as production and refuses to start on
   insecure defaults: the default database DSN, `sslmode=disable`, the `admin-cli`
   Keycloak client, a localhost Keycloak URL, or a missing
-  `KEYCLOAK_CLIENT_SECRET` / `FLEET_API_TOKEN` / `FLEET_WEBHOOK_SECRET` /
-  `SCIM_BEARER_TOKEN` / `ACCESS_EVAL_TOKEN` / `CORS_ORIGIN`. The frontend refuses
-  to start in production with the placeholder `AUTH_SECRET` or a non-`https` API
-  URL.
+  `FLEET_API_TOKEN` / `FLEET_WEBHOOK_SECRET` / `SCIM_BEARER_TOKEN` /
+  `ACCESS_EVAL_TOKEN` / `PROVISIONING_MASTER_KEY` / `CORS_ORIGIN` /
+  `REDIS_URL` / `KEYCLOAK_AUDIENCE` or a weak `KC_BOOTSTRAP_PASSWORD`.
+  `KEYCLOAK_CLIENT_SECRET` is **optional**: the bootstrap engine provisions the
+  confidential service client and manages its own secret at runtime. The
+  frontend refuses to start in production with the placeholder `AUTH_SECRET` or
+  a non-`https` API URL.
+- **Secrets are delivered as files.** The production stack mounts the
+  auto-generated secrets (`POSTGRES_PASSWORD`, `KC_ADMIN_PASSWORD`,
+  `AUTH_SECRET`, `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`,
+  `FLEET_WEBHOOK_SECRET`, `PROVISIONING_MASTER_KEY`) as Docker secrets and
+  reads them through the `<VAR>_FILE` convention, so the values are not
+  visible in `docker inspect` or `/proc/<pid>/environ`. The backend also
+  supports `<VAR>_VAULT_PATH` (HashiCorp Vault) — see
+  [docs/SECRETS.md](docs/SECRETS.md).
 - **API authentication.** Authenticated `/api/v1/*` endpoints require a
   Keycloak-issued JWT, validated against the realm JWKS with signature, `exp`,
   issuer, and audience checks. Sensitive routes additionally require explicit
@@ -45,7 +56,12 @@ reports within a few days.
   binds the audit write into the same transaction as the user row.
 - **Transport.** Production runs behind a TLS-terminating reverse proxy (Caddy),
   Postgres requires TLS (`sslmode=require`), and security response headers + a
-  CSP are set on every response.
+  CSP are set on every response. Note that `sslmode=require` encrypts the
+  connection **without verifying the server certificate** (the Postgres image
+  generates a self-signed certificate on first boot) — see
+  [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#postgresql-tls-sslmode) for the
+  residual MITM risk on the internal network and the documented way to
+  strengthen it to `verify-full` with a distributed CA.
 
 ## Supported Versions
 

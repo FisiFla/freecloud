@@ -50,6 +50,7 @@ function policyToForm(p: AccountPolicy): UpdateAccountPolicyRequest {
 
 // Minimal number input with label and optional help text.
 function NumberField({
+  id,
   label,
   help,
   value,
@@ -57,6 +58,7 @@ function NumberField({
   max,
   onChange,
 }: {
+  id: string;
   label: string;
   help?: string;
   value: number;
@@ -66,9 +68,10 @@ function NumberField({
 }) {
   return (
     <div>
-      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">{label}</label>
+      <label htmlFor={id} className="block text-sm font-medium text-slate-700 dark:text-slate-300">{label}</label>
       {help && <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">{help}</p>}
       <input
+        id={id}
         type="number"
         min={min}
         max={max}
@@ -189,6 +192,7 @@ export default function AccountPolicyPage() {
             </p>
             <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <NumberField
+                id="min-length"
                 label="Minimum length"
                 help="Characters required (0 = unrestricted)"
                 value={form.minLength}
@@ -197,6 +201,7 @@ export default function AccountPolicyPage() {
                 onChange={(v) => set("minLength", v)}
               />
               <NumberField
+                id="uppercase-letters"
                 label="Uppercase letters"
                 help="Minimum number of A–Z"
                 value={form.upperCase}
@@ -205,6 +210,7 @@ export default function AccountPolicyPage() {
                 onChange={(v) => set("upperCase", v)}
               />
               <NumberField
+                id="lowercase-letters"
                 label="Lowercase letters"
                 help="Minimum number of a–z"
                 value={form.lowerCase}
@@ -213,6 +219,7 @@ export default function AccountPolicyPage() {
                 onChange={(v) => set("lowerCase", v)}
               />
               <NumberField
+                id="digits"
                 label="Digits"
                 help="Minimum number of 0–9"
                 value={form.digits}
@@ -221,6 +228,7 @@ export default function AccountPolicyPage() {
                 onChange={(v) => set("digits", v)}
               />
               <NumberField
+                id="special-characters"
                 label="Special characters"
                 help="Minimum number of symbols"
                 value={form.specialChars}
@@ -229,6 +237,7 @@ export default function AccountPolicyPage() {
                 onChange={(v) => set("specialChars", v)}
               />
               <NumberField
+                id="password-history"
                 label="Password history"
                 help="Prevent reuse of last N passwords (0 = off)"
                 value={form.passwordHistory}
@@ -237,6 +246,7 @@ export default function AccountPolicyPage() {
                 onChange={(v) => set("passwordHistory", v)}
               />
               <NumberField
+                id="password-expire-days"
                 label="Expiry (days)"
                 help="Force reset after N days (0 = never expires)"
                 value={form.passwordExpireDays}
@@ -267,8 +277,9 @@ export default function AccountPolicyPage() {
                   Temporarily lock accounts after repeated failed logins.
                 </p>
               </div>
-              <label className="relative inline-flex cursor-pointer items-center">
+              <label htmlFor="brute-force-protected" className="relative inline-flex cursor-pointer items-center">
                 <input
+                  id="brute-force-protected"
                   type="checkbox"
                   checked={form.bruteForceProtected}
                   onChange={(e) => set("bruteForceProtected", e.target.checked)}
@@ -284,6 +295,7 @@ export default function AccountPolicyPage() {
             {form.bruteForceProtected && (
               <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <NumberField
+                  id="failure-factor"
                   label="Max login failures"
                   help="Failures before lockout"
                   value={form.failureFactor}
@@ -292,6 +304,7 @@ export default function AccountPolicyPage() {
                   onChange={(v) => set("failureFactor", v)}
                 />
                 <NumberField
+                  id="wait-increment-seconds"
                   label="Wait increment (seconds)"
                   help="Added to wait time per failure"
                   value={form.waitIncrementSeconds}
@@ -300,6 +313,7 @@ export default function AccountPolicyPage() {
                   onChange={(v) => set("waitIncrementSeconds", v)}
                 />
                 <NumberField
+                  id="max-failure-wait-seconds"
                   label="Max lockout duration (seconds)"
                   help="Ceiling on the total wait time"
                   value={form.maxFailureWaitSeconds}
@@ -308,6 +322,7 @@ export default function AccountPolicyPage() {
                   onChange={(v) => set("maxFailureWaitSeconds", v)}
                 />
                 <NumberField
+                  id="quick-login-check-ms"
                   label="Quick-login check (ms)"
                   help="Detect rapid-fire logins within this window"
                   value={form.quickLoginCheckMilliSeconds}
@@ -316,6 +331,7 @@ export default function AccountPolicyPage() {
                   onChange={(v) => set("quickLoginCheckMilliSeconds", v)}
                 />
                 <NumberField
+                  id="minimum-quick-login-wait-seconds"
                   label="Min quick-login wait (seconds)"
                   help="Minimum wait after quick-login detection"
                   value={form.minimumQuickLoginWaitSeconds}
@@ -324,6 +340,7 @@ export default function AccountPolicyPage() {
                   onChange={(v) => set("minimumQuickLoginWaitSeconds", v)}
                 />
                 <NumberField
+                  id="max-delta-time-seconds"
                   label="Failure counter reset (seconds)"
                   help="Failure count resets after this period of no failures"
                   value={form.maxDeltaTimeSeconds}

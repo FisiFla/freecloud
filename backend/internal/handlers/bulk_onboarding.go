@@ -57,7 +57,7 @@ const maxBulkRows = 500
 func (h *Handler) BulkOnboard(w http.ResponseWriter, r *http.Request) {
 	logger := h.logger
 
-	rows, parseErr := parseBulkInput(r)
+	rows, parseErr := parseBulkInput(r, logger)
 	if parseErr != nil {
 		respondError(w, http.StatusBadRequest, parseErr.Error())
 		return
@@ -66,6 +66,8 @@ func (h *Handler) BulkOnboard(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "no rows provided")
 		return
 	}
+	// The row cap is enforced while the input is parsed (see
+	// parseBulkInput), so this is only a belt-and-braces check.
 	if len(rows) > maxBulkRows {
 		respondError(w, http.StatusBadRequest,
 			fmt.Sprintf("too many rows: maximum %d allowed", maxBulkRows))
@@ -259,32 +261,49 @@ func validateBulkRow(row BulkOnboardRow) string {
 
 // parseBulkInput reads CSV (multipart "file" field) or a JSON array from the
 // request body.  Returns the parsed rows or an error.
-func parseBulkInput(r *http.Request) ([]BulkOnboardRow, error) {
+//
+// The row cap is enforced WHILE the input is read, not after the whole file
+// has been parsed into memory: a 100 MB CSV used to be fully materialised
+// before the 500-row check rejected it.
+//
+// For a multipart upload the temporary files that ParseMultipartForm spills
+// to disk (anything over 8 MB) are removed before returning — otherwise
+// every upload over 8 MB leaves a file behind on disk.
+func parseBulkInput(r *http.Request, logger *zap.Logger) ([]BulkOnboardRow, error) {
 	ct := r.Header.Get("Content-Type")
 
 	if strings.Contains(ct, "multipart/form-data") {
 		if err := r.ParseMultipartForm(8 << 20); err != nil { // 8 MB
 			return nil, fmt.Errorf("parse multipart form: %w", err)
 		}
+		// RemoveAll deletes the temporary files ParseMultipartForm created
+		// for the parts that did not fit in memory. The uploaded file
+		// handle is closed separately below.
+		defer func() {
+			if r.MultipartForm == nil {
+				return
+			}
+			if err := r.MultipartForm.RemoveAll(); err != nil && logger != nil {
+				logger.Warn("bulk onboard: failed to remove multipart temp files", zap.Error(err))
+			}
+		}()
 		f, _, err := r.FormFile("file")
 		if err != nil {
 			return nil, fmt.Errorf("missing 'file' field in form: %w", err)
 		}
 		defer f.Close()
-		return parseCSV(f)
+		return parseCSVLimited(f, maxBulkRows)
 	}
 
-	// JSON array fallback.
-	var rows []BulkOnboardRow
-	if err := json.NewDecoder(r.Body).Decode(&rows); err != nil {
-		return nil, fmt.Errorf("invalid request body: %w", err)
-	}
-	return rows, nil
+	// JSON array fallback — decoded element by element so the row cap stops
+	// the decode instead of buffering the whole array first.
+	return parseJSONRows(r.Body, maxBulkRows)
 }
 
-// parseCSV parses a CSV with a header row and returns the rows.
-// Expected header (case-insensitive): firstName, lastName, email, department, role
-func parseCSV(r io.Reader) ([]BulkOnboardRow, error) {
+// parseCSVLimited parses a CSV with a header row and returns at most maxRows
+// rows. It stops reading as soon as the cap is exceeded and returns an
+// error, so an oversized CSV is rejected without being fully parsed.
+func parseCSVLimited(r io.Reader, maxRows int) ([]BulkOnboardRow, error) {
 	reader := csv.NewReader(r)
 	reader.TrimLeadingSpace = true
 
@@ -314,6 +333,9 @@ func parseCSV(r io.Reader) ([]BulkOnboardRow, error) {
 		if err != nil {
 			return nil, fmt.Errorf("CSV parse error: %w", err)
 		}
+		if len(rows) >= maxRows {
+			return nil, fmt.Errorf("too many rows: maximum %d allowed", maxRows)
+		}
 		get := func(col string) string {
 			idx, ok := colIdx[col]
 			if !ok || idx >= len(record) {
@@ -328,6 +350,44 @@ func parseCSV(r io.Reader) ([]BulkOnboardRow, error) {
 			Department: get("department"),
 			Role:       get("role"),
 		})
+	}
+	return rows, nil
+}
+
+// parseCSV parses a CSV with a header row and returns the rows.
+// Expected header (case-insensitive): firstName, lastName, email, department, role
+func parseCSV(r io.Reader) ([]BulkOnboardRow, error) {
+	return parseCSVLimited(r, maxBulkRows)
+}
+
+// parseJSONRows decodes a JSON array of rows one element at a time and
+// rejects the input as soon as more than maxRows rows are seen.
+func parseJSONRows(r io.Reader, maxRows int) ([]BulkOnboardRow, error) {
+	dec := json.NewDecoder(r)
+
+	// Expect the opening bracket of the array.
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("invalid request body: %w", err)
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '[' {
+		return nil, fmt.Errorf("invalid request body: expected a JSON array")
+	}
+
+	var rows []BulkOnboardRow
+	for dec.More() {
+		if len(rows) >= maxRows {
+			return nil, fmt.Errorf("too many rows: maximum %d allowed", maxRows)
+		}
+		var row BulkOnboardRow
+		if err := dec.Decode(&row); err != nil {
+			return nil, fmt.Errorf("invalid request body: %w", err)
+		}
+		rows = append(rows, row)
+	}
+	// Consume the closing bracket so a malformed tail is reported.
+	if _, err := dec.Token(); err != nil {
+		return nil, fmt.Errorf("invalid request body: %w", err)
 	}
 	return rows, nil
 }

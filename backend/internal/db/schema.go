@@ -177,6 +177,16 @@ var migrations = []migration{
 		name:      "fleet_team_orgs",
 		statement: Migration046,
 	},
+	{
+		id:        47,
+		name:      "mfa_recovery_codes_lookup_index",
+		statement: Migration047,
+	},
+	{
+		id:        48,
+		name:      "analytics_snapshots_units_and_org_index",
+		statement: Migration048,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -993,6 +1003,44 @@ CREATE TABLE IF NOT EXISTS fleet_team_orgs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_fleet_team_orgs_org_id ON fleet_team_orgs(org_id);
+`
+
+// Migration047 adds the lookup index for MFA recovery codes.
+//
+// CheckAndConsumeRecoveryCode (internal/handlers/mfa_self.go) looks a code
+// up by (user_id, code_hash) on every recovery attempt. Without an index on
+// those columns Postgres full-scans mfa_recovery_codes per attempt, so a
+// handful of guesses costs a table scan (issue #170).
+const Migration047 = `
+CREATE INDEX IF NOT EXISTS idx_mfa_recovery_codes_user_code_hash
+    ON mfa_recovery_codes(user_id, code_hash);
+`
+
+// Migration048 fixes the analytics snapshot units and adds the org-scoped
+// lookup index.
+//
+// mfa_coverage_pct was written as a 0-100 percentage while the sibling
+// compliance_rate was written as a 0-1 ratio. Both are documented in
+// docs/API.md as 0-1 ratios and both are rendered by the dashboard through a
+// single pct() helper that multiplies by 100, so the percentage column was
+// displayed as e.g. "8800%" (issue #163). The writer now emits a ratio; this
+// migration rescales the historical rows that were stored in the old unit.
+//
+// The guard `mfa_coverage_pct > 1.0` only touches rows written by the old
+// percentage writer: a ratio can never exceed 1.0, and a 0-100 percentage
+// written as 0 would legitimately be 0 and is left alone.
+//
+// The composite index serves GetSeries, which filters by org_id and orders by
+// captured_at; the old index covered captured_at alone, so every per-org
+// series query degraded into a large index scan plus a filter as the table
+// grew (issue #154).
+const Migration048 = `
+UPDATE analytics_snapshots
+   SET mfa_coverage_pct = mfa_coverage_pct / 100.0
+ WHERE mfa_coverage_pct > 1.0;
+
+CREATE INDEX IF NOT EXISTS idx_analytics_snapshots_org_captured_at
+    ON analytics_snapshots(org_id, captured_at DESC);
 `
 
 // migrationLockID is the pg_advisory_lock key guarding RunMigrations. It is a

@@ -107,9 +107,11 @@ func (p *fakePool) QueryRow(ctx context.Context, sql string, args ...any) pgx.Ro
 type fakeSink struct {
 	calls   atomic.Int32
 	failErr error
+	noop    bool
 }
 
 func (f *fakeSink) Name() string { return "fake" }
+func (f *fakeSink) IsNoop() bool { return f.noop }
 func (f *fakeSink) Send(_ context.Context, _ AuditEntry) error {
 	f.calls.Add(1)
 	return f.failErr
@@ -189,6 +191,92 @@ func TestPoll_FailSoft_SinkError(t *testing.T) {
 	// Sink failed — cursor must NOT advance.
 	if execCalled {
 		t.Error("cursor should NOT advance when sink fails")
+	}
+}
+
+// TestPoll_NoopSinkDoesNotAdvanceCursor is the regression test for issue
+// #128: a no-op sink discards every entry, so advancing the cursor would
+// drop the audit events permanently while the log claimed they were
+// streamed.
+func TestPoll_NoopSinkDoesNotAdvanceCursor(t *testing.T) {
+	execCalled := false
+	queried := false
+
+	pool := &fakePool{
+		queryRowFn: func(_ context.Context, _ string, _ ...any) pgx.Row {
+			queried = true
+			return fakeRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*int64)) = 0
+				return nil
+			}}
+		},
+		queryFn: func(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
+			queried = true
+			return &fakeRows{rows: [][]any{
+				{int64(1), "uuid-1", "actor1", "onboard", "user", "u1", "{}", time.Now()},
+			}}, nil
+		},
+		execFn: func(_ context.Context, _ string, _ ...any) (pgconn.CommandTag, error) {
+			execCalled = true
+			return pgconn.CommandTag{}, nil
+		},
+	}
+
+	s := New(pool, &fakeSink{noop: true}, zaptest.NewLogger(t))
+	s.poll(context.Background())
+
+	if execCalled {
+		t.Error("cursor must NOT advance for a no-op sink — the events would be dropped")
+	}
+	if queried {
+		t.Error("a no-op sink must not even read the pending events")
+	}
+}
+
+// TestBuildSinkErrorsWhenUnconfigured proves BuildSink reports an error
+// instead of silently returning a no-op sink (issue #128).
+func TestBuildSinkErrorsWhenUnconfigured(t *testing.T) {
+	sink, err := BuildSink("udp", "", "", "", zaptest.NewLogger(t))
+	if err == nil {
+		t.Fatal("expected an error when no SIEM sink is configured")
+	}
+	if sink != nil {
+		t.Errorf("expected no sink alongside the error, got %v", sink)
+	}
+}
+
+// TestBuildSinkErrorsWhenSyslogDialFails proves a broken configured sink is
+// reported instead of being silently replaced by a no-op sink.
+func TestBuildSinkErrorsWhenSyslogDialFails(t *testing.T) {
+	// Port 0 is never connectable.
+	sink, err := BuildSink("tcp", "127.0.0.1:0", "", "", zaptest.NewLogger(t))
+	if err == nil {
+		t.Fatal("expected an error when the syslog sink cannot be initialised")
+	}
+	if sink != nil {
+		t.Errorf("expected no sink alongside the error, got %v", sink)
+	}
+}
+
+// TestBuildSinkReturnsHTTPSink proves a configured HTTP sink is returned.
+func TestBuildSinkReturnsHTTPSink(t *testing.T) {
+	sink, err := BuildSink("udp", "", "https://siem.example.com/ingest", "tok", zaptest.NewLogger(t))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if sink.Name() != "http" {
+		t.Errorf("expected the http sink, got %q", sink.Name())
+	}
+	if sink.IsNoop() {
+		t.Error("the http sink must not report itself as a no-op")
+	}
+}
+
+// TestNoopSinkReportsNoop proves the no-op sink is observable, so the
+// streamer can refuse to advance its cursor for it.
+func TestNoopSinkReportsNoop(t *testing.T) {
+	if !NewNoopSink().IsNoop() {
+		t.Error("the no-op sink must report IsNoop() == true")
 	}
 }
 

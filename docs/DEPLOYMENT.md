@@ -24,7 +24,7 @@ cp .env.prod.example .env.prod
 | `DASHBOARD_DOMAIN` / `API_DOMAIN` / `KC_DOMAIN` | Public hostnames Caddy serves + gets TLS for |
 | `DASHBOARD_PUBLIC_URL` / `API_PUBLIC_URL` / `KC_PUBLIC_URL` | The `https://` URLs for the above |
 | `FLEET_URL` / `FLEET_API_TOKEN` | Real FleetDM API endpoint + token |
-| `POSTURE_CHECK_ENABLED` | Set to `"true"` to enforce device posture at login (optional) |
+| `POSTURE_CHECK_ENABLED` | Device-posture enforcement at login. **Defaults to `true`** in the production stack — a stack that forgets the variable must not silently run without posture checks. Set it to `false` only deliberately. |
 
 ### Auto-generated secrets (do not set manually)
 
@@ -34,15 +34,48 @@ container and stored in `.secrets/secrets.env`. You do not set them in `.env.pro
 `POSTGRES_PASSWORD`, `AUTH_SECRET`, `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`,
 `FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD`, `PROVISIONING_MASTER_KEY`
 
-To rotate, delete `.secrets/secrets.env` and run `make prod-up` again. The
-`KEYCLOAK_CLIENT_SECRET` is self-managed by the Epic A bootstrap and is not
+The same values are also written one-per-file under `.secrets/files/`. The
+production compose mounts them as Docker secrets and the services read them
+through the `<VAR>_FILE` convention, so the values are **not** visible in
+`docker inspect` or `/proc/<pid>/environ`. The backend additionally supports
+`<VAR>_VAULT_PATH` (HashiCorp Vault) — see [docs/SECRETS.md](SECRETS.md).
+
+`.secrets/` is created with mode `0700` and the secret files are owned by the
+operator running `make prod-up` (the generator runs as your uid, not as root),
+so `make prod-up` can read them on a Linux host. Run the documented
+`make prod-up` / `make prod-secrets-init` entry points rather than invoking
+`docker compose` directly, otherwise the files are created as root and the
+next `make prod-up` fails with "Permission denied".
+
+The `KEYCLOAK_CLIENT_SECRET` is self-managed by the Epic A bootstrap and is not
 stored in `.secrets/secrets.env`.
+
+### Rotating secrets
+
+**Do not delete `.secrets/secrets.env`.** The generator only fills in the
+*missing* keys and preserves every existing value, so deleting the file
+regenerates the database and Keycloak passwords and breaks the running
+cluster. Rotate one secret at a time instead:
+
+| Secret | How to rotate | Effect |
+|---|---|---|
+| `AUTH_SECRET` | Remove the `AUTH_SECRET=` line from `.secrets/secrets.env`, run `make prod-secrets-init`, restart the frontend. | All dashboard sessions are invalidated. |
+| `SCIM_BEARER_TOKEN` | Remove the line, re-run `make prod-secrets-init`, restart the backend. Update the SCIM client that calls you. | Inbound SCIM requests with the old token are rejected. |
+| `ACCESS_EVAL_TOKEN` | Remove the line, re-run `make prod-secrets-init`, restart the backend **and** Keycloak. | The posture SPI can no longer evaluate access. |
+| `FLEET_WEBHOOK_SECRET` | Remove the line, re-run `make prod-secrets-init`, restart the backend, and update the webhook secret in Fleet. | Enrollment callbacks with the old secret are rejected. Also rotates the device-cookie signing key unless `DEVICE_COOKIE_SECRET` is set. |
+| `PROVISIONING_MASTER_KEY` | Remove the line, re-run `make prod-secrets-init`, restart the backend, and re-enter the connector tokens in Settings → Integrations. | Stored connector secrets have to be re-entered (they can no longer be decrypted). |
+| `POSTGRES_PASSWORD` | **Not rotatable by re-running the generator** — the Postgres image applies the password only when the data directory is empty. Change it in the database and update the file:<br>`ALTER ROLE freecloud WITH PASSWORD '<new>';`<br>then set `POSTGRES_PASSWORD=<new>` in `.secrets/secrets.env`, re-run `make prod-secrets-init` and restart the backend. | The backend must be restarted with the new DSN. |
+| `KC_ADMIN_PASSWORD` | **Not rotatable by re-running the generator** — Keycloak stores the admin password in its own database after first boot. Change it with `kcadm` (master realm) and update `.secrets/secrets.env` the same way as above. | The Keycloak master-realm admin password changes. |
+
+After changing anything in `.secrets/secrets.env`, re-run
+`make prod-secrets-init` so the per-key secret files are refreshed, then
+recreate the affected services (`make prod-up`).
 
 ### Optional: `DEVICE_COOKIE_SECRET`
 
-Set in `.secrets/secrets.env` or the environment to HMAC-sign device-identity
-cookies independently of `FLEET_WEBHOOK_SECRET`. Unset = fall back to the
-Fleet webhook secret (see `docs/SECRETS.md`).
+Set in `.secrets/secrets.env` (the generator preserves hand-added keys) to
+HMAC-sign device-identity cookies independently of `FLEET_WEBHOOK_SECRET`.
+Unset = fall back to the Fleet webhook secret (see `docs/SECRETS.md`).
 
 ### Fleet teams multi-tenant mapping (`fleet_team_orgs`)
 
@@ -72,6 +105,24 @@ These are configured **in-app** after first login — not via environment variab
 - **Settings → SMTP** — outbound email for notifications and invitations.
 - **Settings → Identity Providers** — OIDC/SAML federation sources (Google Workspace,
   Azure AD, Okta, …).
+
+The email channel has an env-var gate: the backend only wires the email
+notifier when `NOTIFY_EMAIL=true` (default `false`). Set `NOTIFY_EMAIL=true` in
+`.env.prod` to enable it. The SMTP settings saved in-app are the source of
+truth; the `SMTP_*` variables in `.env.prod` are only a fallback for the case
+where no SMTP configuration has been saved yet:
+
+```bash
+NOTIFY_EMAIL=true
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_FROM=freecloud@example.com
+SMTP_TO=admin@example.com
+SMTP_PASSWORD=CHANGE_ME
+```
+
+The same applies to the other channels: `NOTIFY_SLACK` + `SLACK_WEBHOOK_URL`
+and `NOTIFY_WEBHOOK` + `WEBHOOK_URL` + `WEBHOOK_SECRET`.
 
 ## Deploy
 
@@ -111,6 +162,45 @@ curl -fsS https://api.example.com/readyz      # readiness (DB + Keycloak) -> 200
 `/metrics` is exposed by the backend for Prometheus, but the bundled Caddyfile
 returns 404 for public API traffic by default. Expose it only on an internal
 network or behind authentication if you add scraping.
+
+## PostgreSQL TLS (sslmode)
+
+The Postgres image in this stack generates a **self-signed** server certificate
+on first boot (`docker/postgres/tls-entrypoint.sh`) and the production DSN
+uses `sslmode=require`:
+
+```
+postgres://freecloud:<password>@postgres:5432/freecloud?sslmode=require
+```
+
+What that buys you, and what it does not:
+
+- **Yes:** the connection is encrypted, so the password and the data are not
+  readable on the wire.
+- **No:** `sslmode=require` does **not** verify the server certificate. Any
+  container that can reach `postgres` on the Compose network can present its
+  own certificate and man-in-the-middle the connection. The encryption is only
+  meaningful against an attacker who cannot reach the internal network.
+
+This is a deliberate trade-off for a single-host deployment where the database
+is only reachable from the other containers on the Compose bridge network. If
+your threat model includes a compromised container on that network, strengthen
+it to `verify-full` with a CA you control:
+
+1. Create a CA and a server certificate for the `postgres` hostname
+   (`openssl` with a `subjectAltName` of `postgres`), and store the CA
+   certificate on the host.
+2. Mount the CA certificate into the containers that connect to the database
+   (`backend` and `migrate`), e.g. add to the `volumes:` list of both services:
+   `./postgres/ca.crt:/etc/freecloud/postgres-ca.crt:ro`.
+3. Point the DSN at the CA and require full verification:
+   `?sslmode=verify-full&sslrootcert=/etc/freecloud/postgres-ca.crt`.
+4. Configure Postgres to use the CA-signed certificate (replace the
+   self-signed one in `docker/postgres/tls-entrypoint.sh`).
+
+Note that the backend image is built from `backend/Dockerfile` and the
+`sslrootcert` path has to exist inside it, so the certificate has to be
+mounted (as above) rather than baked into the image.
 
 ## Backup & Restore
 
@@ -174,6 +264,9 @@ The backend exposes `/metrics` for Prometheus scraping. An optional Prometheus +
 Grafana stack is available as a Compose overlay:
 
 ```bash
+# The secrets have to be in the shell environment — the production compose
+# resolves the database DSN at parse time and fails fast without it.
+set -a && . .secrets/secrets.env && set +a
 docker compose \
   -f docker/docker-compose.prod.yml \
   -f docker/docker-compose.observability.yml \
@@ -182,6 +275,45 @@ docker compose \
 
 See [docs/OBSERVABILITY.md](OBSERVABILITY.md) for metrics reference, dashboard,
 and alert rules.
+
+## Pinned image digests
+
+Every base image in `docker/` is pinned to a digest, not just a tag:
+
+```yaml
+image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea  # postgres 16-alpine
+```
+
+The comment after the digest records the tag the digest belongs to, so the
+line stays readable. The same convention is used in the Dockerfiles
+(`FROM postgres:16-alpine@sha256:…`).
+
+**Refreshing a digest** (after a version bump, or to pick up a rebuilt tag):
+
+```bash
+# Docker Hub
+docker buildx imagetools inspect postgres:16-alpine --format '{{.Manifest.Digest}}'
+
+# quay.io / gcr.io
+docker buildx imagetools inspect quay.io/keycloak/keycloak:25.0 --format '{{.Manifest.Digest}}'
+```
+
+Or, without Docker:
+
+```bash
+TOKEN=$(curl -s "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/postgres:pull" \
+  | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
+curl -sI -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+  https://registry-1.docker.io/v2/library/postgres/manifests/16-alpine \
+  | grep -i docker-content-digest
+```
+
+Replace the digest in the compose file / Dockerfile, keep the tag comment in
+sync, and re-run `make prod-up`.
+
+The images in `backend/Dockerfile` and `frontend/Dockerfile` are pinned the
+same way.
 
 ## Outbound Provisioning
 

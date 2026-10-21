@@ -31,7 +31,12 @@ type exportItem struct {
 }
 
 // ExportCampaign exports all review items for a campaign as CSV or JSON.
+//
 // Route: GET /api/v1/campaigns/{id}/export?format=csv|json
+//
+// The export is bounded: `limit` (default and maximum 1000) and `offset` are
+// clamped server-side, so a campaign with a huge number of items cannot
+// exhaust the process's memory.
 func (h *Handler) ExportCampaign(w http.ResponseWriter, r *http.Request) {
 	campaignID := chi.URLParam(r, "id")
 	if err := ValidateUserID(campaignID); err != nil {
@@ -54,6 +59,8 @@ func (h *Handler) ExportCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	limit, offset := listPageParams(r, maxListLimit)
+
 	rows, err := h.db.Query(r.Context(),
 		`SELECT ri.id::TEXT, ri.campaign_id::TEXT,
 		        COALESCE(u.email, ''), ri.user_id::TEXT,
@@ -62,8 +69,9 @@ func (h *Handler) ExportCampaign(w http.ResponseWriter, r *http.Request) {
 		 FROM review_items ri
 		 LEFT JOIN users u ON u.keycloak_user_id = ri.user_id
 		 WHERE ri.campaign_id = $1
-		 ORDER BY ri.created_at`,
-		campaignID,
+		 ORDER BY ri.created_at
+		 LIMIT $2 OFFSET $3`,
+		campaignID, limit, offset,
 	)
 	if err != nil {
 		h.logger.Error("export campaign: query failed", zap.Error(err))

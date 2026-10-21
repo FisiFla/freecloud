@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"os"
+
+	"github.com/FisiFla/freecloud/backend/internal/config"
 )
 
 // contextKey is a private type for context keys to avoid collisions.
@@ -39,11 +41,18 @@ func ActorIDMiddleware(next http.Handler) http.Handler {
 		// Reject requests without valid JWT unless the explicit dev/test escape
 		// hatch is enabled. This requires BOTH:
 		//   - ALLOW_ACTOR_HEADER=true
-		//   - APP_ENV being unset, "development", or "test"
+		//   - APP_ENV being "development" or "test"
 		// The X-Actor-ID header is spoofable and must never be trusted in
 		// staging/production environments.
-		env := os.Getenv("APP_ENV")
-		allowHeader := env == "" || env == "development" || env == "test"
+		//
+		// config.IsDevOrE2E() is the SINGLE definition of "is this a
+		// dev/test environment" in the codebase: an UNSET APP_ENV counts as
+		// production there, exactly as config.Validate() treats it. This
+		// middleware used to treat an unset APP_ENV as development, which
+		// meant a deployment that forgot APP_ENV but set ALLOW_ACTOR_HEADER=true
+		// accepted a fully spoofable X-Actor-ID header for audit attribution
+		// (issue #134).
+		allowHeader := config.IsDevOrE2E()
 		if os.Getenv("ALLOW_ACTOR_HEADER") != "true" || !allowHeader {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)

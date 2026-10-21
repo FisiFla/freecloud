@@ -310,6 +310,10 @@ All portal endpoints require the `self_service` permission (all authenticated us
 }
 ```
 
+**Units:** every rate-like field is a **ratio in the range 0–1**, not a
+percentage. `complianceRate` and `mfaCoveragePct` therefore share one
+convention, and clients should multiply by 100 to render a percentage.
+
 ### Admin
 
 | Method | Endpoint | Permission | Description |

@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -106,7 +107,13 @@ func OrgContextMiddleware(db OrgDB) func(http.Handler) http.Handler {
 			ctx := r.Context()
 			userID := claims.Sub
 
-			requestedOrg := r.Header.Get("X-Org-Id")
+			// Normalise the requested org id to lower case. Postgres renders
+			// uuid::TEXT in lower case, so the membership map is keyed by the
+			// lower-case form; an upper-case header value (which isValidOrgID
+			// accepts, since it is valid hex) would otherwise never match a
+			// membership, and the caller would be denied with "not a member of
+			// the requested organization" even though they are (issue #140).
+			requestedOrg := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Org-Id")))
 
 			memberships, err := loadMemberships(ctx, db, userID)
 			if err != nil {
@@ -168,6 +175,10 @@ func OrgContextMiddleware(db OrgDB) func(http.Handler) http.Handler {
 }
 
 // loadMemberships returns a map of org_id -> role for the given user.
+//
+// The org ids are lower-cased: Postgres renders uuid::TEXT in lower case, and
+// the X-Org-Id header is normalised the same way, so the two always match
+// regardless of the case the caller used (issue #140).
 func loadMemberships(ctx context.Context, db OrgDB, userID string) (map[string]string, error) {
 	memberships := make(map[string]string)
 	rows, err := db.Query(ctx,
@@ -183,7 +194,7 @@ func loadMemberships(ctx context.Context, db OrgDB, userID string) (map[string]s
 		if err := rows.Scan(&orgID, &role); err != nil {
 			return nil, err
 		}
-		memberships[orgID] = role
+		memberships[strings.ToLower(orgID)] = role
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

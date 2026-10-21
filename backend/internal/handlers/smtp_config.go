@@ -7,9 +7,11 @@ package handlers
 // Keycloak (password-reset, MFA) use the organisation's mail relay.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/mail"
 	"net/smtp"
 	"strings"
 	"time"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/FisiFla/freecloud/backend/internal/notify"
 )
 
 // SMTPConfigResponse is returned by GET /api/v1/settings/smtp.
@@ -85,6 +88,16 @@ func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// SMTP password write modes used by UpsertSMTPConfig.
+const (
+	// smtpPasswordSet stores the supplied (encrypted) password.
+	smtpPasswordSet = iota
+	// smtpPasswordKeep leaves the stored password untouched.
+	smtpPasswordKeep
+	// smtpPasswordClear removes the stored password.
+	smtpPasswordClear
+)
+
 // UpsertSMTPConfig saves SMTP connection settings and syncs them to Keycloak.
 // Route: PUT /api/v1/settings/smtp
 func (h *Handler) UpsertSMTPConfig(w http.ResponseWriter, r *http.Request) {
@@ -120,62 +133,132 @@ func (h *Handler) UpsertSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		req.Port = "587"
 	}
 
-	if pwEnc != nil {
-		_, err := h.db.Exec(ctx,
-			`INSERT INTO smtp_config (id, host, port, username, password_enc, password_hash, from_address, updated_at)
-			 VALUES (1, $1, $2, $3, $4, $5, $6, NOW())
-			 ON CONFLICT (id) DO UPDATE SET
-			     host = EXCLUDED.host,
-			     port = EXCLUDED.port,
-			     username = EXCLUDED.username,
-			     password_enc = EXCLUDED.password_enc,
-			     password_hash = EXCLUDED.password_hash,
-			     from_address = EXCLUDED.from_address,
-			     updated_at = NOW()`,
-			req.Host, req.Port, req.Username, pwEnc, pwHash, req.FromAddress,
-		)
-		if err != nil {
-			h.logger.Error("upsert smtp config: exec failed", zap.Error(err))
-			respondError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
-	} else {
-		_, err := h.db.Exec(ctx,
-			`INSERT INTO smtp_config (id, host, port, username, from_address, updated_at)
-			 VALUES (1, $1, $2, $3, $4, NOW())
-			 ON CONFLICT (id) DO UPDATE SET
-			     host = EXCLUDED.host,
-			     port = EXCLUDED.port,
-			     username = EXCLUDED.username,
-			     from_address = EXCLUDED.from_address,
-			     updated_at = NOW()`,
-			req.Host, req.Port, req.Username, req.FromAddress,
-		)
-		if err != nil {
-			h.logger.Error("upsert smtp config: exec (no-password) failed", zap.Error(err))
-			respondError(w, http.StatusInternalServerError, "internal error")
-			return
+	// Capture the previous row so a Keycloak failure can be compensated by
+	// restoring it — otherwise the DB and Keycloak end up describing two
+	// different relays.
+	prevHost, prevPort, prevUsername, prevFrom := "", "", "", ""
+	var prevPwEnc, prevPwHash *string
+	prevErr := h.db.QueryRow(ctx,
+		`SELECT host, port, username, from_address, password_enc, password_hash FROM smtp_config WHERE id = 1`,
+	).Scan(&prevHost, &prevPort, &prevUsername, &prevFrom, &prevPwEnc, &prevPwHash)
+	if prevErr != nil && !errors.Is(prevErr, pgx.ErrNoRows) {
+		h.logger.Error("upsert smtp config: read previous config failed", zap.Error(prevErr))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	// writeConfig persists the SMTP config. mode decides what happens to
+	// the stored password:
+	//   smtpPasswordSet   — store enc/hash (a new password was supplied),
+	//   smtpPasswordKeep  — leave the stored password untouched,
+	//   smtpPasswordClear — remove the stored password.
+	writeConfig := func(host, port, username, from string, enc, hash *string, mode int) error {
+		switch mode {
+		case smtpPasswordSet:
+			_, err := h.db.Exec(ctx,
+				`INSERT INTO smtp_config (id, host, port, username, password_enc, password_hash, from_address, updated_at)
+				 VALUES (1, $1, $2, $3, $4, $5, $6, NOW())
+				 ON CONFLICT (id) DO UPDATE SET
+				     host = EXCLUDED.host,
+				     port = EXCLUDED.port,
+				     username = EXCLUDED.username,
+				     password_enc = EXCLUDED.password_enc,
+				     password_hash = EXCLUDED.password_hash,
+				     from_address = EXCLUDED.from_address,
+				     updated_at = NOW()`,
+				host, port, username, enc, hash, from,
+			)
+			return err
+		case smtpPasswordClear:
+			_, err := h.db.Exec(ctx,
+				`INSERT INTO smtp_config (id, host, port, username, password_enc, password_hash, from_address, updated_at)
+				 VALUES (1, $1, $2, $3, NULL, NULL, $4, NOW())
+				 ON CONFLICT (id) DO UPDATE SET
+				     host = EXCLUDED.host,
+				     port = EXCLUDED.port,
+				     username = EXCLUDED.username,
+				     password_enc = NULL,
+				     password_hash = NULL,
+				     from_address = EXCLUDED.from_address,
+				     updated_at = NOW()`,
+				host, port, username, from,
+			)
+			return err
+		default:
+			_, err := h.db.Exec(ctx,
+				`INSERT INTO smtp_config (id, host, port, username, from_address, updated_at)
+				 VALUES (1, $1, $2, $3, $4, NOW())
+				 ON CONFLICT (id) DO UPDATE SET
+				     host = EXCLUDED.host,
+				     port = EXCLUDED.port,
+				     username = EXCLUDED.username,
+				     from_address = EXCLUDED.from_address,
+				     updated_at = NOW()`,
+				host, port, username, from,
+			)
+			return err
 		}
 	}
 
+	writeMode := smtpPasswordKeep
+	if pwEnc != nil {
+		writeMode = smtpPasswordSet
+	}
+	if err := writeConfig(req.Host, req.Port, req.Username, req.FromAddress, pwEnc, pwHash, writeMode); err != nil {
+		h.logger.Error("upsert smtp config: exec failed", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
 	// Mirror settings into Keycloak so its outbound emails use this relay.
+	//
+	// The realm SMTP password is only sent when one is actually configured:
+	// sending an EMPTY password would wipe the password Keycloak already
+	// holds while the DB kept the old one, silently breaking Keycloak's
+	// outbound mail (password reset, MFA). When the request carries no
+	// password, the stored one is re-sent so both sides stay in sync.
+	kcPassword := req.Password
+	if kcPassword == "" && prevPwEnc != nil && *prevPwEnc != "" {
+		plaintext, decErr := decryptProvisioningToken(*prevPwEnc)
+		if decErr != nil {
+			h.logger.Warn("upsert smtp config: decrypt stored password failed; keycloak password left untouched",
+				zap.Error(decErr))
+		} else {
+			kcPassword = plaintext
+		}
+	}
 	kcCfg := keycloak.SMTPConfig{
 		Host:     req.Host,
 		Port:     req.Port,
 		From:     req.FromAddress,
 		Auth:     req.Username != "",
 		User:     req.Username,
-		Password: req.Password,
+		Password: kcPassword,
 		SSL:      req.Port == "465",
 		StartTLS: req.Port == "587",
 	}
 	if kcErr := h.keycloak.UpdateRealmSMTP(ctx, kcCfg); kcErr != nil {
-		h.logger.Warn("upsert smtp config: keycloak update failed", zap.Error(kcErr))
-		// Best-effort — do not fail the whole request.
+		// Fail closed: the Keycloak realm is now out of sync with the DB, so
+		// the operator has to know. Restore the previous DB row so the two
+		// sides describe the same relay again.
+		h.logger.Error("upsert smtp config: keycloak update failed; restoring previous config", zap.Error(kcErr))
+		restoreMode := smtpPasswordKeep
+		if prevPwEnc != nil {
+			restoreMode = smtpPasswordSet
+		} else {
+			restoreMode = smtpPasswordClear
+		}
+		if restoreErr := writeConfig(prevHost, prevPort, prevUsername, prevFrom, prevPwEnc, prevPwHash, restoreMode); restoreErr != nil {
+			h.logger.Error("upsert smtp config: failed to restore previous config", zap.Error(restoreErr))
+		}
+		respondError(w, http.StatusInternalServerError, "failed to apply SMTP settings to the identity provider")
+		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "smtp_config.upsert", "smtp_config", "1",
-		map[string]interface{}{"host": req.Host, "port": req.Port, "password_updated": req.Password != ""})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "smtp_config.upsert", "smtp_config", "1",
+		map[string]interface{}{"host": req.Host, "port": req.Port, "password_updated": req.Password != ""}); err != nil {
+		h.logger.Warn("failed to write SMTP config audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"saved": true})
 }
@@ -196,6 +279,13 @@ func (h *Handler) TestSMTPEmail(w http.ResponseWriter, r *http.Request) {
 	req.To = strings.TrimSpace(req.To)
 	if req.To == "" {
 		respondError(w, http.StatusBadRequest, "to address is required")
+		return
+	}
+	// The message is assembled by raw string concatenation, so an address
+	// containing CR/LF would inject arbitrary SMTP headers (Bcc, Subject,
+	// ...). Reject anything that is not a plain mail address.
+	if err := validateSMTPTestRecipient(req.To); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid 'to' address: "+err.Error())
 		return
 	}
 
@@ -242,17 +332,52 @@ func (h *Handler) TestSMTPEmail(w http.ResponseWriter, r *http.Request) {
 		auth = smtp.PlainAuth("", username, password, host)
 	}
 
+	// The From address is operator-supplied configuration, but it lands in a
+	// raw header too — a CR/LF there would inject headers as well.
+	if err := notify.ValidateMailAddress(fromAddress); err != nil {
+		h.logger.Warn("test smtp email: configured from address is invalid", zap.Error(err))
+		respondJSON(w, http.StatusOK, map[string]interface{}{"sent": false, "error": "configured from address is invalid"})
+		return
+	}
+
 	body := "From: " + fromAddress + "\r\n" +
 		"To: " + req.To + "\r\n" +
 		"Subject: FreeCloud SMTP test\r\n" +
 		"\r\n" +
 		"This is a test email from FreeCloud to verify your SMTP configuration.\r\n"
 
-	sendErr := smtp.SendMail(addr, auth, fromAddress, []string{req.To}, []byte(body))
+	// notify.SendMail bounds the dial and the SMTP conversation by the
+	// request context, so a hung relay cannot pin this handler goroutine
+	// (net/smtp's SendMail had neither a timeout nor context support).
+	sendCtx, cancel := context.WithTimeout(ctx, smtpSendTimeout)
+	defer cancel()
+	sendErr := notify.SendMail(sendCtx, addr, auth, fromAddress, []string{req.To}, []byte(body))
 	if sendErr != nil {
+		h.logger.Warn("test smtp email: send failed", zap.Error(sendErr))
 		respondJSON(w, http.StatusOK, map[string]interface{}{"sent": false, "error": sendErr.Error()})
 		return
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{"sent": true})
+}
+
+// smtpSendTimeout bounds a single SMTP test send.
+const smtpSendTimeout = 15 * time.Second
+
+// validateSMTPTestRecipient rejects anything that is not a bare mail
+// address. A display name ("Alice <a@b.com>") is rejected as well: it would
+// have to be re-encoded into the To header, and the simple form is what the
+// rest of this codebase stores.
+func validateSMTPTestRecipient(addr string) error {
+	if strings.ContainsAny(addr, "\r\n") {
+		return errors.New("address must not contain a line break")
+	}
+	parsed, err := mail.ParseAddress(addr)
+	if err != nil {
+		return errors.New("not a valid mail address")
+	}
+	if parsed.Address != addr {
+		return errors.New("must be a bare mail address without a display name")
+	}
+	return nil
 }

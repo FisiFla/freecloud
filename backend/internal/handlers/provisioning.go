@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -32,11 +33,15 @@ import (
 
 // ProvisioningConfigRequest is the body for PUT /api/v1/apps/{appId}/provisioning.
 type ProvisioningConfigRequest struct {
-	Enabled       bool              `json:"enabled"`
-	ConnectorType string            `json:"connectorType"` // "scim", "slack", "github"
-	EndpointURL   string            `json:"endpointUrl,omitempty"`
-	BearerToken   string            `json:"bearerToken,omitempty"` // plaintext; encrypted at rest, never echoed back
-	AttributeMap  map[string]string `json:"attributeMap,omitempty"`
+	Enabled       bool   `json:"enabled"`
+	ConnectorType string `json:"connectorType"` // "scim", "slack", "github"
+	EndpointURL   string `json:"endpointUrl,omitempty"`
+	BearerToken   string `json:"bearerToken,omitempty"` // plaintext; encrypted at rest, never echoed back
+	// ClearBearerToken removes a previously stored bearer token. Without it
+	// an empty bearerToken means "keep the stored one", so there was no way
+	// to remove a token through the API.
+	ClearBearerToken bool              `json:"clearBearerToken,omitempty"`
+	AttributeMap     map[string]string `json:"attributeMap,omitempty"`
 }
 
 // ProvisioningConfigResponse is returned by GET and PUT provisioning config.
@@ -162,6 +167,11 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	if req.ClearBearerToken && req.BearerToken != "" {
+		respondError(w, http.StatusBadRequest, "bearerToken and clearBearerToken are mutually exclusive")
+		return
+	}
+
 	attrMapJSON := []byte(`{}`)
 	if len(req.AttributeMap) > 0 {
 		b, err := json.Marshal(req.AttributeMap)
@@ -197,31 +207,54 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	_, err := h.db.Exec(ctx,
-		`INSERT INTO app_provisioning_config
-		   (app_id, enabled, connector_type, endpoint_url, bearer_token_hash, bearer_token_enc, attribute_map, org_id)
-		 VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8)
-		 ON CONFLICT (app_id) DO UPDATE
-		   SET enabled         = EXCLUDED.enabled,
-		       connector_type  = EXCLUDED.connector_type,
-		       endpoint_url    = EXCLUDED.endpoint_url,
-		       bearer_token_hash = COALESCE(EXCLUDED.bearer_token_hash, app_provisioning_config.bearer_token_hash),
-		       bearer_token_enc  = COALESCE(EXCLUDED.bearer_token_enc,  app_provisioning_config.bearer_token_enc),
-		       attribute_map   = EXCLUDED.attribute_map,
-		       updated_at      = NOW()`,
-		appID, req.Enabled, req.ConnectorType, req.EndpointURL, tokenHash, tokenEnc, string(attrMapJSON), oc.OrgID,
-	)
+	// Upsert the config. Clearing the bearer token needs its own statement:
+	// the normal upsert keeps the stored token whenever the request does
+	// not carry a new one (COALESCE), so there was no way to remove it.
+	var err error
+	if req.ClearBearerToken {
+		_, err = h.db.Exec(ctx,
+			`INSERT INTO app_provisioning_config
+			   (app_id, enabled, connector_type, endpoint_url, bearer_token_hash, bearer_token_enc, attribute_map, org_id)
+			 VALUES ($1, $2, $3, NULLIF($4, ''), NULL, NULL, $5, $6)
+			 ON CONFLICT (app_id) DO UPDATE
+			   SET enabled           = EXCLUDED.enabled,
+			       connector_type    = EXCLUDED.connector_type,
+			       endpoint_url      = EXCLUDED.endpoint_url,
+			       bearer_token_hash = NULL,
+			       bearer_token_enc  = NULL,
+			       attribute_map     = EXCLUDED.attribute_map,
+			       updated_at        = NOW()`,
+			appID, req.Enabled, req.ConnectorType, req.EndpointURL, string(attrMapJSON), oc.OrgID,
+		)
+	} else {
+		_, err = h.db.Exec(ctx,
+			`INSERT INTO app_provisioning_config
+			   (app_id, enabled, connector_type, endpoint_url, bearer_token_hash, bearer_token_enc, attribute_map, org_id)
+			 VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8)
+			 ON CONFLICT (app_id) DO UPDATE
+			   SET enabled         = EXCLUDED.enabled,
+			       connector_type  = EXCLUDED.connector_type,
+			       endpoint_url    = EXCLUDED.endpoint_url,
+			       bearer_token_hash = COALESCE(EXCLUDED.bearer_token_hash, app_provisioning_config.bearer_token_hash),
+			       bearer_token_enc  = COALESCE(EXCLUDED.bearer_token_enc,  app_provisioning_config.bearer_token_enc),
+			       attribute_map   = EXCLUDED.attribute_map,
+			       updated_at      = NOW()`,
+			appID, req.Enabled, req.ConnectorType, req.EndpointURL, tokenHash, tokenEnc, string(attrMapJSON), oc.OrgID,
+		)
+	}
 	if err != nil {
 		h.logger.Error("upsert provisioning config: exec failed", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to save provisioning config")
 		return
 	}
-
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning_config.upsert", "app", appID, map[string]interface{}{
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning_config.upsert", "app", appID, map[string]interface{}{
 		"enabled":        req.Enabled,
 		"connector_type": req.ConnectorType,
 		"token_changed":  req.BearerToken != "",
-	})
+		"token_cleared":  req.ClearBearerToken,
+	}); err != nil {
+		h.logger.Warn("failed to write provisioning config audit log", zap.Error(err))
+	}
 	if h.provisionEngine != nil {
 		if err := ReloadProvisioningConnectors(ctx, h.provisionEngine, h.db, h.logger); err != nil {
 			h.logger.Warn("upsert provisioning config: reload connectors failed", zap.Error(err))
@@ -229,7 +262,7 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 	}
 
 	tokenConfigured := tokenHash != nil
-	if !tokenConfigured {
+	if !tokenConfigured && !req.ClearBearerToken {
 		var savedHash *string
 		if err := h.db.QueryRow(ctx,
 			`SELECT bearer_token_hash FROM app_provisioning_config WHERE app_id = $1`,
@@ -254,6 +287,10 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 }
 
 // ListProvisioningState returns per-user provisioning state for an app.
+//
+// The list is bounded (limit default and maximum 1000, plus an offset) —
+// every provisioned user of every app would otherwise be materialised in
+// memory for a single request.
 func (h *Handler) ListProvisioningState(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
 	if err := ValidateUserID(appID); err != nil {
@@ -268,14 +305,17 @@ func (h *Handler) ListProvisioningState(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	limit, offset := listPageParams(r, maxListLimit)
+
 	rows, err := h.db.Query(r.Context(),
 		`SELECT ps.id::TEXT, ps.user_id::TEXT, COALESCE(u.email, ''), COALESCE(ps.remote_id, ''),
 		        ps.status, ps.last_sync_at, COALESCE(ps.last_error, ''), ps.retry_count, ps.next_retry_at
 		 FROM provisioning_state ps
 		 LEFT JOIN users u ON u.keycloak_user_id = ps.user_id
 		 WHERE ps.app_id = $1
-		 ORDER BY ps.updated_at DESC`,
-		appID,
+		 ORDER BY ps.updated_at DESC
+		 LIMIT $2 OFFSET $3`,
+		appID, limit, offset,
 	)
 	if err != nil {
 		h.logger.Error("list provisioning state: query failed", zap.Error(err))
@@ -365,8 +405,10 @@ func (h *Handler) ResyncUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning.resync", "user", userID,
-		map[string]interface{}{"app_id": appID})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning.resync", "user", userID,
+		map[string]interface{}{"app_id": appID}); err != nil {
+		h.logger.Warn("failed to write provisioning resync audit log", zap.Error(err))
+	}
 
 	capturedAppID := appID
 	capturedUser := provisioning.ProvisionableUser{
@@ -485,8 +527,10 @@ func (h *Handler) DryRunProvisioning(w http.ResponseWriter, r *http.Request) {
 	}
 	payload := provisioning.ApplyAttributeMap(user, attrMap)
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning.dry_run", "app", appID,
-		map[string]interface{}{"user_id": req.UserID})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning.dry_run", "app", appID,
+		map[string]interface{}{"user_id": req.UserID}); err != nil {
+		h.logger.Warn("failed to write provisioning dry-run audit log", zap.Error(err))
+	}
 
 	respondJSON(w, http.StatusOK, DryRunProvisioningResponse{
 		UserID:        req.UserID,
@@ -535,8 +579,10 @@ func (h *Handler) ReconcileAllHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_ = h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning.reconcile_all", "app", appID,
-		map[string]interface{}{})
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "provisioning.reconcile_all", "app", appID,
+		map[string]interface{}{}); err != nil {
+		h.logger.Warn("failed to write provisioning reconcile-all audit log", zap.Error(err))
+	}
 
 	go func() {
 		reconcileCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -620,8 +666,38 @@ func encryptProvisioningToken(plaintext string) (string, error) {
 	return base64.StdEncoding.EncodeToString(ciphertext), nil
 }
 
+// provisioningMasterKeyB64 holds the RESOLVED PROVISIONING_MASTER_KEY — i.e.
+// the value produced by config's _FILE / _VAULT_PATH / plain-env resolution —
+// injected once at startup by SetProvisioningMasterKey. It is stored in an
+// atomic.Value because the encrypt/decrypt helpers that use it are package
+// level functions reached from several handlers.
+var provisioningMasterKeyB64 atomic.Value // string
+
+// SetProvisioningMasterKey injects the resolved PROVISIONING_MASTER_KEY.
+//
+// This exists so the key that config.Validate() checks is the same key that
+// actually encrypts and decrypts stored connector credentials. Reading the
+// plain environment variable here (instead of the resolved value) meant a
+// deployment that followed the documented secret-management path —
+// PROVISIONING_MASTER_KEY_FILE pointing at a mounted secret — passed
+// startup validation and then failed every encrypt/decrypt at runtime,
+// because the handler could only see the (unset) environment variable.
+func SetProvisioningMasterKey(keyB64 string) {
+	provisioningMasterKeyB64.Store(keyB64)
+}
+
+// resolvedProvisioningMasterKey returns the injected key when one was
+// provided, falling back to the plain environment variable for development,
+// tests and any caller that has not wired the setter.
+func resolvedProvisioningMasterKey() string {
+	if v, ok := provisioningMasterKeyB64.Load().(string); ok && v != "" {
+		return v
+	}
+	return os.Getenv("PROVISIONING_MASTER_KEY")
+}
+
 func provisioningMasterKey() ([]byte, error) {
-	keyB64 := os.Getenv("PROVISIONING_MASTER_KEY")
+	keyB64 := resolvedProvisioningMasterKey()
 	if keyB64 == "" {
 		env := os.Getenv("APP_ENV")
 		if env == "development" || env == "test" {
@@ -641,14 +717,21 @@ func provisioningMasterKey() ([]byte, error) {
 // super-admin cannot point provisioning at the cloud IMDS or internal
 // compose services (confused-deputy SSRF).
 func validateOutboundEndpointURL(raw string) error {
+	return validateOutboundURL("endpointUrl", raw)
+}
+
+// validateOutboundURL is the shared SSRF guard for operator-supplied
+// outbound URLs. field names the request field so the error message points
+// at the offending input.
+func validateOutboundURL(field, raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || u.Host == "" {
-		return fmt.Errorf("endpointUrl must be a valid absolute URL")
+		return fmt.Errorf("%s must be a valid absolute URL", field)
 	}
 	scheme := strings.ToLower(u.Scheme)
 	host := u.Hostname()
 	if host == "" {
-		return fmt.Errorf("endpointUrl must include a host")
+		return fmt.Errorf("%s must include a host", field)
 	}
 	devOrTest := os.Getenv("APP_ENV") == "development" || os.Getenv("APP_ENV") == "test"
 	switch scheme {
@@ -657,10 +740,10 @@ func validateOutboundEndpointURL(raw string) error {
 	case "http":
 		// HTTP only in development/test (compose mocks rarely terminate TLS).
 		if !devOrTest {
-			return fmt.Errorf("endpointUrl must use https")
+			return fmt.Errorf("%s must use https", field)
 		}
 	default:
-		return fmt.Errorf("endpointUrl scheme must be https")
+		return fmt.Errorf("%s scheme must be https", field)
 	}
 
 	// Block obvious metadata / internal hostnames without DNS.
@@ -668,13 +751,13 @@ func validateOutboundEndpointURL(raw string) error {
 	if lowerHost == "metadata.google.internal" ||
 		strings.HasSuffix(lowerHost, ".internal") ||
 		lowerHost == "metadata" {
-		return fmt.Errorf("endpointUrl host is not allowed")
+		return fmt.Errorf("%s host is not allowed", field)
 	}
 
 	// If host is a literal IP, check it directly.
 	if ip := net.ParseIP(host); ip != nil {
 		if isBlockedOutboundIP(ip) {
-			return fmt.Errorf("endpointUrl must not target a private or link-local address")
+			return fmt.Errorf("%s must not target a private or link-local address", field)
 		}
 		return nil
 	}
@@ -685,11 +768,11 @@ func validateOutboundEndpointURL(raw string) error {
 	ips, err := net.LookupIP(host)
 	if err != nil {
 		// Fail closed: cannot verify destination.
-		return fmt.Errorf("endpointUrl host could not be resolved")
+		return fmt.Errorf("%s host could not be resolved", field)
 	}
 	for _, ip := range ips {
 		if isBlockedOutboundIP(ip) {
-			return fmt.Errorf("endpointUrl must not target a private or link-local address")
+			return fmt.Errorf("%s must not target a private or link-local address", field)
 		}
 	}
 	return nil

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -201,4 +202,28 @@ func fakeCanonicalRow(args []any) fakeRow {
 // isCanonicalQuery reports whether sql is the audit canonicalisation query.
 func isCanonicalQuery(sql string) bool {
 	return strings.Contains(sql, "::jsonb)::text")
+}
+
+// orgScopedRows builds a pgx.Rows that contains ONLY the rows belonging to
+// the org the query asked for.
+//
+// It is a real filter, not a synthesiser: the caller must pass the org id the
+// query BOUND (not one it made up), and the SQL must actually constrain the
+// result by org. A handler that forgot its `WHERE org_id = $N` clause gets
+// no rows at all, so the test fails on the missing filter rather than
+// passing on a fake that invents the answer.
+//
+// The rows argument is a map of org id -> row values.
+func orgScopedRows(sql string, args []any, rows map[string][][]interface{}) (pgx.Rows, error) {
+	if !strings.Contains(sql, "org_id") {
+		return nil, fmt.Errorf("query is not org-scoped, it must filter on org_id: %s", sql)
+	}
+	if len(args) == 0 {
+		return nil, errors.New("org-scoped query bound no org id")
+	}
+	orgID, ok := args[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("org-scoped query bound a non-string org id: %T", args[0])
+	}
+	return &fakeQueryRows{rows: rows[orgID]}, nil
 }

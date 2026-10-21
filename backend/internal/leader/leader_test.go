@@ -218,3 +218,60 @@ func TestElectorRunOnlyExecutesWhenLeader(t *testing.T) {
 		t.Fatal("Run must execute fn once leadership is held")
 	}
 }
+
+// hangingConn is a PoolConn whose QueryRow blocks until the context is
+// cancelled, simulating an unresponsive Postgres.
+type hangingConn struct {
+	PoolConn
+	released chan struct{}
+}
+
+func (c *hangingConn) QueryRow(ctx context.Context, _ string, _ ...any) Row {
+	<-ctx.Done()
+	return fakeRow{val: false}
+}
+
+func (c *hangingConn) Release() {
+	select {
+	case <-c.released:
+	default:
+		close(c.released)
+	}
+}
+
+// TestReleaseIfLeaderUnlockTimesOut proves the advisory-lock unlock is
+// bounded: with context.Background() an unresponsive database blocked the
+// leader loop goroutine forever while holding a pooled connection
+// (issue #165).
+func TestReleaseIfLeaderUnlockTimesOut(t *testing.T) {
+	conn := &hangingConn{released: make(chan struct{})}
+	e := &Elector{
+		job:           "test-job",
+		lockID:        5,
+		logger:        zap.NewNop(),
+		conn:          conn,
+		unlockTimeout: 50 * time.Millisecond,
+	}
+	e.isLeader.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		e.releaseIfLeader()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("releaseIfLeader did not return — the unlock is unbounded")
+	}
+
+	select {
+	case <-conn.released:
+	case <-time.After(time.Second):
+		t.Fatal("expected the connection to be released")
+	}
+	if e.IsLeader() {
+		t.Error("expected leadership to be cleared")
+	}
+}

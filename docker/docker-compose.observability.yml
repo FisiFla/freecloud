@@ -1,25 +1,30 @@
 # docker-compose.observability.yml
 #
-# Observability add-on: Prometheus + Grafana.
+# Observability add-on: Prometheus + Grafana (+ blackbox exporter).
 # Overlay this on top of the production stack:
 #
+#   set -a && . .secrets/secrets.env && set +a
 #   docker compose \
 #     -f docker/docker-compose.prod.yml \
 #     -f docker/docker-compose.observability.yml \
 #     --env-file .env.prod \
 #     up -d
 #
-# Prometheus scrapes the backend's /metrics endpoint on the internal network.
-# Grafana is exposed on port 3100 (change GF_PORT in .env.prod to override).
-# The dashboard and alert rules are provisioned automatically from
-# docker/observability/.
+# (The secrets have to be in the shell environment: the production compose
+# resolves the database DSN at parse time and fails fast without it.)
 #
-# Network note: both services join the same Docker network as the backend so
-# Prometheus can reach backend:8080 without exposing /metrics publicly.
+# Prometheus scrapes the backend's /metrics endpoint and probes /readyz through
+# the blackbox exporter. Grafana is exposed on port 3100 (change GF_PORT in
+# .env.prod to override). The dashboard and alert rules are provisioned
+# automatically from docker/observability/.
+#
+# Network note: these services join the SAME default network as the backend
+# (both compose files belong to one project), so Prometheus can reach
+# backend:8080 without exposing /metrics publicly.
 
 services:
   prometheus:
-    image: prom/prometheus:v2.53.0
+    image: prom/prometheus:v2.53.0@sha256:075b1ba2c4ebb04bc3a6ab86c06ec8d8099f8fda1c96ef6d104d9bb1def1d8bc  # prometheus v2.53.0
     restart: unless-stopped
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
@@ -30,11 +35,21 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
       - "--web.enable-lifecycle"
-    networks:
-      - freecloud_internal
+    depends_on:
+      - blackbox-exporter
+
+  # Active blackbox probe for the readiness endpoint. Without it the
+  # ReadyzDown alert has no probe_success series to evaluate.
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0@sha256:b04a9fef4fa086a02fc7fcd8dcdbc4b7b35cc30cdee860fdc6a19dd8b208d63e  # blackbox-exporter v0.25.0
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/blackbox_exporter/config.yml"
+    volumes:
+      - ./observability/blackbox-exporter.yml:/etc/blackbox_exporter/config.yml:ro
 
   grafana:
-    image: grafana/grafana:11.1.0
+    image: grafana/grafana:11.1.0@sha256:079600c9517b678c10cda6006b4487d3174512fd4c6cface37df7822756ed7a5  # grafana 11.1.0
     restart: unless-stopped
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:?set GF_ADMIN_PASSWORD in .env.prod}
@@ -46,13 +61,7 @@ services:
       - ./observability/grafana-provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
-    networks:
-      - freecloud_internal
 
 volumes:
   prometheus_data:
   grafana_data:
-
-networks:
-  freecloud_internal:
-    external: true

@@ -32,6 +32,77 @@ func (h *Handler) requireDeviceInCallerOrg(w http.ResponseWriter, r *http.Reques
 	return h.requireResourceInCallerOrg(w, r, "devices", "fleet_host_id", deviceID, "device not found")
 }
 
+// requireDevicesInCallerOrg verifies that EVERY device in deviceIDs belongs
+// to the caller's active org, using a SINGLE query.
+//
+// It is the batched form of requireDeviceInCallerOrg: the per-device form
+// issued one query per host, so moving 500 hosts to a Fleet team cost 500
+// round trips.
+//
+// Writes the response and returns false on failure: no org context (403),
+// lookup error (500), or a device that does not exist / belongs to another
+// org (404 — the two are deliberately indistinguishable).
+func (h *Handler) requireDevicesInCallerOrg(w http.ResponseWriter, r *http.Request, deviceIDs []string) bool {
+	oc := middleware.GetOrgContext(r.Context())
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return false
+	}
+	if h.db == nil {
+		respondError(w, http.StatusInternalServerError, "database not available")
+		return false
+	}
+	if len(deviceIDs) == 0 {
+		return true
+	}
+
+	// Deduplicate so the number of matching rows can be compared with the
+	// number of requested hosts.
+	unique := make([]string, 0, len(deviceIDs))
+	seen := make(map[string]bool, len(deviceIDs))
+	for _, id := range deviceIDs {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		unique = append(unique, id)
+	}
+
+	rows, err := h.db.Query(r.Context(),
+		`SELECT fleet_host_id::TEXT FROM devices
+		 WHERE org_id = $1 AND fleet_host_id::TEXT = ANY($2::text[])`,
+		oc.OrgID, unique)
+	if err != nil {
+		h.logger.Error("device org check failed", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return false
+	}
+	defer rows.Close()
+
+	found := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			h.logger.Warn("device org check: scan failed", zap.Error(err))
+			continue
+		}
+		found++
+	}
+	if err := rows.Err(); err != nil {
+		h.logger.Error("device org check: iterate failed", zap.Error(err))
+		respondError(w, http.StatusInternalServerError, "internal error")
+		return false
+	}
+	if found != len(unique) {
+		// At least one host is unknown or belongs to another org. Both are
+		// reported as the same 404 so a caller cannot probe for foreign
+		// device IDs.
+		respondError(w, http.StatusNotFound, "device not found")
+		return false
+	}
+	return true
+}
+
 // RemoteLock issues a remote-lock command to the given Fleet host.
 // Route: POST /api/v1/devices/{id}/lock (requires PermManageDevices).
 func (h *Handler) RemoteLock(w http.ResponseWriter, r *http.Request) {

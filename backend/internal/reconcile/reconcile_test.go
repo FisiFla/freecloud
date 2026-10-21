@@ -9,6 +9,8 @@ import (
 	"github.com/Nerzal/gocloak/v13"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"go.uber.org/zap"
 
 	keycloakpkg "github.com/FisiFla/freecloud/backend/internal/keycloak"
@@ -305,4 +307,112 @@ func TestRunIgnoresNilAndEmptyIDUsers(t *testing.T) {
 	if len(result.OrphansInKeycloak) != 0 || len(result.OrphansInDB) != 0 {
 		t.Errorf("expected no drift (nil IDs ignored), got %+v", result)
 	}
+}
+
+// TestRunReturnsSortedDrift proves the drift lists are sorted: they are built
+// from map iteration, whose order Go randomises, so /api/v1/admin/drift
+// returned a different order on every call (issue #178).
+func TestRunReturnsSortedDrift(t *testing.T) {
+	r := New(
+		&fakeKC{users: kcUsers("kc-c", "kc-a", "kc-b")},
+		&fakePool{ids: []string{"db-c", "db-a", "db-b"}},
+		nopLogger(),
+	)
+	// Run repeatedly: map iteration order differs between runs, so a
+	// deterministic result requires the lists to be sorted.
+	for i := 0; i < 20; i++ {
+		result, err := r.Run(context.Background())
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		wantKC := []string{"kc-a", "kc-b", "kc-c"}
+		wantDB := []string{"db-a", "db-b", "db-c"}
+		if !equalStrings(result.OrphansInKeycloak, wantKC) {
+			t.Fatalf("run %d: orphans_in_keycloak: want %v, got %v", i, wantKC, result.OrphansInKeycloak)
+		}
+		if !equalStrings(result.OrphansInDB, wantDB) {
+			t.Fatalf("run %d: orphans_in_db: want %v, got %v", i, wantDB, result.OrphansInDB)
+		}
+	}
+}
+
+// equalStrings compares two string slices element by element.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestRunAndRecordUpdatesGaugesOnFailure proves a FAILED reconcile still
+// updates the metric state: previously the gauges kept their old values and
+// the last-run timestamp never moved, so a broken reconcile was
+// indistinguishable from a healthy one (issue #164).
+func TestRunAndRecordUpdatesGaugesOnFailure(t *testing.T) {
+	r := New(
+		&fakeKC{err: errors.New("keycloak down")},
+		&fakePool{ids: []string{"a"}},
+		nopLogger(),
+	)
+
+	// Start from a known-good state.
+	driftOrphansInKeycloak.Set(7)
+	driftOrphansInDB.Set(9)
+	reconcileLastRunFailed.Set(0)
+	before := lastRunTimestampValue(t)
+
+	r.runAndRecord(context.Background())
+
+	if got := gaugeValue(t, driftOrphansInKeycloak); got != driftUnknown {
+		t.Errorf("orphans_in_keycloak: want the failure sentinel %v, got %v", driftUnknown, got)
+	}
+	if got := gaugeValue(t, driftOrphansInDB); got != driftUnknown {
+		t.Errorf("orphans_in_db: want the failure sentinel %v, got %v", driftUnknown, got)
+	}
+	if got := gaugeValue(t, reconcileLastRunFailed); got != 1 {
+		t.Errorf("last_run_failed: want 1, got %v", got)
+	}
+	if after := lastRunTimestampValue(t); after <= before {
+		t.Errorf("the last-run timestamp must be bumped on failure: before=%v after=%v", before, after)
+	}
+}
+
+// TestRunAndRecordUpdatesGaugesOnSuccess proves a successful run clears the
+// failure flag and records the real drift counts.
+func TestRunAndRecordUpdatesGaugesOnSuccess(t *testing.T) {
+	r := New(
+		&fakeKC{users: kcUsers("a", "kc-only")},
+		&fakePool{ids: []string{"a"}},
+		nopLogger(),
+	)
+	reconcileLastRunFailed.Set(1)
+
+	r.runAndRecord(context.Background())
+
+	if got := gaugeValue(t, driftOrphansInKeycloak); got != 1 {
+		t.Errorf("orphans_in_keycloak: want 1, got %v", got)
+	}
+	if got := gaugeValue(t, driftOrphansInDB); got != 0 {
+		t.Errorf("orphans_in_db: want 0, got %v", got)
+	}
+	if got := gaugeValue(t, reconcileLastRunFailed); got != 0 {
+		t.Errorf("last_run_failed: want 0, got %v", got)
+	}
+}
+
+// gaugeValue reads the current value of a prometheus gauge.
+func gaugeValue(t *testing.T, g prometheus.Gauge) float64 {
+	t.Helper()
+	return testutil.ToFloat64(g)
+}
+
+// lastRunTimestampValue reads the current last-run timestamp.
+func lastRunTimestampValue(t *testing.T) float64 {
+	t.Helper()
+	return gaugeValue(t, lastRunTimestamp)
 }

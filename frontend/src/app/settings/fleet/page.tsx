@@ -121,10 +121,11 @@ export default function FleetConfigPage() {
 
             <div className="mt-4 space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                <label htmlFor="fleet-server-url" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                   Server URL
                 </label>
                 <input
+                  id="fleet-server-url"
                   type="text"
                   required
                   value={serverUrl}
@@ -135,7 +136,7 @@ export default function FleetConfigPage() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-slate-700 dark:text-slate-300">
+                <label htmlFor="fleet-api-token" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                   API Token
                 </label>
                 {config?.apiTokenConfigured && apiToken === "" && (
@@ -145,6 +146,7 @@ export default function FleetConfigPage() {
                   </p>
                 )}
                 <input
+                  id="fleet-api-token"
                   type="password"
                   value={apiToken}
                   onChange={(e) => { setApiToken(e.target.value); setSaveSuccess(false); }}
