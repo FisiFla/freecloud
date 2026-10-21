@@ -25,7 +25,7 @@ RUN mvn -q dependency:go-offline
 RUN mvn -q package -DskipTests
 
 # ---- Stage 2: Custom Keycloak image ----
-FROM quay.io/keycloak/keycloak:25.0@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2 AS keycloak
+FROM quay.io/keycloak/keycloak:26.8@sha256:79c623a22abacf3fe6c00a5fb30f5b7843d717b234033b80995891c06116d244 AS keycloak
 
 # Copy the shaded fat jar into Keycloak's providers directory.
 COPY --from=builder /build/target/keycloak-posture-authenticator-1.0.0.jar \
