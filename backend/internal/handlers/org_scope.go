@@ -12,12 +12,6 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/orgscope"
 )
 
-// resourceInOrg reports whether the resource belongs to orgID (see
-// orgscope.CheckResourceInOrg).
-func (h *Handler) resourceInOrg(ctx context.Context, table, idColumn, id, orgID string) (bool, error) {
-	return orgscope.CheckResourceInOrg(ctx, h.db, table, idColumn, id, orgID)
-}
-
 // requireResourceInCallerOrg is the shared "verify then 404" gate (see
 // orgscope.RequireResourceInCallerOrg).
 func (h *Handler) requireResourceInCallerOrg(w http.ResponseWriter, r *http.Request, table, idColumn, id, notFoundMsg string) bool {
