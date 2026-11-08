@@ -27,7 +27,7 @@ type RemoteLockResponse struct {
 // org before any device-scoped handler acts on it. Writes the response and
 // returns false on failure: no org context (403), lookup error (500), or
 // the device not existing/belonging to a different org (404 — the two are
-// deliberately indistinguishable, see resourceInOrg).
+// deliberately indistinguishable, see orgscope.CheckResourceInOrg).
 func (h *Handler) requireDeviceInCallerOrg(w http.ResponseWriter, r *http.Request, deviceID string) bool {
 	return h.requireResourceInCallerOrg(w, r, "devices", "fleet_host_id", deviceID, "device not found")
 }

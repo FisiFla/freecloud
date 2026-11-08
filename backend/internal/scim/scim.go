@@ -1,11 +1,14 @@
-// Package scim holds the dependency-free core of the SCIM 2.0 surface:
-// the filter grammar (filter.go), the static discovery endpoints
-// (discovery.go), and the shared schema URNs, Meta block and JSON
+// Package scim holds the SCIM 2.0 surface: the filter grammar
+// (filter.go), the static discovery endpoints (discovery.go), the
+// Users/Groups endpoints (users.go, groups.go) with their bearer
+// middleware, and the shared schema URNs, Meta block and JSON
 // responder. Extracted from internal/handlers per
-// docs/HANDLERS_OWNERSHIP.md step 3; the Users/Groups endpoints remain
-// in handlers (they need the persistOnboard seam) and reach this
-// package through the shims in handlers/scim_filter.go and
-// handlers/scim_discovery.go.
+// docs/HANDLERS_OWNERSHIP.md step 3 (3a: filter+discovery, 3b:
+// Users/Groups). The one dependency that stayed behind — the
+// onboarding saga write — crosses through the Host seam in
+// service.go, implemented on the handlers side by the shims in
+// handlers/scim.go; route registration still goes through those
+// delegating Handler methods.
 package scim
 
 import (
