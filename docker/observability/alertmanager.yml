@@ -1,0 +1,59 @@
+# Alertmanager routing for the Prometheus alert rules in alerts.yml.
+#
+# The stack evaluates rules in Prometheus (prometheus.yml `rule_files`), NOT
+# in Grafana-managed alerting (Grafana only provisions the dashboard and the
+# Prometheus datasource), so delivery goes Prometheus -> Alertmanager -> Slack.
+#
+# The Slack incoming-webhook URL is a secret and is NEVER written here.
+# Alertmanager reads it from the Docker secret mounted at
+# /run/secrets/slack_alert_webhook_url (the repo's <VAR>_FILE pattern):
+# set SLACK_ALERT_WEBHOOK_URL in .secrets/secrets.env, re-run
+# `make prod-secrets-init` to refresh .secrets/files/slack_alert_webhook_url,
+# then restart the observability overlay. See docs/OBSERVABILITY.md.
+#
+# When the secret file is empty (webhook unset), Alertmanager still starts
+# and evaluates routes; notifications to Slack simply fail in its log and
+# alerts stay visible in Prometheus/Grafana. No startup failure.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: slack-freecloud
+  # Group related alerts into one Slack message. The rules in alerts.yml
+  # carry only the `severity` label (critical|warning), so that is all
+  # routing keys on.
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers:
+        - severity = "critical"
+      receiver: slack-freecloud
+      group_wait: 10s
+      repeat_interval: 1h
+    - matchers:
+        - severity = "warning"
+      receiver: slack-freecloud
+
+inhibit_rules:
+  # CriticalErrorRate (>25% 5xx) implies HighErrorRate (>5% 5xx); only
+  # deliver the critical one.
+  - source_matchers:
+      - alertname = "CriticalErrorRate"
+    target_matchers:
+      - alertname = "HighErrorRate"
+
+receivers:
+  - name: slack-freecloud
+    slack_configs:
+      # No `channel:` on purpose: a Slack incoming webhook is already bound
+      # to the channel chosen when the webhook was created.
+      - api_url_file: /run/secrets/slack_alert_webhook_url
+        send_resolved: true
+        title: '[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} (severity: {{ .CommonLabels.severity }})'
+        text: >-
+          {{ range .Alerts }}{{ .Annotations.summary }}
+          {{ .Annotations.description }}
+          {{ end }}
