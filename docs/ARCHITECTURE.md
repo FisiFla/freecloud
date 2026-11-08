@@ -34,7 +34,7 @@ graph LR
 
 ### Go Backend (`backend/`)
 
-- **Language/framework:** Go 1.25+ with `go-chi/chi` router, `pgx/v5` for
+- **Language/framework:** Go 1.27+ with `go-chi/chi` router, `pgx/v5` for
   Postgres, `gocloak` for the Keycloak admin API, and `prometheus/client_golang`
   for metrics.
 - **Entry point:** `backend/cmd/server/main.go`

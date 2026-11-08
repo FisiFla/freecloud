@@ -5,7 +5,7 @@ Get FreeCloud running locally in under 5 minutes.
 ## Prerequisites
 
 - Docker 24+ with the Compose plugin (`docker compose version`)
-- Go 1.25+ and Node.js 26+ (only needed if you run the backend/frontend **outside** Docker)
+- Go 1.27+ and Node.js 26+ (only needed if you run the backend/frontend **outside** Docker)
 
 ## 1. Clone
 

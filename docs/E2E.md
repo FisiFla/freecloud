@@ -17,7 +17,7 @@ tagged `//go:build e2e` against the real backend.
 ## Prerequisites
 
 - Docker (>= 20.10) and docker compose plugin
-- Go 1.22+
+- Go 1.27+
 
 ## Running locally
 

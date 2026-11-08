@@ -1,5 +1,5 @@
-# golang 1.26.10-alpine
-FROM golang:1.26.10-alpine@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca AS builder
+# golang 1.27.3-alpine
+FROM golang:1.27.3-alpine@sha256:fa3d596898d9f126af7c01d14ee7597bab3f39cccf392ef36b69fe77cd681f18 AS builder
 WORKDIR /app
 COPY main.go .
 RUN CGO_ENABLED=0 go build -o scim-mock-e2e main.go

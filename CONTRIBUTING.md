@@ -20,7 +20,7 @@ cd backend && APP_ENV=development go run cmd/server/main.go
 cd frontend && npm ci && npm run dev
 ```
 
-Requires Go 1.25+, Node 26, and Docker.
+Requires Go 1.27+, Node 26, and Docker.
 
 ## Checks (run before opening a PR)
 
