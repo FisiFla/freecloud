@@ -216,8 +216,25 @@ func (f *FleetClient) GetHosts(ctx context.Context, query string) ([]Host, error
 		return []Host{}, nil
 	}
 
+	// Bound the host list so a pathological Fleet response cannot balloon
+	// memory or API response size. Real Fleet pages this endpoint; the
+	// bound keeps us safe regardless of upstream shape. Mirrors the
+	// MaxSoftwarePerHost guard in GetHostSoftware.
+	if len(result.Hosts) > MaxHosts {
+		zap.L().Warn("truncating fleet host list",
+			zap.Int("count", len(result.Hosts)),
+			zap.Int("max", MaxHosts),
+		)
+		return result.Hosts[:MaxHosts], nil
+	}
+
 	return result.Hosts, nil
 }
+
+// MaxHosts bounds the host list returned by GetHosts. It matches the
+// codebase-wide list bound (handlers' maxListLimit / MaxSoftwarePerHost)
+// while keeping responses bounded.
+const MaxHosts = 1000
 
 // validateHostID rejects host IDs that could traverse or inject into the URL
 // path segment. FleetDM host IDs are opaque tokens (UUIDs or numeric IDs).

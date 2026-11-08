@@ -41,6 +41,61 @@ func TestGetHosts_ParsesHosts(t *testing.T) {
 	}
 }
 
+// TestGetHosts_TruncatesOversizedList confirms the host list is bounded to
+// MaxHosts so pathological Fleet responses cannot balloon memory or API
+// response size. Mirrors TestGetHostSoftware_TruncatesOversizedList.
+func TestGetHosts_TruncatesOversizedList(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/fleet/hosts" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		// Return MaxHosts + 25 entries.
+		out := []string{}
+		for i := 0; i < MaxHosts+25; i++ {
+			out = append(out, fmt.Sprintf(`{"id":"host-%d","hostname":"h-%d"}`, i, i))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"hosts":[%s]}`, strings.Join(out, ","))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	hosts, err := c.GetHosts(context.Background(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hosts) != MaxHosts {
+		t.Fatalf("expected %d entries, got %d", MaxHosts, len(hosts))
+	}
+	// Truncation keeps the first MaxHosts entries, in order.
+	if hosts[0].ID != "host-0" || hosts[MaxHosts-1].ID != fmt.Sprintf("host-%d", MaxHosts-1) {
+		t.Fatalf("expected first %d hosts in order, got first=%q last=%q", MaxHosts, hosts[0].ID, hosts[MaxHosts-1].ID)
+	}
+}
+
+// TestGetHosts_AtCapNotTruncated confirms a list exactly at MaxHosts is
+// returned untouched.
+func TestGetHosts_AtCapNotTruncated(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		out := []string{}
+		for i := 0; i < MaxHosts; i++ {
+			out = append(out, fmt.Sprintf(`{"id":"host-%d"}`, i))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"hosts":[%s]}`, strings.Join(out, ","))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv)
+	hosts, err := c.GetHosts(context.Background(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(hosts) != MaxHosts {
+		t.Fatalf("expected %d entries, got %d", MaxHosts, len(hosts))
+	}
+}
+
 // TestGetHosts_EncodesQuery confirms the query is URL-escaped.
 func TestGetHosts_EncodesQuery(t *testing.T) {
 	var capturedQuery string
