@@ -416,6 +416,6 @@ Authentication: `Authorization: Bearer <SCIM_BEARER_TOKEN>`.
 | `API_PUBLIC_URL` | Full `https://` URL for the API (used as `NEXT_PUBLIC_API_URL` at build time) |
 | `KC_PUBLIC_URL` | Full `https://` URL for Keycloak |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Postgres credentials |
-| `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` | Keycloak bootstrap admin |
+| `KC_BOOTSTRAP_ADMIN_USERNAME` / `KC_BOOTSTRAP_ADMIN_PASSWORD` | Keycloak bootstrap admin |
 
 Generate secrets with: `openssl rand -base64 33`

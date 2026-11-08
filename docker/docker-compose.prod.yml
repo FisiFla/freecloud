@@ -88,7 +88,7 @@ services:
       - postgres_password
       - access_eval_token
     environment:
-      KEYCLOAK_ADMIN: admin
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
       # Keycloak has no <VAR>_FILE convention of its own: the image entrypoint
       # (docker/keycloak-entrypoint.sh) reads these files and exports the
       # values under the names Keycloak expects. The variables are not

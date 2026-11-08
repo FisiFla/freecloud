@@ -2,7 +2,7 @@
 # A2 (FCEX3-6) — Custom Keycloak image with the FreeCloud posture-check SPI.
 #
 # Stage 1: Build the fat JAR using Maven (Java 17).
-# Stage 2: Extend the official Keycloak 25 image, copy the JAR into providers/,
+# Stage 2: Extend the official Keycloak 26 image, copy the JAR into providers/,
 #          and run `kc.sh build` so Keycloak pre-compiles the provider at image
 #          build time rather than at every startup.
 #
@@ -25,7 +25,7 @@ RUN mvn -q dependency:go-offline
 RUN mvn -q package -DskipTests
 
 # ---- Stage 2: Custom Keycloak image ----
-FROM quay.io/keycloak/keycloak:25.0@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2 AS keycloak
+FROM quay.io/keycloak/keycloak:26.8@sha256:3879c623248408de29a5303178b5816c77e8dfef3890c361f8c0bbeaa979ba3b AS keycloak
 
 # Copy the shaded fat jar into Keycloak's providers directory.
 # --chown=1000:0 matches the Keycloak image's own uid/gid (the documented

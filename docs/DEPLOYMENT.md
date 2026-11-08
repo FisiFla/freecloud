@@ -295,7 +295,7 @@ line stays readable. The same convention is used in the Dockerfiles
 docker buildx imagetools inspect postgres:16-alpine --format '{{.Manifest.Digest}}'
 
 # quay.io / gcr.io
-docker buildx imagetools inspect quay.io/keycloak/keycloak:25.0 --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect quay.io/keycloak/keycloak:26.8 --format '{{.Manifest.Digest}}'
 ```
 
 Or, without Docker:
