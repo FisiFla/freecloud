@@ -1,19 +1,19 @@
-package handlers
+package scim
 
-// Tests for B2: SCIM filter parser (scim_filter.go).
+// Tests for B2: SCIM filter parser (filter.go).
 
 import (
 	"testing"
 )
 
-// ---- ParseSCIMFilter ----
+// ---- ParseFilter ----
 
 func TestParseSCIMFilter_Eq(t *testing.T) {
-	node := ParseSCIMFilter(`userName eq "alice@example.com"`)
+	node := ParseFilter(`userName eq "alice@example.com"`)
 	if node == nil {
 		t.Fatal("expected non-nil node")
 	}
-	if node.Op != scimOpEq {
+	if node.Op != OpEq {
 		t.Errorf("expected op eq, got %v", node.Op)
 	}
 	if node.Attr != "username" {
@@ -25,11 +25,11 @@ func TestParseSCIMFilter_Eq(t *testing.T) {
 }
 
 func TestParseSCIMFilter_Co(t *testing.T) {
-	node := ParseSCIMFilter(`userName co "ali"`)
+	node := ParseFilter(`userName co "ali"`)
 	if node == nil {
 		t.Fatal("expected non-nil node")
 	}
-	if node.Op != scimOpCo {
+	if node.Op != OpCo {
 		t.Errorf("expected op co, got %v", node.Op)
 	}
 	if node.Value != "ali" {
@@ -38,11 +38,11 @@ func TestParseSCIMFilter_Co(t *testing.T) {
 }
 
 func TestParseSCIMFilter_Sw(t *testing.T) {
-	node := ParseSCIMFilter(`emails.value sw "alice"`)
+	node := ParseFilter(`emails.value sw "alice"`)
 	if node == nil {
 		t.Fatal("expected non-nil node")
 	}
-	if node.Op != scimOpSw {
+	if node.Op != OpSw {
 		t.Errorf("expected op sw, got %v", node.Op)
 	}
 	if node.Attr != "emails.value" {
@@ -51,11 +51,11 @@ func TestParseSCIMFilter_Sw(t *testing.T) {
 }
 
 func TestParseSCIMFilter_Pr(t *testing.T) {
-	node := ParseSCIMFilter(`emails pr`)
+	node := ParseFilter(`emails pr`)
 	if node == nil {
 		t.Fatal("expected non-nil node")
 	}
-	if node.Op != scimOpPr {
+	if node.Op != OpPr {
 		t.Errorf("expected op pr, got %v", node.Op)
 	}
 	if node.Attr != "emails" {
@@ -64,11 +64,11 @@ func TestParseSCIMFilter_Pr(t *testing.T) {
 }
 
 func TestParseSCIMFilter_And(t *testing.T) {
-	node := ParseSCIMFilter(`userName eq "alice" and active eq "true"`)
+	node := ParseFilter(`userName eq "alice" and active eq "true"`)
 	if node == nil {
 		t.Fatal("expected non-nil node")
 	}
-	if node.Op != scimOpAnd {
+	if node.Op != OpAnd {
 		t.Errorf("expected op and, got %v", node.Op)
 	}
 	if node.Left == nil || node.Right == nil {
@@ -83,21 +83,21 @@ func TestParseSCIMFilter_And(t *testing.T) {
 }
 
 func TestParseSCIMFilter_Or(t *testing.T) {
-	node := ParseSCIMFilter(`userName eq "alice" or userName eq "bob"`)
+	node := ParseFilter(`userName eq "alice" or userName eq "bob"`)
 	if node == nil {
 		t.Fatal("expected non-nil node")
 	}
-	if node.Op != scimOpOr {
+	if node.Op != OpOr {
 		t.Errorf("expected op or, got %v", node.Op)
 	}
 }
 
 func TestParseSCIMFilter_Not(t *testing.T) {
-	node := ParseSCIMFilter(`not (active eq "true")`)
+	node := ParseFilter(`not (active eq "true")`)
 	if node == nil {
 		t.Fatal("expected non-nil node")
 	}
-	if node.Op != scimOpNot {
+	if node.Op != OpNot {
 		t.Errorf("expected op not, got %v", node.Op)
 	}
 	if node.Left == nil {
@@ -106,142 +106,142 @@ func TestParseSCIMFilter_Not(t *testing.T) {
 }
 
 func TestParseSCIMFilter_EmptyOrInvalid(t *testing.T) {
-	if ParseSCIMFilter("") != nil {
+	if ParseFilter("") != nil {
 		t.Error("empty string: expected nil")
 	}
-	if ParseSCIMFilter("bad") != nil {
+	if ParseFilter("bad") != nil {
 		t.Error("single token: expected nil")
 	}
 }
 
 func TestParseSCIMFilter_CaseInsensitiveOp(t *testing.T) {
-	node := ParseSCIMFilter(`userName EQ "alice"`)
+	node := ParseFilter(`userName EQ "alice"`)
 	if node == nil {
 		t.Fatal("expected non-nil node for uppercase EQ")
 	}
-	if node.Op != scimOpEq {
+	if node.Op != OpEq {
 		t.Errorf("expected op eq, got %v", node.Op)
 	}
 }
 
-// ---- SCIMFilterNode.Eval ----
+// ---- FilterNode.Eval ----
 
 func TestSCIMFilterNode_Eval_Eq(t *testing.T) {
-	node := &SCIMFilterNode{Attr: "username", Op: scimOpEq, Value: "alice"}
-	if !node.Eval(scimFilterEvalAttrs{"username": "alice"}) {
+	node := &FilterNode{Attr: "username", Op: OpEq, Value: "alice"}
+	if !node.Eval(EvalAttrs{"username": "alice"}) {
 		t.Error("expected match")
 	}
-	if node.Eval(scimFilterEvalAttrs{"username": "bob"}) {
+	if node.Eval(EvalAttrs{"username": "bob"}) {
 		t.Error("expected no match")
 	}
 }
 
 func TestSCIMFilterNode_Eval_EqCaseInsensitive(t *testing.T) {
-	node := &SCIMFilterNode{Attr: "username", Op: scimOpEq, Value: "Alice"}
-	if !node.Eval(scimFilterEvalAttrs{"username": "alice"}) {
+	node := &FilterNode{Attr: "username", Op: OpEq, Value: "Alice"}
+	if !node.Eval(EvalAttrs{"username": "alice"}) {
 		t.Error("eq should be case-insensitive")
 	}
 }
 
 func TestSCIMFilterNode_Eval_Ne(t *testing.T) {
-	node := &SCIMFilterNode{Attr: "active", Op: scimOpNe, Value: "true"}
-	if !node.Eval(scimFilterEvalAttrs{"active": "false"}) {
+	node := &FilterNode{Attr: "active", Op: OpNe, Value: "true"}
+	if !node.Eval(EvalAttrs{"active": "false"}) {
 		t.Error("expected ne match")
 	}
-	if node.Eval(scimFilterEvalAttrs{"active": "true"}) {
+	if node.Eval(EvalAttrs{"active": "true"}) {
 		t.Error("expected ne no-match")
 	}
 }
 
 func TestSCIMFilterNode_Eval_Co(t *testing.T) {
-	node := &SCIMFilterNode{Attr: "username", Op: scimOpCo, Value: "ali"}
-	if !node.Eval(scimFilterEvalAttrs{"username": "alice@example.com"}) {
+	node := &FilterNode{Attr: "username", Op: OpCo, Value: "ali"}
+	if !node.Eval(EvalAttrs{"username": "alice@example.com"}) {
 		t.Error("expected co match")
 	}
-	if node.Eval(scimFilterEvalAttrs{"username": "bob@example.com"}) {
+	if node.Eval(EvalAttrs{"username": "bob@example.com"}) {
 		t.Error("expected co no-match")
 	}
 }
 
 func TestSCIMFilterNode_Eval_Sw(t *testing.T) {
-	node := &SCIMFilterNode{Attr: "username", Op: scimOpSw, Value: "ali"}
-	if !node.Eval(scimFilterEvalAttrs{"username": "alice@example.com"}) {
+	node := &FilterNode{Attr: "username", Op: OpSw, Value: "ali"}
+	if !node.Eval(EvalAttrs{"username": "alice@example.com"}) {
 		t.Error("expected sw match")
 	}
-	if node.Eval(scimFilterEvalAttrs{"username": "xalice@example.com"}) {
+	if node.Eval(EvalAttrs{"username": "xalice@example.com"}) {
 		t.Error("expected sw no-match on non-prefix")
 	}
 }
 
 func TestSCIMFilterNode_Eval_Pr(t *testing.T) {
-	node := &SCIMFilterNode{Attr: "emails", Op: scimOpPr}
-	if !node.Eval(scimFilterEvalAttrs{"emails": "alice@example.com"}) {
+	node := &FilterNode{Attr: "emails", Op: OpPr}
+	if !node.Eval(EvalAttrs{"emails": "alice@example.com"}) {
 		t.Error("expected pr match when attr is set")
 	}
-	if node.Eval(scimFilterEvalAttrs{}) {
+	if node.Eval(EvalAttrs{}) {
 		t.Error("expected pr no-match when attr is absent")
 	}
 }
 
 func TestSCIMFilterNode_Eval_And(t *testing.T) {
-	left := &SCIMFilterNode{Attr: "username", Op: scimOpEq, Value: "alice"}
-	right := &SCIMFilterNode{Attr: "active", Op: scimOpEq, Value: "true"}
-	and := &SCIMFilterNode{Op: scimOpAnd, Left: left, Right: right}
+	left := &FilterNode{Attr: "username", Op: OpEq, Value: "alice"}
+	right := &FilterNode{Attr: "active", Op: OpEq, Value: "true"}
+	and := &FilterNode{Op: OpAnd, Left: left, Right: right}
 
-	if !and.Eval(scimFilterEvalAttrs{"username": "alice", "active": "true"}) {
+	if !and.Eval(EvalAttrs{"username": "alice", "active": "true"}) {
 		t.Error("expected and match")
 	}
-	if and.Eval(scimFilterEvalAttrs{"username": "alice", "active": "false"}) {
+	if and.Eval(EvalAttrs{"username": "alice", "active": "false"}) {
 		t.Error("expected and no-match when one side fails")
 	}
 }
 
 func TestSCIMFilterNode_Eval_Or(t *testing.T) {
-	left := &SCIMFilterNode{Attr: "username", Op: scimOpEq, Value: "alice"}
-	right := &SCIMFilterNode{Attr: "username", Op: scimOpEq, Value: "bob"}
-	or := &SCIMFilterNode{Op: scimOpOr, Left: left, Right: right}
+	left := &FilterNode{Attr: "username", Op: OpEq, Value: "alice"}
+	right := &FilterNode{Attr: "username", Op: OpEq, Value: "bob"}
+	or := &FilterNode{Op: OpOr, Left: left, Right: right}
 
-	if !or.Eval(scimFilterEvalAttrs{"username": "alice"}) {
+	if !or.Eval(EvalAttrs{"username": "alice"}) {
 		t.Error("expected or match for alice")
 	}
-	if !or.Eval(scimFilterEvalAttrs{"username": "bob"}) {
+	if !or.Eval(EvalAttrs{"username": "bob"}) {
 		t.Error("expected or match for bob")
 	}
-	if or.Eval(scimFilterEvalAttrs{"username": "charlie"}) {
+	if or.Eval(EvalAttrs{"username": "charlie"}) {
 		t.Error("expected or no-match for charlie")
 	}
 }
 
 func TestSCIMFilterNode_Eval_Not(t *testing.T) {
-	inner := &SCIMFilterNode{Attr: "active", Op: scimOpEq, Value: "true"}
-	not := &SCIMFilterNode{Op: scimOpNot, Left: inner}
+	inner := &FilterNode{Attr: "active", Op: OpEq, Value: "true"}
+	not := &FilterNode{Op: OpNot, Left: inner}
 
-	if !not.Eval(scimFilterEvalAttrs{"active": "false"}) {
+	if !not.Eval(EvalAttrs{"active": "false"}) {
 		t.Error("expected not match when inner is false")
 	}
-	if not.Eval(scimFilterEvalAttrs{"active": "true"}) {
+	if not.Eval(EvalAttrs{"active": "true"}) {
 		t.Error("expected not no-match when inner is true")
 	}
 }
 
 func TestSCIMFilterNode_Eval_Nil(t *testing.T) {
-	var n *SCIMFilterNode
-	if !n.Eval(scimFilterEvalAttrs{}) {
+	var n *FilterNode
+	if !n.Eval(EvalAttrs{}) {
 		t.Error("nil node should evaluate to true (no filter)")
 	}
 }
 
-// ---- ParseSCIMFilterPath ----
+// ---- ParseFilterPath ----
 
 func TestParseSCIMFilterPath_Members(t *testing.T) {
-	base, inner := ParseSCIMFilterPath(`members[value eq "user-abc"]`)
+	base, inner := ParseFilterPath(`members[value eq "user-abc"]`)
 	if base != "members" {
 		t.Errorf("expected base=members, got %q", base)
 	}
 	if inner == nil {
 		t.Fatal("expected inner filter node")
 	}
-	if inner.Op != scimOpEq {
+	if inner.Op != OpEq {
 		t.Errorf("expected op eq, got %v", inner.Op)
 	}
 	if inner.Value != "user-abc" {
@@ -250,14 +250,14 @@ func TestParseSCIMFilterPath_Members(t *testing.T) {
 }
 
 func TestParseSCIMFilterPath_Invalid(t *testing.T) {
-	base, inner := ParseSCIMFilterPath("members")
+	base, inner := ParseFilterPath("members")
 	if base != "" || inner != nil {
 		t.Error("expected empty result for plain path without brackets")
 	}
 }
 
 func TestParseSCIMFilterPath_EmailsFilter(t *testing.T) {
-	base, inner := ParseSCIMFilterPath(`emails[type eq "work"]`)
+	base, inner := ParseFilterPath(`emails[type eq "work"]`)
 	if base != "emails" {
 		t.Errorf("expected base=emails, got %q", base)
 	}
@@ -269,44 +269,44 @@ func TestParseSCIMFilterPath_EmailsFilter(t *testing.T) {
 	}
 }
 
-// ---- backward-compat shim (parseSCIMFilter) ----
+// ---- backward-compat shim (ParseFlatFilter) ----
 
 func TestParseSCIMFilterShim_Eq(t *testing.T) {
-	f := parseSCIMFilter(`userName eq "alice@example.com"`)
+	f := ParseFlatFilter(`userName eq "alice@example.com"`)
 	if f == nil {
 		t.Fatal("expected non-nil")
 	}
-	if f.attr != "username" {
-		t.Errorf("expected username, got %q", f.attr)
+	if f.Attr != "username" {
+		t.Errorf("expected username, got %q", f.Attr)
 	}
-	if f.op != "eq" {
-		t.Errorf("expected eq, got %q", f.op)
+	if f.Op != "eq" {
+		t.Errorf("expected eq, got %q", f.Op)
 	}
-	if f.value != "alice@example.com" {
-		t.Errorf("expected alice@example.com, got %q", f.value)
+	if f.Value != "alice@example.com" {
+		t.Errorf("expected alice@example.com, got %q", f.Value)
 	}
 }
 
 func TestParseSCIMFilterShim_And_ReturnsNil(t *testing.T) {
-	// Logical nodes can't map to the flat scimFilter struct.
-	f := parseSCIMFilter(`userName eq "alice" and active eq "true"`)
+	// Logical nodes can't map to the flat FlatFilter struct.
+	f := ParseFlatFilter(`userName eq "alice" and active eq "true"`)
 	if f != nil {
 		t.Errorf("expected nil for compound expression, got %+v", f)
 	}
 }
 
 func TestParseSCIMFilterShim_Co(t *testing.T) {
-	f := parseSCIMFilter(`emails.value co "example"`)
+	f := ParseFlatFilter(`emails.value co "example"`)
 	if f == nil {
 		t.Fatal("expected non-nil for co")
 	}
-	if f.op != "co" {
-		t.Errorf("expected op=co, got %q", f.op)
+	if f.Op != "co" {
+		t.Errorf("expected op=co, got %q", f.Op)
 	}
 }
 
 func TestParseSCIMFilterShim_Empty(t *testing.T) {
-	if parseSCIMFilter("") != nil {
+	if ParseFlatFilter("") != nil {
 		t.Error("expected nil for empty input")
 	}
 }

@@ -1,4 +1,4 @@
-package handlers
+package scim
 
 // Tests for B1: SCIM discovery endpoints (ServiceProviderConfig, ResourceTypes, Schemas).
 
@@ -10,26 +10,25 @@ import (
 )
 
 func TestSCIMServiceProviderConfig(t *testing.T) {
-	h := setupTestHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/scim/v2/ServiceProviderConfig", nil)
 	rec := httptest.NewRecorder()
-	h.SCIMServiceProviderConfig(rec, req)
+	ServiceProviderConfig(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if ct := rec.Header().Get("Content-Type"); ct != scimContentType {
-		t.Errorf("expected Content-Type %q, got %q", scimContentType, ct)
+	if ct := rec.Header().Get("Content-Type"); ct != ContentType {
+		t.Errorf("expected Content-Type %q, got %q", ContentType, ct)
 	}
 
-	var cfg scimSPConfig
+	var cfg SPConfig
 	if err := json.NewDecoder(rec.Body).Decode(&cfg); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
 
 	// Must include the SPC schema
-	if len(cfg.Schemas) == 0 || cfg.Schemas[0] != scimSPCSchema {
-		t.Errorf("expected schemas[0]=%q, got %v", scimSPCSchema, cfg.Schemas)
+	if len(cfg.Schemas) == 0 || cfg.Schemas[0] != SchemaServiceProviderConfig {
+		t.Errorf("expected schemas[0]=%q, got %v", SchemaServiceProviderConfig, cfg.Schemas)
 	}
 	// PATCH must be supported
 	if !cfg.Patch.Supported {
@@ -61,16 +60,15 @@ func TestSCIMServiceProviderConfig(t *testing.T) {
 }
 
 func TestSCIMResourceTypes(t *testing.T) {
-	h := setupTestHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/scim/v2/ResourceTypes", nil)
 	rec := httptest.NewRecorder()
-	h.SCIMResourceTypes(rec, req)
+	ResourceTypes(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp scimResourceTypesResponse
+	var resp ResourceTypesResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -84,8 +82,8 @@ func TestSCIMResourceTypes(t *testing.T) {
 		endpoint string
 		schema   string
 	}{
-		{"User", "/scim/v2/Users", scimUserSchema},
-		{"Group", "/scim/v2/Groups", scimGroupSchema},
+		{"User", "/scim/v2/Users", SchemaUser},
+		{"Group", "/scim/v2/Groups", SchemaGroup},
 	}
 	for i, tt := range tests {
 		if i >= len(resp.Resources) {
@@ -105,16 +103,15 @@ func TestSCIMResourceTypes(t *testing.T) {
 }
 
 func TestSCIMSchemas(t *testing.T) {
-	h := setupTestHandler(t)
 	req := httptest.NewRequest(http.MethodGet, "/scim/v2/Schemas", nil)
 	rec := httptest.NewRecorder()
-	h.SCIMSchemas(rec, req)
+	Schemas(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	var resp scimSchemasResponse
+	var resp SchemasResponse
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -125,17 +122,17 @@ func TestSCIMSchemas(t *testing.T) {
 	}
 
 	// Index by schema ID
-	byID := map[string]scimSchemaDefinition{}
+	byID := map[string]SchemaDefinition{}
 	for _, s := range resp.Resources {
 		byID[s.ID] = s
 	}
 
 	wantIDs := []string{
-		scimUserSchema,
-		scimGroupSchema,
-		scimSPCSchema,
-		scimResourceTypeSchema,
-		scimSchemaSchema,
+		SchemaUser,
+		SchemaGroup,
+		SchemaServiceProviderConfig,
+		SchemaResourceType,
+		SchemaSchema,
 	}
 	for _, id := range wantIDs {
 		if _, ok := byID[id]; !ok {
@@ -144,7 +141,7 @@ func TestSCIMSchemas(t *testing.T) {
 	}
 
 	// User schema must have userName as required attribute
-	userSchema := byID[scimUserSchema]
+	userSchema := byID[SchemaUser]
 	foundUserName := false
 	for _, attr := range userSchema.Attributes {
 		if attr.Name == "userName" {
@@ -160,7 +157,7 @@ func TestSCIMSchemas(t *testing.T) {
 	}
 
 	// Group schema must have displayName as required attribute
-	groupSchema := byID[scimGroupSchema]
+	groupSchema := byID[SchemaGroup]
 	foundDisplayName := false
 	for _, attr := range groupSchema.Attributes {
 		if attr.Name == "displayName" {
@@ -177,21 +174,20 @@ func TestSCIMSchemas(t *testing.T) {
 }
 
 func TestSCIMDiscoveryContentType(t *testing.T) {
-	h := setupTestHandler(t)
 	endpoints := []struct {
 		path    string
 		handler func(http.ResponseWriter, *http.Request)
 	}{
-		{"/scim/v2/ServiceProviderConfig", h.SCIMServiceProviderConfig},
-		{"/scim/v2/ResourceTypes", h.SCIMResourceTypes},
-		{"/scim/v2/Schemas", h.SCIMSchemas},
+		{"/scim/v2/ServiceProviderConfig", ServiceProviderConfig},
+		{"/scim/v2/ResourceTypes", ResourceTypes},
+		{"/scim/v2/Schemas", Schemas},
 	}
 	for _, e := range endpoints {
 		req := httptest.NewRequest(http.MethodGet, e.path, nil)
 		rec := httptest.NewRecorder()
 		e.handler(rec, req)
-		if ct := rec.Header().Get("Content-Type"); ct != scimContentType {
-			t.Errorf("%s: expected Content-Type=%q, got %q", e.path, scimContentType, ct)
+		if ct := rec.Header().Get("Content-Type"); ct != ContentType {
+			t.Errorf("%s: expected Content-Type=%q, got %q", e.path, ContentType, ct)
 		}
 	}
 }

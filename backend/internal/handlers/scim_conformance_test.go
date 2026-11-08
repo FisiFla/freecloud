@@ -27,6 +27,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/FisiFla/freecloud/backend/internal/scim"
 )
 
 // ---- test router ----
@@ -69,7 +70,7 @@ func authedRequest(t *testing.T, method, path string, body []byte) *http.Request
 	var req *http.Request
 	if body != nil {
 		req = httptest.NewRequest(method, path, bytes.NewReader(body))
-		req.Header.Set("Content-Type", scimContentType)
+		req.Header.Set("Content-Type", scim.ContentType)
 	} else {
 		req = httptest.NewRequest(method, path, nil)
 	}
@@ -102,11 +103,11 @@ func TestSCIMConformance_Discovery_ServiceProviderConfig(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	assertStatus(t, rec, http.StatusOK)
 
-	var cfg scimSPConfig
+	var cfg scim.SPConfig
 	mustDecode(t, rec.Body, &cfg)
 
-	if len(cfg.Schemas) == 0 || cfg.Schemas[0] != scimSPCSchema {
-		t.Errorf("expected schema %s, got %v", scimSPCSchema, cfg.Schemas)
+	if len(cfg.Schemas) == 0 || cfg.Schemas[0] != scim.SchemaServiceProviderConfig {
+		t.Errorf("expected schema %s, got %v", scim.SchemaServiceProviderConfig, cfg.Schemas)
 	}
 	if !cfg.Patch.Supported {
 		t.Error("expected patch.supported=true")
@@ -126,7 +127,7 @@ func TestSCIMConformance_Discovery_ResourceTypes(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	assertStatus(t, rec, http.StatusOK)
 
-	var resp scimResourceTypesResponse
+	var resp scim.ResourceTypesResponse
 	mustDecode(t, rec.Body, &resp)
 
 	if resp.TotalResults < 2 {
@@ -151,14 +152,14 @@ func TestSCIMConformance_Discovery_Schemas(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	assertStatus(t, rec, http.StatusOK)
 
-	var resp scimSchemasResponse
+	var resp scim.SchemasResponse
 	mustDecode(t, rec.Body, &resp)
 
 	ids := make(map[string]bool)
 	for _, s := range resp.Resources {
 		ids[s.ID] = true
 	}
-	for _, want := range []string{scimUserSchema, scimGroupSchema} {
+	for _, want := range []string{scim.SchemaUser, scim.SchemaGroup} {
 		if !ids[want] {
 			t.Errorf("Schemas missing %q", want)
 		}
@@ -335,7 +336,7 @@ func TestSCIMConformance_Users_CreateReturns201(t *testing.T) {
 	r, _, _ := newUserCRUDRouter(t)
 
 	body, _ := json.Marshal(SCIMUser{
-		Schemas:  []string{scimUserSchema},
+		Schemas:  []string{scim.SchemaUser},
 		UserName: "alice@example.com",
 		Name:     scimName{GivenName: "Alice", FamilyName: "Smith"},
 		Emails:   []scimEmail{{Value: "alice@example.com", Primary: true}},
@@ -351,8 +352,8 @@ func TestSCIMConformance_Users_CreateReturns201(t *testing.T) {
 	if user.UserName == "" {
 		t.Error("expected userName in response")
 	}
-	if len(user.Schemas) == 0 || user.Schemas[0] != scimUserSchema {
-		t.Errorf("expected scimUserSchema, got %v", user.Schemas)
+	if len(user.Schemas) == 0 || user.Schemas[0] != scim.SchemaUser {
+		t.Errorf("expected scim.SchemaUser, got %v", user.Schemas)
 	}
 }
 
@@ -498,7 +499,7 @@ func TestSCIMConformance_Users_ConflictOnDuplicate(t *testing.T) {
 	})
 
 	body, _ := json.Marshal(SCIMUser{
-		Schemas:  []string{scimUserSchema},
+		Schemas:  []string{scim.SchemaUser},
 		UserName: "dup@example.com",
 	})
 	req := authedRequest(t, http.MethodPost, "/scim/v2/Users", body)
@@ -583,7 +584,7 @@ func TestSCIMConformance_Groups_CreateReturns201(t *testing.T) {
 	r, _ := newGroupCRUDRouter(t)
 
 	body, _ := json.Marshal(SCIMGroup{
-		Schemas:     []string{scimGroupSchema},
+		Schemas:     []string{scim.SchemaGroup},
 		DisplayName: "Engineering",
 	})
 	req := authedRequest(t, http.MethodPost, "/scim/v2/Groups", body)
@@ -843,7 +844,7 @@ func TestSCIMConformance_Filter_UserNameCo(t *testing.T) {
 
 	var resp scimListResponse
 	mustDecode(t, rec.Body, &resp)
-	if resp.Schemas == nil || resp.Schemas[0] != scimListSchema {
+	if resp.Schemas == nil || resp.Schemas[0] != scim.SchemaListResponse {
 		t.Errorf("expected ListResponse schema, got %v", resp.Schemas)
 	}
 }
@@ -1120,7 +1121,7 @@ func TestSCIMConformance_ErrorShape_ConflictHasUniqueness(t *testing.T) {
 	})
 
 	body, _ := json.Marshal(SCIMUser{
-		Schemas:  []string{scimUserSchema},
+		Schemas:  []string{scim.SchemaUser},
 		UserName: "conflict@example.com",
 	})
 	req := authedRequest(t, http.MethodPost, "/scim/v2/Users", body)
