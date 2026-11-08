@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -55,6 +56,7 @@ func (r *emptyRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *emptyRows) Values() ([]any, error)                       { return nil, nil }
 func (r *emptyRows) RawValues() [][]byte                          { return nil }
 func (r *emptyRows) Conn() *pgx.Conn                              { return nil }
+func (r *emptyRows) TypeMap() *pgtype.Map                         { return pgtype.NewMap() }
 func (r *emptyRows) Scan(dest ...any) error                       { return pgx.ErrNoRows }
 
 // requestWithRole builds a request carrying the given RBAC role.
