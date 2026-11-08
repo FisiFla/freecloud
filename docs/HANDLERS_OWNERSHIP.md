@@ -8,7 +8,7 @@ treat these **ownership domains** as the unit of change and review:
 |---|---|---|
 | **Lifecycle** | `onboarding.go`, `bulk_onboarding.go`, `offboarding.go`, `enrollment.go` | Saga + Fleet callback; highest blast radius |
 | **Access / posture** | `access_eval.go`, `access_policy*.go`, `device_identity.go`, `device_check.go` | SPI-facing; signed cookies |
-| **SCIM** | `scim*.go` | Inbound Users/Groups; org-scoped tokens |
+| **SCIM** | `scim*.go`; filter+discovery in `internal/scim/` | Inbound Users/Groups; org-scoped tokens |
 | **Devices / MDM** | `device_actions.go`, `device_policy.go` | Fleet lock/wipe/teams; `fleet_team_orgs` |
 | **Apps / provisioning** | `apps.go`, `app_catalog.go`, `provisioning*.go` | Outbound connectors + SSRF allowlist |
 | **Governance** | `access_review.go`, `review_schedules.go`, `approvals.go`, `portal.go` | Campaigns + self-service |
@@ -17,9 +17,13 @@ treat these **ownership domains** as the unit of change and review:
 
 ## Split order (when ready)
 
-1. Extract `internal/httputil` (respondJSON, ValidationError) — zero domain deps.
-2. Extract `internal/orgscope` or keep helpers in handlers until call sites stabilize.
+1. ✅ Extract `internal/httputil` (respondJSON, ValidationError) — zero domain deps. *(16ad014)*
+2. ✅ Extract `internal/orgscope` or keep helpers in handlers until call sites stabilize. *(a9ff7ae)*
 3. Move SCIM to `internal/scim` last among big domains (most self-contained HTTP surface).
+   **Partial:** filter grammar + discovery endpoints moved to `internal/scim`
+   (`filter.go`, `discovery.go`, shared URNs/`Meta`/`Respond` in `scim.go`);
+   `handlers/scim_filter.go` + `handlers/scim_discovery.go` are delegating shims.
+   `scim.go` (Users/Groups) stays in handlers pending the `persistOnboard` seam.
 4. Keep `routes.go` in a thin `internal/api` or handlers root that imports domains.
 
 Do **not** split for its own sake while a domain still churns weekly.

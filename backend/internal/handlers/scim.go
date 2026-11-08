@@ -28,18 +28,14 @@ import (
 
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
+	"github.com/FisiFla/freecloud/backend/internal/scim"
 )
 
 // ---- SCIM JSON types ----
 
-// scimMeta is the SCIM resource metadata block.
-type scimMeta struct {
-	ResourceType string `json:"resourceType"`
-	Created      string `json:"created,omitempty"`
-	LastModified string `json:"lastModified,omitempty"`
-	Version      string `json:"version,omitempty"`
-	Location     string `json:"location,omitempty"`
-}
+// scimMeta is the SCIM resource metadata block (re-exported from
+// internal/scim).
+type scimMeta = scim.Meta
 
 // scimName is the SCIM User name sub-attribute.
 type scimName struct {
@@ -98,12 +94,12 @@ type scimPatchRequest struct {
 }
 
 const (
-	scimUserSchema  = "urn:ietf:params:scim:schemas:core:2.0:User"
-	scimGroupSchema = "urn:ietf:params:scim:schemas:core:2.0:Group"
-	scimListSchema  = "urn:ietf:params:scim:api:messages:2.0:ListResponse"
+	scimUserSchema  = scim.SchemaUser
+	scimGroupSchema = scim.SchemaGroup
+	scimListSchema  = scim.SchemaListResponse
 	scimPatchSchema = "urn:ietf:params:scim:api:messages:2.0:PatchOp"
 	scimErrorSchema = "urn:ietf:params:scim:api:messages:2.0:Error"
-	scimContentType = "application/scim+json"
+	scimContentType = scim.ContentType
 )
 
 // ---- helpers ----
@@ -120,9 +116,7 @@ func scimRespondError(w http.ResponseWriter, status int, detail, scimType string
 }
 
 func scimRespond(w http.ResponseWriter, status int, v interface{}) {
-	w.Header().Set("Content-Type", scimContentType)
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	scim.Respond(w, status, v)
 }
 
 func scimUserFromRow(id, email, firstName, lastName string, disabled bool, createdAt, updatedAt time.Time, version int64) SCIMUser {
@@ -229,10 +223,11 @@ func (h *Handler) SCIMOrgBearerMiddleware(db scimOrgTokenDB) func(http.Handler) 
 	}
 }
 
-// ---- filter types (implementation in scim_filter.go) ----
+// ---- filter types (grammar in internal/scim/filter.go) ----
 
 // scimFilter is the simple flat filter representation used by the list
-// handlers. ParseSCIMFilter in scim_filter.go produces it via the shim.
+// handlers. parseSCIMFilter in scim_filter.go produces it from
+// scim.FlatFilter via the shim.
 type scimFilter struct {
 	attr  string
 	op    string
