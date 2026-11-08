@@ -49,6 +49,11 @@ type fakeKC struct {
 
 	// A3: posture-flow execution ordering.
 	lowerPriorityCalls int32
+
+	// KC 26.8.2 kc-admin-api client scope.
+	kcAdminAPIScopeExists     bool
+	kcAdminAPIDefaultAssigned bool
+	addDefaultScopeCalls      int32
 }
 
 func newFakeKC(t *testing.T) *fakeKC {
@@ -143,6 +148,44 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusCreated)
 			return
 		}
+	}
+
+	// GET /admin/realms/freecloud/client-scopes
+	if p == "/admin/realms/freecloud/client-scopes" && m == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		if f.kcAdminAPIScopeExists {
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "kc-admin-api-scope-uuid", "name": "kc-admin-api", "protocol": "openid-connect"}})
+		} else {
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
+		}
+		return
+	}
+
+	// GET /admin/realms/freecloud/clients/svc-uuid/default-client-scopes
+	if p == "/admin/realms/freecloud/clients/svc-uuid/default-client-scopes" && m == http.MethodGet {
+		w.Header().Set("Content-Type", "application/json")
+		if f.kcAdminAPIDefaultAssigned {
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "kc-admin-api-scope-uuid", "name": "kc-admin-api", "protocol": "openid-connect"}})
+		} else {
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
+		}
+		return
+	}
+
+	// PUT /admin/realms/freecloud/clients/svc-uuid/default-client-scopes/{scopeID}
+	if strings.HasPrefix(p, "/admin/realms/freecloud/clients/svc-uuid/default-client-scopes/") && m == http.MethodPut {
+		atomic.AddInt32(&f.addDefaultScopeCalls, 1)
+		if strings.HasSuffix(p, "/kc-admin-api-scope-uuid") {
+			// Real KC answers this PUT idempotently; a 409 here also
+			// exercises the already-assigned tolerance in bootstrap.
+			if f.kcAdminAPIDefaultAssigned {
+				http.Error(w, `{"errorMessage":"Client scope is already assigned"}`, http.StatusConflict)
+				return
+			}
+			f.kcAdminAPIDefaultAssigned = true
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
 	}
 
 	// GET /admin/realms/freecloud/clients/svc-uuid/client-secret
@@ -717,5 +760,70 @@ func TestBootstrap_SecretOverridePinned(t *testing.T) {
 	}
 	if result.ServiceAccountSecret != pinned {
 		t.Errorf("expected pinned secret %q, got %q", pinned, result.ServiceAccountSecret)
+	}
+}
+
+// TestBootstrap_KCAdminAPIScope_AssignedAsDefaultWhenPresent verifies that
+// when the realm has the built-in kc-admin-api client scope (Keycloak
+// 26.8.2+), bootstrap assigns it as a DEFAULT scope of freecloud-service,
+// and that re-running bootstrap is a no-op success (idempotent). Without
+// the scope the service-account token lacks the admin audience and every
+// runtime Admin REST call fails with 401 on KC 26.8.2.
+func TestBootstrap_KCAdminAPIScope_AssignedAsDefaultWhenPresent(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	f.clientExists = true
+	f.clientSecret = "old-secret"
+	f.kcAdminAPIScopeExists = true
+
+	cfg := Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+	}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("first Run failed: %v", err)
+	}
+	if !f.kcAdminAPIDefaultAssigned {
+		t.Error("expected kc-admin-api to be assigned as a default client scope of freecloud-service")
+	}
+	if got := atomic.LoadInt32(&f.addDefaultScopeCalls); got != 1 {
+		t.Errorf("expected exactly 1 add-default-scope call, got %d", got)
+	}
+
+	// Second run must succeed without re-assigning (already a default scope).
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("second Run failed: %v", err)
+	}
+	if got := atomic.LoadInt32(&f.addDefaultScopeCalls); got != 1 {
+		t.Errorf("expected no additional add-default-scope call on re-run, got %d total", got)
+	}
+}
+
+// TestBootstrap_KCAdminAPIScope_AbsentIsNoOp verifies backward compatibility:
+// on Keycloak < 26.8.2 the realm has no kc-admin-api client scope, and
+// bootstrap must succeed without assigning anything.
+func TestBootstrap_KCAdminAPIScope_AbsentIsNoOp(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	f.clientExists = true
+	f.clientSecret = "old-secret"
+	f.kcAdminAPIScopeExists = false
+
+	if _, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+	}); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if got := atomic.LoadInt32(&f.addDefaultScopeCalls); got != 0 {
+		t.Errorf("expected no add-default-scope calls when kc-admin-api does not exist, got %d", got)
 	}
 }
