@@ -12,16 +12,6 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/scim"
 )
 
-const (
-	scimSPCSchema          = scim.SchemaServiceProviderConfig
-	scimResourceTypeSchema = scim.SchemaResourceType
-	scimSchemaSchema       = scim.SchemaSchema
-)
-
-// scimSPConfig is the ServiceProviderConfig response body (re-exported
-// from internal/scim for the conformance tests).
-type scimSPConfig = scim.SPConfig
-
 // SCIMServiceProviderConfig handles GET /scim/v2/ServiceProviderConfig.
 func (h *Handler) SCIMServiceProviderConfig(w http.ResponseWriter, r *http.Request) {
 	scim.ServiceProviderConfig(w, r)

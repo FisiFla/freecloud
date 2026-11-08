@@ -11,9 +11,6 @@ import "github.com/FisiFla/freecloud/backend/internal/scim"
 // internal/scim).
 type SCIMFilterNode = scim.FilterNode
 
-// scimFilterOp enumerates comparison and logical operators.
-type scimFilterOp = scim.FilterOp
-
 const (
 	scimOpEq  = scim.OpEq
 	scimOpNe  = scim.OpNe
@@ -24,14 +21,6 @@ const (
 	scimOpOr  = scim.OpOr
 	scimOpNot = scim.OpNot
 )
-
-// scimFilterEvalAttrs is a flat bag of attribute values the evaluator
-// looks up.
-type scimFilterEvalAttrs = scim.EvalAttrs
-
-// errSCIMLogicalFilter marks a filter that parses into a logical
-// expression (and/or/not), which the list handlers cannot evaluate.
-var errSCIMLogicalFilter = scim.ErrLogicalFilter
 
 // ParseSCIMFilter parses a SCIM filter string into an AST node. Returns
 // nil if the input is empty or unparseable.
@@ -57,7 +46,7 @@ func parseSCIMFilter(raw string) *scimFilter {
 }
 
 // parseSCIMFilterStrict is parseSCIMFilter but returns
-// errSCIMLogicalFilter for logical expressions, so the caller can answer
+// scim.ErrLogicalFilter for logical expressions, so the caller can answer
 // 400 invalidFilter instead of quietly dropping the filter.
 func parseSCIMFilterStrict(raw string) (*scimFilter, error) {
 	f, err := scim.ParseFlatFilterStrict(raw)
