@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
@@ -66,6 +67,7 @@ func (r *fakeAuditRows) Scan(dest ...any) error {
 func (r *fakeAuditRows) Values() ([]any, error) { return nil, nil }
 func (r *fakeAuditRows) RawValues() [][]byte    { return nil }
 func (r *fakeAuditRows) Conn() *pgx.Conn        { return nil }
+func (r *fakeAuditRows) TypeMap() *pgtype.Map   { return pgtype.NewMap() }
 
 // fakeDBWithQuery extends fakeDB to support Query.
 type fakeDBWithQuery struct {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // fakeRow is a minimal pgx.Row whose Scan delegates to a function.
@@ -38,6 +39,7 @@ func (r *fakeQueryRows) FieldDescriptions() []pgconn.FieldDescription { return n
 func (r *fakeQueryRows) Values() ([]interface{}, error)               { return nil, nil }
 func (r *fakeQueryRows) RawValues() [][]byte                          { return nil }
 func (r *fakeQueryRows) Conn() *pgx.Conn                              { return nil }
+func (r *fakeQueryRows) TypeMap() *pgtype.Map                         { return pgtype.NewMap() }
 func (r *fakeQueryRows) Scan(dest ...any) error {
 	if r.idx >= len(r.rows) {
 		return errors.New("no more rows")

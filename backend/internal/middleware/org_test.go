@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // orgDB is a minimal OrgDB whose membership query returns a fixed set of
@@ -52,6 +53,7 @@ func (r *orgRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
 func (r *orgRows) Values() ([]interface{}, error)               { return nil, nil }
 func (r *orgRows) RawValues() [][]byte                          { return nil }
 func (r *orgRows) Conn() *pgx.Conn                              { return nil }
+func (r *orgRows) TypeMap() *pgtype.Map                         { return pgtype.NewMap() }
 func (r *orgRows) Scan(dest ...any) error {
 	row := r.rows[r.pos]
 	r.pos++
