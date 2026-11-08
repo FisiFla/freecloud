@@ -28,8 +28,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.keycloak
     environment:
-      KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://postgres-e2e:5432/keycloak_e2e
       KC_DB_DATABASE: keycloak_e2e

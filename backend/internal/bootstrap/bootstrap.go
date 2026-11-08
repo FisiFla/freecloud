@@ -146,6 +146,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, err
 	}
 
+	if err := ensureServiceClientAdminAPIScope(ctx, gc, token, cfg, logger); err != nil {
+		return nil, err
+	}
+
 	if err := ensureDashboardClient(ctx, gc, token, cfg, logger); err != nil {
 		return nil, err
 	}
@@ -367,6 +371,72 @@ func ensureServiceClient(ctx context.Context, gc *gocloak.GoCloak, token string,
 	}
 	logger.Info("bootstrap: regenerated freecloud-service client secret")
 	return *cred.Value, nil
+}
+
+// kcAdminAPIScopeName is Keycloak's built-in client scope (26.8.2+) whose
+// audience mapper adds "<kc>/admin/realms/<realm>" to the token aud claim.
+// Since 26.8.2 the Admin REST API only accepts tokens carrying that audience.
+const kcAdminAPIScopeName = "kc-admin-api"
+
+// ensureServiceClientAdminAPIScope assigns the kc-admin-api client scope as a
+// DEFAULT client scope of the service client, when the realm has that scope.
+// Without it, the service-account token lacks the admin audience and every
+// runtime Admin REST call fails with 401 on Keycloak 26.8.2 (verified live:
+// assigning the scope as default turned Admin calls from 401 to 200).
+//
+// Backward compatible: on Keycloak < 26.8.2 the scope does not exist and this
+// is a no-op. Idempotent: an already-assigned scope is skipped, and an
+// already-assigned response from Keycloak is tolerated.
+func ensureServiceClientAdminAPIScope(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) error {
+	scopes, err := gc.GetClientScopes(ctx, token, cfg.TargetRealm)
+	if err != nil {
+		return fmt.Errorf("bootstrap: list client scopes: %w", err)
+	}
+	var scopeID string
+	for _, s := range scopes {
+		if s.Name != nil && *s.Name == kcAdminAPIScopeName && s.ID != nil {
+			scopeID = *s.ID
+			break
+		}
+	}
+	if scopeID == "" {
+		logger.Debug("bootstrap: kc-admin-api client scope not present (Keycloak < 26.8.2), skipping")
+		return nil
+	}
+
+	clientID := cfg.ServiceClientID
+	clients, err := gc.GetClients(ctx, token, cfg.TargetRealm, gocloak.GetClientsParams{ClientID: &clientID})
+	if err != nil {
+		return fmt.Errorf("bootstrap: list clients for kc-admin-api scope: %w", err)
+	}
+	if len(clients) == 0 || clients[0].ID == nil {
+		logger.Warn("bootstrap: service client not found, skipping kc-admin-api scope assignment")
+		return nil
+	}
+	clientUUID := *clients[0].ID
+
+	defaults, err := gc.GetClientsDefaultScopes(ctx, token, cfg.TargetRealm, clientUUID)
+	if err != nil {
+		return fmt.Errorf("bootstrap: list service client default scopes: %w", err)
+	}
+	for _, s := range defaults {
+		if s.ID != nil && *s.ID == scopeID {
+			logger.Info("bootstrap: kc-admin-api already a default scope of the service client")
+			return nil
+		}
+	}
+
+	if err := gc.AddDefaultScopeToClient(ctx, token, cfg.TargetRealm, clientUUID, scopeID); err != nil {
+		// Tolerate an already-assigned answer (race with another replica's
+		// bootstrap, or a Keycloak that reports the duplicate PUT as 409).
+		if strings.Contains(err.Error(), "409") || strings.Contains(strings.ToLower(err.Error()), "already") {
+			logger.Info("bootstrap: kc-admin-api scope already assigned to the service client")
+			return nil
+		}
+		return fmt.Errorf("bootstrap: assign kc-admin-api default scope to service client: %w", err)
+	}
+	logger.Info("bootstrap: assigned kc-admin-api as a default scope of the service client")
+	return nil
 }
 
 // readClientSecret reads the secret Keycloak currently has for a client.

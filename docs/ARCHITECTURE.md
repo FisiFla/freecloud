@@ -22,7 +22,7 @@ graph LR
     Browser --> Caddy["Caddy\n(TLS termination)"]
     Caddy --> Frontend["Next.js Frontend\n:3000"]
     Caddy --> Backend["Go Backend API\n:8080"]
-    Backend --> Keycloak["Keycloak 25+\n(Identity / SSO / SCIM)\n:8081"]
+    Backend --> Keycloak["Keycloak 26+\n(Identity / SSO / SCIM)\n:8081"]
     Backend --> FleetDM["FleetDM\n(MDM)\n:8082 dev / real prod"]
     Backend --> Postgres["PostgreSQL 16\n:5432"]
     FleetDM -.->|"POST /fleet/enrollment-callback\nHMAC-SHA256"| Backend

@@ -7,7 +7,7 @@ Unified, open-source identity and device management. A single pane of glass over
 - **Backend:** Go + Chi router + gocloak (Keycloak admin client)
 - **Frontend:** Next.js 16 (App Router) + React 19 + TypeScript + Tailwind CSS 4
 - **Database:** PostgreSQL 16
-- **Identity:** Keycloak 25+ (OIDC, SAML, SCIM)
+- **Identity:** Keycloak 26+ (OIDC, SAML, SCIM)
 - **MDM:** FleetDM
 - **Reverse proxy:** Caddy (production TLS termination)
 
