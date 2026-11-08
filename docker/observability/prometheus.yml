@@ -5,6 +5,14 @@ global:
 rule_files:
   - "alerts.yml"
 
+# Fired alerts go to Alertmanager (docker/observability/alertmanager.yml),
+# which routes them to Slack when the operator has configured the
+# slack_alert_webhook_url secret. See docs/OBSERVABILITY.md.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
 scrape_configs:
   - job_name: freecloud-backend
     # The backend exposes /metrics on the same port as the API.

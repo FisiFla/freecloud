@@ -22,6 +22,14 @@
 # Set DEVICE_COOKIE_SECRET in secrets.env by hand to rotate cookie signing
 # independently of the Fleet webhook. Hand-added keys are preserved.
 #
+# SLACK_ALERT_WEBHOOK_URL is likewise operator-managed and never generated.
+# Its per-key file (.secrets/files/slack_alert_webhook_url) is the Docker
+# secret the observability overlay's Alertmanager reads via api_url_file, so
+# this script mirrors the hand-added value (or an empty file when unset)
+# into that file on every run that rewrites the per-key files. Empty is
+# valid: Alertmanager starts and simply does not deliver to Slack.
+# See docs/OBSERVABILITY.md "Slack alert routing".
+#
 # KEYCLOAK_CLIENT_SECRET is absent: Epic A's bootstrap engine self-manages it.
 #
 # Rotation semantics (docs/DEPLOYMENT.md "Rotating secrets"):
@@ -84,6 +92,16 @@ for key in ${GENERATED_KEYS}; do
     files_ok=0
   fi
 done
+
+# The slack alert webhook file must exist and mirror the hand-added
+# SLACK_ALERT_WEBHOOK_URL value, so a missing or stale file also counts as
+# incomplete (this is what makes rotation work: edit secrets.env, re-run).
+slack_file="${SECRETS_DIR}/slack_alert_webhook_url"
+slack_current=""
+[ -f "${slack_file}" ] && slack_current=$(cat "${slack_file}")
+if [ ! -f "${slack_file}" ] || [ "${slack_current}" != "$(value_of SLACK_ALERT_WEBHOOK_URL)" ]; then
+  files_ok=0
+fi
 
 if [ -z "${missing}" ] && [ "${files_ok}" -eq 1 ]; then
   echo "[secrets-init] secrets.env already complete — skipping generation"
@@ -159,6 +177,14 @@ for key in ${GENERATED_KEYS}; do
   chmod 0444 "${tmp}"
   mv -f "${tmp}" "${SECRETS_DIR}/${lower}"
 done
+
+# Operator-managed slack alert webhook: mirror the hand-added value (or just
+# a newline when unset — see header) so the Alertmanager Docker secret in
+# docker-compose.observability.yml always resolves.
+slack_tmp="${SECRETS_DIR}/.slack_alert_webhook_url.tmp.$$"
+printf '%s\n' "$(value_of SLACK_ALERT_WEBHOOK_URL)" > "${slack_tmp}"
+chmod 0444 "${slack_tmp}"
+mv -f "${slack_tmp}" "${SECRETS_DIR}/slack_alert_webhook_url"
 
 chmod 600 "${SECRETS_FILE}"
 echo "[secrets-init] wrote ${SECRETS_FILE} and ${SECRETS_DIR}/<key>"

@@ -2,7 +2,15 @@
 
 FreeCloud exposes a Prometheus `/metrics` endpoint on the backend (same port as
 the API). The observability stack in `docker/` adds **Prometheus** (scraping +
-alert rules) and **Grafana** (pre-provisioned dashboard).
+alert rules), **Grafana** (pre-provisioned dashboard), and **Alertmanager**
+(delivers fired alerts to Slack; see [Slack alert routing](#slack-alert-routing)).
+
+Alert rules are evaluated by **Prometheus**, not by Grafana-managed alerting:
+`docker/observability/prometheus.yml` loads `docker/observability/alerts.yml`
+via `rule_files`, and Grafana only provisions the dashboard and the Prometheus
+datasource (`docker/observability/grafana-provisioning/`). Delivery therefore
+goes Prometheus → Alertmanager → Slack — a Grafana contact point alone would
+never see these rules fire.
 
 ## Metrics exposed by the backend
 
@@ -89,15 +97,18 @@ docker compose \
 # Grafana is on port 3100 (override with GF_PORT in .env.prod)
 ```
 
-The overlay adds three services:
+The overlay adds four services:
 
-- **prometheus** — scrapes `backend:8080/metrics` and the `/readyz` probe job
+- **prometheus** — scrapes `backend:8080/metrics` and the `/readyz` probe job,
+  evaluates `docker/observability/alerts.yml`
 - **blackbox-exporter** — actively probes `/readyz` (the `http_2xx` module in
   `docker/observability/blackbox-exporter.yml`); it is what produces the
   `probe_success` series the `ReadyzDown` alert evaluates
-- **grafana** — dashboard and alert rules
+- **alertmanager** — receives fired alerts from Prometheus and routes them to
+  Slack (see below); internal network only, no host port
+- **grafana** — the provisioned dashboard
 
-All three join the same default Compose network as the backend, so Prometheus
+All four join the same default Compose network as the backend, so Prometheus
 can reach `backend:8080` without exposing `/metrics` publicly.
 
 Grafana datasource (Prometheus at `http://prometheus:9090`) and the FreeCloud
@@ -110,18 +121,92 @@ dashboard are provisioned automatically from
 |---|---|---|
 | `GF_ADMIN_PASSWORD` | *(none — required)* | Grafana admin password. The compose file fails to start Grafana when it is unset, so there is no usable default; set a strong one. |
 | `GF_PORT` | `3100` | Host port for Grafana |
+| `SLACK_ALERT_WEBHOOK_URL` | *(unset — Slack delivery off)* | Slack incoming-webhook URL for **Alertmanager** delivery of the alerts above. This is a secret: set it in `.secrets/secrets.env` (hand-added key), **not** in `.env.prod`. It is separate from the backend's `NOTIFY_SLACK`/`SLACK_WEBHOOK_URL` in-app event notifications (see `docs/API.md`) — the two may point at the same or different channels. |
 
-## Connecting alert notifications
+## Slack alert routing
 
-Grafana supports Alertmanager, PagerDuty, Slack, and many other notification
-channels. After the stack is running:
+Fired alerts are delivered by **Alertmanager**
+(`docker/observability/alertmanager.yml`, the `alertmanager` service in
+`docker/docker-compose.observability.yml`). Prometheus forwards to it via the
+`alerting:` block in `docker/observability/prometheus.yml`. Do **not** set
+this up under Grafana **Alerting → Contact points**: those only apply to
+Grafana-managed rules, and FreeCloud's rules are Prometheus rules.
 
-1. Log into Grafana (`http://host:3100`, admin / GF_ADMIN_PASSWORD).
-2. Go to **Alerting → Contact points** and add your notification channel.
-3. Go to **Alerting → Notification policies** and route alerts to it.
+Routing in `alertmanager.yml` keys on the `severity` label the rules already
+carry (`critical` | `warning`): alerts are grouped by `alertname` + `severity`
+(one Slack message per group, title carries alert name + severity, body the
+rules' `summary`/`description` annotations), warnings repeat every 4h,
+criticals every 1h, resolved alerts send a follow-up, and `CriticalErrorRate`
+inhibits the redundant `HighErrorRate`.
 
-Alternatively, configure Alertmanager separately and point Prometheus at it
-by adding an `alerting` block to `docker/observability/prometheus.yml`.
+### Create the Slack incoming webhook (manual, once)
+
+1. In Slack: **Apps → Incoming Webhooks** (or create a Slack app and enable
+   *Incoming Webhooks*), add a webhook to the channel alerts should land in.
+   The webhook is bound to that channel, so `alertmanager.yml` sets no
+   channel override.
+2. Copy the URL (`https://hooks.slack.com/services/...`). Treat it as a
+   password — anyone with it can post to the channel. Never commit it and
+   never put it in `.env.prod` or `alertmanager.yml`.
+
+### Give the webhook to Alertmanager
+
+The URL reaches Alertmanager only as the Docker secret
+`slack_alert_webhook_url`, read via `api_url_file:
+"/run/secrets/slack_alert_webhook_url"` (the repo's `<VAR>_FILE` pattern):
+
+```bash
+# 1. Hand-add the secret (the generator preserves hand-added keys)
+echo 'SLACK_ALERT_WEBHOOK_URL=https://hooks.slack.com/services/REDACTED' \
+  >> .secrets/secrets.env
+
+# 2. Refresh the per-key secret files (.secrets/files/slack_alert_webhook_url)
+make prod-secrets-init
+
+# 3. (Re)start the stack with the observability overlay
+set -a && . .secrets/secrets.env && set +a
+docker compose \
+  -f docker/docker-compose.prod.yml \
+  -f docker/docker-compose.observability.yml \
+  --env-file .env.prod \
+  up -d
+```
+
+To rotate the webhook, replace the line in `.secrets/secrets.env` and repeat
+steps 2–3 (only the Alertmanager container needs to restart). To turn Slack
+delivery off, remove the line and repeat steps 2–3.
+
+**Unset is safe.** `make prod-secrets-init` always writes
+`.secrets/files/slack_alert_webhook_url` (empty when no webhook is set), and
+Alertmanager starts normally with an empty `api_url_file`: alerts still fire
+and group in Alertmanager/Prometheus/Grafana, Slack sends just fail in
+Alertmanager's log. Nothing else in the stack depends on the webhook.
+
+### Verify with a test alert
+
+Send a synthetic alert straight to Alertmanager (bypasses Prometheus, does
+not disturb the backend), from inside the container since Alertmanager has
+no host port:
+
+```bash
+docker compose \
+  -f docker/docker-compose.prod.yml \
+  -f docker/docker-compose.observability.yml \
+  --env-file .env.prod \
+  exec alertmanager amtool alert add TestAlert severity=warning \
+    --annotation='summary="FreeCloud test alert"' \
+    --annotation='description="Synthetic alert from amtool; safe to ignore."' \
+    --alertmanager.url=http://localhost:9093
+```
+
+A message should appear in the Slack channel within ~30s (`group_wait`). List
+what Alertmanager currently holds with
+`exec alertmanager amtool alert query --alertmanager.url=http://localhost:9093`,
+and check `docker compose ... logs alertmanager` if nothing arrives.
+
+Other receivers (PagerDuty, e-mail, …) can be added as extra Alertmanager
+receivers/routes in `docker/observability/alertmanager.yml` the same way;
+keep every credential in a `*_file` secret under `.secrets/`, never inline.
 
 ## Reconciliation drift endpoint
 
