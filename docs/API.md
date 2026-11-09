@@ -19,7 +19,7 @@ automatically.
 
 The backend validates:
 - JWT signature (against Keycloak's JWKS endpoint).
-- `iss` (issuer) — must match `KEYCLOAK_URL/realms/KEYCLOAK_REALM`.
+- `iss` (issuer) — must match `KEYCLOAK_URL/realms/KEYCLOAK_REALM` (or `KEYCLOAK_ISSUER_URL/realms/KEYCLOAK_REALM` when the split-horizon override is set).
 - `aud` (audience) — must match `KEYCLOAK_AUDIENCE`.
 
 ### API token fallback (service accounts)
@@ -361,7 +361,8 @@ Authentication: `Authorization: Bearer <SCIM_BEARER_TOKEN>`.
 | `APP_ENV` | `""` (treated as production) | — | Set to `development` to disable fail-closed checks locally |
 | `PORT` | `8080` | — | HTTP listen port |
 | `DATABASE_URL` | `postgres://freecloud:freecloud@localhost:5432/freecloud?sslmode=disable` | Yes | PostgreSQL DSN — must use `sslmode=require` or stronger in production |
-| `KEYCLOAK_URL` | `http://localhost:8081` | Yes | Keycloak base URL |
+| `KEYCLOAK_URL` | `http://localhost:8081` | Yes | Keycloak base URL (JWKS/Admin/bootstrap calls) |
+| `KEYCLOAK_ISSUER_URL` | `""` | — | Public issuer origin when it differs from `KEYCLOAK_URL` (split-horizon dev stacks); expected `iss` becomes `KEYCLOAK_ISSUER_URL/realms/KEYCLOAK_REALM` |
 | `KEYCLOAK_REALM` | `freecloud` | — | Keycloak realm name |
 | `KEYCLOAK_CLIENT_ID` | `admin-cli` | Yes | Confidential service-account client (not `admin-cli`) |
 | `KEYCLOAK_CLIENT_SECRET` | `""` | Yes | Service-account client secret |

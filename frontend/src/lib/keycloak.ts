@@ -24,6 +24,78 @@ export const keycloakIssuer = requiredProdEnv(
   "http://localhost:8081/realms/freecloud",
 );
 
+/**
+ * Split-horizon Keycloak access (AUTH_KEYCLOAK_INTERNAL_URL).
+ *
+ * The issuer is a browser-facing URL (KC_HOSTNAME): browsers must reach
+ * it for the authorize redirect, and tokens carry it as `iss`. On the
+ * localhost dev stack that URL (http://localhost:8081) is NOT reachable
+ * from inside this container — localhost is the container itself — so
+ * every server-side OIDC call (discovery, token exchange, JWKS,
+ * refresh) failed with "fetch failed" and sign-in never completed.
+ *
+ * When AUTH_KEYCLOAK_INTERNAL_URL is set (e.g. http://keycloak:8080),
+ * server-side fetches whose origin exactly matches the issuer origin
+ * are rewritten to the internal origin. The discovery document still
+ * declares the public issuer, so iss validation is unaffected, and the
+ * authorization endpoint (a browser redirect, never fetched) stays
+ * public. Unset (prod, single public URL) → no rewriting anywhere.
+ */
+export function createKeycloakFetch(
+  issuer: string,
+  internalBase: string | undefined,
+  baseFetch: typeof fetch,
+): typeof fetch | undefined {
+  if (!internalBase) {
+    return undefined;
+  }
+  let issuerOrigin: string;
+  let internalOrigin: string;
+  try {
+    issuerOrigin = new URL(issuer).origin;
+    internalOrigin = new URL(internalBase).origin;
+  } catch {
+    return undefined;
+  }
+  if (issuerOrigin === "null" || internalOrigin === "null") {
+    return undefined;
+  }
+  const rewrite = (raw: string): string => {
+    const u = new URL(raw);
+    if (u.origin !== issuerOrigin) {
+      return raw;
+    }
+    return internalOrigin + u.pathname + u.search + u.hash;
+  };
+  return (input, init) => {
+    if (typeof input === "string") {
+      return baseFetch(rewrite(input), init);
+    }
+    if (input instanceof URL) {
+      return baseFetch(new URL(rewrite(input.toString())), init);
+    }
+    return baseFetch(new Request(rewrite(input.url), input), init);
+  };
+}
+
+// Resolve the global fetch at CALL time, never capture it at module
+// load: the runtime (and tests) may replace globalThis.fetch after
+// import, and the pre-existing refresh path always used the live one.
+const liveFetch: typeof fetch = (input, init) => fetch(input, init);
+
+/**
+ * The fetch Auth.js should use for Keycloak server-side calls, or
+ * undefined to keep the default global fetch (no internal URL set).
+ */
+export const keycloakCustomFetch: typeof fetch | undefined = createKeycloakFetch(
+  keycloakIssuer,
+  process.env.AUTH_KEYCLOAK_INTERNAL_URL,
+  liveFetch,
+);
+
+// Server-side fetch honouring the split-horizon rewrite (token refresh).
+const keycloakServerFetch: typeof fetch = keycloakCustomFetch ?? liveFetch;
+
 /** The token fields the refresh flow reads and writes. */
 export interface RefreshableToken {
   accessToken?: string;
@@ -63,7 +135,7 @@ export async function refreshAccessToken(
     return t;
   }
   try {
-    const res = await fetch(`${keycloakIssuer}/protocol/openid-connect/token`, {
+    const res = await keycloakServerFetch(`${keycloakIssuer}/protocol/openid-connect/token`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({

@@ -39,9 +39,15 @@ const deviceCookieKeyLabel = "freecloud/device-cookie/v1"
 
 // Config holds application configuration loaded from environment variables.
 type Config struct {
-	Port                 string
-	DatabaseURL          string
-	KeycloakURL          string
+	Port        string
+	DatabaseURL string
+	KeycloakURL string
+	// KeycloakIssuerURL optionally overrides the expected JWT issuer
+	// base URL when tokens carry a public iss (KC_HOSTNAME) that
+	// differs from the internal KEYCLOAK_URL used for JWKS/Admin calls
+	// (split-horizon, e.g. the localhost dev stack). Empty = derive
+	// the issuer from KeycloakURL (single-URL deployments: prod, e2e).
+	KeycloakIssuerURL    string
 	KeycloakRealm        string
 	KeycloakClientID     string
 	KeycloakClientSecret string
@@ -178,6 +184,7 @@ func Load() *Config {
 		Port:                  getEnv("PORT", "8080"),
 		DatabaseURL:           secrets.get("DATABASE_URL", defaultDatabaseURL),
 		KeycloakURL:           getEnv("KEYCLOAK_URL", defaultKeycloakURL),
+		KeycloakIssuerURL:     getEnv("KEYCLOAK_ISSUER_URL", ""),
 		KeycloakRealm:         getEnv("KEYCLOAK_REALM", "freecloud"),
 		KeycloakClientID:      getEnv("KEYCLOAK_CLIENT_ID", defaultKeycloakClientID),
 		KeycloakClientSecret:  secrets.get("KEYCLOAK_CLIENT_SECRET", ""),
@@ -342,6 +349,17 @@ func (c *Config) Validate() error {
 	// calls carrying an Authorization header.
 	if c.CORSOrigin == "*" {
 		add("CORS_ORIGIN must not be \"*\"; set the explicit dashboard origin (e.g. https://dashboard.example.com)")
+	}
+	// A malformed issuer override rejects every token as "invalid
+	// issuer" in ANY environment (its primary user is the development
+	// localhost stack), so it is validated before the env branch.
+	if c.KeycloakIssuerURL != "" {
+		u, perr := url.Parse(c.KeycloakIssuerURL)
+		if perr != nil || u.Scheme == "" || u.Host == "" {
+			add("KEYCLOAK_ISSUER_URL must be an absolute URL (e.g. http://localhost:8081)")
+		} else if u.Scheme != "https" && u.Scheme != "http" {
+			add("KEYCLOAK_ISSUER_URL must use the http or https scheme")
+		}
 	}
 
 	if env == "development" || env == "test" {

@@ -34,6 +34,11 @@ jobs:
         # Catches documented make targets that do not exist and env vars that
         # are documented but never reach a container.
         run: scripts/check-docs-consistency.sh
+      - name: Localhost issuer invariant
+        # The split-horizon OIDC wiring of the localhost stack (public
+        # iss vs internal Keycloak URLs) must stay self-consistent or
+        # browser sign-in silently breaks again.
+        run: scripts/check-localhost-issuer.sh
       - name: Keycloak SPI tests
         run: cd keycloak-authenticator && mvn test
       - name: Race detector

@@ -23,10 +23,20 @@
 #   http://localhost:8081   — Keycloak admin / OIDC
 #   http://localhost:8082   — FleetDM mock
 #
-# OIDC issuer note:
-#   KC_HOSTNAME=localhost + port 8081 exposed means the browser (OIDC redirects)
-#   and Next.js server-side token validation both use the same issuer URL:
-#   http://localhost:8081/realms/freecloud
+# OIDC issuer note (split-horizon — all three legs are required, and
+# scripts/check-localhost-issuer.sh guards the invariant in CI):
+#   Tokens carry iss=http://localhost:8081/realms/freecloud
+#   (URL-form KC_HOSTNAME, which pins it) because the BROWSER must reach the issuer
+#   for the authorize redirect. But "localhost" inside a container is
+#   the container itself, so server-side callers split off it:
+#   - frontend reaches Keycloak server-side via
+#     AUTH_KEYCLOAK_INTERNAL_URL=http://keycloak:8080 (fetch rewrite
+#     in lib/keycloak.ts; issuer string stays public for iss checks)
+#   - backend validates iss against KEYCLOAK_ISSUER_URL=
+#     http://localhost:8081 while fetching JWKS/Admin over the
+#     internal KEYCLOAK_URL=http://keycloak:8080
+#   Prod needs none of this: one public KC_PUBLIC_URL is resolvable
+#   from browsers and containers alike.
 
 services:
 
@@ -81,8 +91,13 @@ services:
       KC_DB_DATABASE: keycloak
       KC_DB_USERNAME: freecloud
       KC_DB_PASSWORD: freecloud-local
-      KC_HOSTNAME: localhost
-      KC_HOSTNAME_PORT: 8081
+      # URL form (not hostname+KC_HOSTNAME_PORT): the v1 two-var form
+      # leaves the issuer REQUEST-derived in start-dev, so a discovery
+      # fetch over the internal http://keycloak:8080 returns
+      # iss=http://localhost:8080/... and Auth.js rejects it as a
+      # mismatched issuer. The URL form pins iss + every endpoint to
+      # the public origin no matter which path served the request.
+      KC_HOSTNAME: http://localhost:8081
       ACCESS_EVAL_URL: http://backend:8080/api/v1/access/evaluate
       # ACCESS_EVAL_TOKEN: injected from .secrets/secrets.env
       POSTURE_CHECK_ENABLED: "false"
@@ -158,9 +173,12 @@ services:
       REDIS_URL: redis://redis:6379/0
       KC_BOOTSTRAP_ADMIN: admin
       KC_BOOTSTRAP_PASSWORD: admin-local
-      # Internal URL for bootstrap admin login; JWT issuer validation uses the
-      # issuer embedded in the token (http://localhost:8081/realms/freecloud).
+      # Internal URL for bootstrap/JWKS/Admin calls. Tokens carry the
+      # PUBLIC issuer (http://localhost:8081/realms/freecloud, from
+      # KC_HOSTNAME), so issuer validation needs the override below —
+      # without it every browser-issued token is a 401 "invalid issuer".
       KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_ISSUER_URL: http://localhost:8081
       KEYCLOAK_REALM: freecloud
       KEYCLOAK_CLIENT_ID: freecloud-service
       KEYCLOAK_AUDIENCE: freecloud-dashboard
@@ -205,6 +223,11 @@ services:
       # Dashboard client is public (PKCE flow, no client secret).
       AUTH_KEYCLOAK_SECRET: ""
       AUTH_KEYCLOAK_ISSUER: http://localhost:8081/realms/freecloud
+      # Server-side OIDC calls (discovery/token/JWKS/refresh) cannot use
+      # the public issuer above — localhost inside this container is the
+      # container itself. lib/keycloak.ts rewrites them to this internal
+      # origin; the browser keeps using the public issuer.
+      AUTH_KEYCLOAK_INTERNAL_URL: http://keycloak:8080
       # Middleware's server-side setup-status fetch must reach the backend at its
       # in-container address; NEXT_PUBLIC_API_URL (localhost:8080) only works from
       # the browser. Without this the check fails-open and /setup redirects away.

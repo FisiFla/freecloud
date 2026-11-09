@@ -46,6 +46,13 @@ type fakeKC struct {
 	e2eAdminHasRole          bool
 	dashboardDirectGrants    bool
 	dashboardUpdateCalls     int32
+	// Dashboard redirect URIs: bootstrap must stamp the Auth.js callback
+	// or Keycloak rejects every authorize request (empty redirectUris).
+	dashboardAbsent              bool
+	dashboardRedirectURIs        []string
+	dashboardWebOrigins          []string
+	dashboardCreateCalls         int32
+	dashboardRedirectUpdateCalls int32
 
 	// A3: posture-flow execution ordering.
 	lowerPriorityCalls int32
@@ -54,6 +61,21 @@ type fakeKC struct {
 	kcAdminAPIScopeExists     bool
 	kcAdminAPIDefaultAssigned bool
 	addDefaultScopeCalls      int32
+}
+
+// stringSliceBody extracts a JSON string array field from a decoded body.
+func stringSliceBody(body map[string]interface{}, key string) []string {
+	raw, ok := body[key].([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func newFakeKC(t *testing.T) *fakeKC {
@@ -213,10 +235,16 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 					_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
 				}
 			case "freecloud-dashboard":
-				_ = json.NewEncoder(w).Encode([]map[string]interface{}{{
-					"id": "dash-uuid", "clientId": "freecloud-dashboard",
-					"directAccessGrantsEnabled": f.dashboardDirectGrants,
-				}})
+				if f.dashboardAbsent {
+					_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
+				} else {
+					_ = json.NewEncoder(w).Encode([]map[string]interface{}{{
+						"id": "dash-uuid", "clientId": "freecloud-dashboard",
+						"directAccessGrantsEnabled": f.dashboardDirectGrants,
+						"redirectUris":              f.dashboardRedirectURIs,
+						"webOrigins":                f.dashboardWebOrigins,
+					}})
+				}
 			case "realm-management":
 				_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "rm-uuid", "clientId": "realm-management"}})
 			default:
@@ -233,6 +261,12 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 					f.clientSecret = s
 				}
 				atomic.AddInt32(&f.clientCreateCalls, 1)
+			}
+			if cid, ok := body["clientId"].(string); ok && cid == "freecloud-dashboard" {
+				f.dashboardAbsent = false
+				f.dashboardRedirectURIs = stringSliceBody(body, "redirectUris")
+				f.dashboardWebOrigins = stringSliceBody(body, "webOrigins")
+				atomic.AddInt32(&f.dashboardCreateCalls, 1)
 			}
 			w.Header().Set("Location", f.srv.URL+"/admin/realms/freecloud/clients/svc-uuid")
 			w.WriteHeader(http.StatusCreated)
@@ -323,6 +357,11 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		if dag, ok := body["directAccessGrantsEnabled"].(bool); ok {
 			f.dashboardDirectGrants = dag
+		}
+		if _, ok := body["redirectUris"]; ok {
+			f.dashboardRedirectURIs = stringSliceBody(body, "redirectUris")
+			f.dashboardWebOrigins = stringSliceBody(body, "webOrigins")
+			atomic.AddInt32(&f.dashboardRedirectUpdateCalls, 1)
 		}
 		atomic.AddInt32(&f.dashboardUpdateCalls, 1)
 		w.WriteHeader(http.StatusNoContent)
@@ -825,5 +864,106 @@ func TestBootstrap_KCAdminAPIScope_AbsentIsNoOp(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&f.addDefaultScopeCalls); got != 0 {
 		t.Errorf("expected no add-default-scope calls when kc-admin-api does not exist, got %d", got)
+	}
+}
+
+func containsString(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// A Keycloak client with empty redirectUris rejects EVERY authorize
+// request, so a fresh dashboard client must be created with the Auth.js
+// callback for the configured dashboard origin.
+func TestBootstrap_DashboardClientCreatedWithRedirectURIs(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	f.clientExists = true
+	f.clientSecret = "old-secret"
+	f.dashboardAbsent = true
+
+	if _, err := Run(context.Background(), Config{
+		KeycloakURL:        f.srv.URL,
+		AdminUsername:      "admin",
+		AdminPassword:      "admin",
+		TargetRealm:        "freecloud",
+		DashboardPublicURL: "http://localhost:3000",
+	}); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if got := atomic.LoadInt32(&f.dashboardCreateCalls); got != 1 {
+		t.Fatalf("expected dashboard client created once, got %d", got)
+	}
+	if !containsString(f.dashboardRedirectURIs, "http://localhost:3000/api/auth/callback/keycloak") {
+		t.Errorf("expected dashboard redirectUris to contain the Auth.js callback, got %v", f.dashboardRedirectURIs)
+	}
+	if !containsString(f.dashboardWebOrigins, "http://localhost:3000") {
+		t.Errorf("expected dashboard webOrigins to contain the dashboard origin, got %v", f.dashboardWebOrigins)
+	}
+}
+
+// Deployments bootstrapped before redirect URIs were stamped have a
+// dashboard client that already exists with none; the next boot must
+// backfill them (once), preserving idempotency afterwards.
+func TestBootstrap_DashboardRedirectURIsBackfilledOnExistingClient(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	f.clientExists = true
+	f.clientSecret = "old-secret"
+	// Dashboard client exists (default) with no redirect URIs.
+
+	cfg := Config{
+		KeycloakURL:        f.srv.URL,
+		AdminUsername:      "admin",
+		AdminPassword:      "admin",
+		TargetRealm:        "freecloud",
+		DashboardPublicURL: "https://app.example.com",
+	}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("first Run failed: %v", err)
+	}
+	if !containsString(f.dashboardRedirectURIs, "https://app.example.com/api/auth/callback/keycloak") {
+		t.Errorf("expected backfilled redirectUris to contain the Auth.js callback, got %v", f.dashboardRedirectURIs)
+	}
+	if got := atomic.LoadInt32(&f.dashboardRedirectUpdateCalls); got != 1 {
+		t.Fatalf("expected exactly 1 redirect-URI update, got %d", got)
+	}
+	if _, err := Run(context.Background(), cfg); err != nil {
+		t.Fatalf("second Run failed: %v", err)
+	}
+	if got := atomic.LoadInt32(&f.dashboardRedirectUpdateCalls); got != 1 {
+		t.Errorf("expected no further redirect-URI update on re-run, got %d total", got)
+	}
+}
+
+// Without a configured dashboard origin (e.g. e2e ROPC) bootstrap must
+// not stamp anything — and must not fail.
+func TestBootstrap_DashboardRedirectURIsSkippedWithoutPublicURL(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+
+	f.realmExists = true
+	f.clientExists = true
+	f.clientSecret = "old-secret"
+	f.dashboardAbsent = true
+
+	if _, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+	}); err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+	if len(f.dashboardRedirectURIs) != 0 {
+		t.Errorf("expected no redirectUris without a dashboard origin, got %v", f.dashboardRedirectURIs)
 	}
 }
