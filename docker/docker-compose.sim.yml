@@ -1,0 +1,41 @@
+# VPS simulator override — run the localhost stack under the resource
+# envelope of a ~12 GB / 4 vCPU VPS (e.g. AlphaVPS C12G/P12G, Contabo
+# Cloud VPS 6) so sizing/OOM problems surface on a big dev box before
+# paying for the real thing.
+#
+# Usage:
+#   docker compose -f docker/docker-compose.localhost.yml \
+#                  -f docker/docker-compose.sim.yml up --build -d
+#
+# Budget: memory limits sum to ~9.5 GB (the remaining ~2.5 GB of a
+# 12 GB VPS belongs to the host OS, Docker, and page cache); CPU
+# limits sum to ~4 vCPU. Per-service shares reflect observed weight:
+# Keycloak's JVM is the heavyweight, then Postgres and Next.js.
+# Keycloak's JVM is container-aware, so it sizes its heap from the
+# cgroup limit below, not from host RAM.
+#
+# Watch it with: docker stats
+# Tune a service here, never by editing the base compose files.
+
+services:
+  keycloak:
+    mem_limit: 3g
+    cpus: 1.5
+  postgres:
+    mem_limit: 2g
+    cpus: 0.75
+  backend:
+    mem_limit: 1g
+    cpus: 0.5
+  frontend:
+    mem_limit: 1536m
+    cpus: 0.5
+  redis:
+    mem_limit: 256m
+    cpus: 0.25
+  fleetdm-mock:
+    mem_limit: 256m
+    cpus: 0.25
+  migrate:
+    mem_limit: 512m
+    cpus: 0.25
