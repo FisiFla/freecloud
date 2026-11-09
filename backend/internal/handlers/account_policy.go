@@ -23,34 +23,34 @@ import (
 // AccountPolicyResponse is the read-side DTO returned by GET /api/v1/account-policy.
 // It mirrors keycloak.RealmPolicyResult but uses JSON names matching the frontend.
 type AccountPolicyResponse struct {
-	PasswordPolicy              string `json:"passwordPolicy"`
-	BruteForceProtected         bool   `json:"bruteForceProtected"`
-	FailureFactor               int    `json:"failureFactor"`
-	WaitIncrementSeconds        int    `json:"waitIncrementSeconds"`
-	MaxFailureWaitSeconds       int    `json:"maxFailureWaitSeconds"`
-	QuickLoginCheckMilliSeconds int64  `json:"quickLoginCheckMilliSeconds"`
-	MinimumQuickLoginWaitSeconds int   `json:"minimumQuickLoginWaitSeconds"`
-	MaxDeltaTimeSeconds         int    `json:"maxDeltaTimeSeconds"`
+	PasswordPolicy               string `json:"passwordPolicy"`
+	BruteForceProtected          bool   `json:"bruteForceProtected"`
+	FailureFactor                int    `json:"failureFactor"`
+	WaitIncrementSeconds         int    `json:"waitIncrementSeconds"`
+	MaxFailureWaitSeconds        int    `json:"maxFailureWaitSeconds"`
+	QuickLoginCheckMilliSeconds  int64  `json:"quickLoginCheckMilliSeconds"`
+	MinimumQuickLoginWaitSeconds int    `json:"minimumQuickLoginWaitSeconds"`
+	MaxDeltaTimeSeconds          int    `json:"maxDeltaTimeSeconds"`
 	// Parsed policy fields for convenience (derived from PasswordPolicy string).
-	MinLength    int `json:"minLength"`
-	UpperCase    int `json:"upperCase"`
-	LowerCase    int `json:"lowerCase"`
-	Digits       int `json:"digits"`
-	SpecialChars int `json:"specialChars"`
-	PasswordHistory int `json:"passwordHistory"`
+	MinLength          int `json:"minLength"`
+	UpperCase          int `json:"upperCase"`
+	LowerCase          int `json:"lowerCase"`
+	Digits             int `json:"digits"`
+	SpecialChars       int `json:"specialChars"`
+	PasswordHistory    int `json:"passwordHistory"`
 	PasswordExpireDays int `json:"passwordExpireDays"`
 }
 
 // UpdateAccountPolicyRequest is the body for PUT /api/v1/account-policy.
 type UpdateAccountPolicyRequest struct {
 	// Structured fields — the handler serialises them into the Keycloak policy string.
-	MinLength          int  `json:"minLength"`
-	UpperCase          int  `json:"upperCase"`
-	LowerCase          int  `json:"lowerCase"`
-	Digits             int  `json:"digits"`
-	SpecialChars       int  `json:"specialChars"`
-	PasswordHistory    int  `json:"passwordHistory"`
-	PasswordExpireDays int  `json:"passwordExpireDays"`
+	MinLength          int `json:"minLength"`
+	UpperCase          int `json:"upperCase"`
+	LowerCase          int `json:"lowerCase"`
+	Digits             int `json:"digits"`
+	SpecialChars       int `json:"specialChars"`
+	PasswordHistory    int `json:"passwordHistory"`
+	PasswordExpireDays int `json:"passwordExpireDays"`
 	// Brute-force fields.
 	BruteForceProtected          bool  `json:"bruteForceProtected"`
 	FailureFactor                int   `json:"failureFactor"`
@@ -220,19 +220,19 @@ func (h *Handler) UpdateAccountPolicy(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.GetActorID(r.Context())
 	if h.db != nil {
 		if auditErr := h.writeAuditEntryBestEffort(r.Context(), actorID, "update_account_policy", "realm", "default", map[string]interface{}{
-			"passwordPolicy":               kcReq.PasswordPolicy,
-			"bruteForceProtected":          req.BruteForceProtected,
-			"failureFactor":                req.FailureFactor,
-			"waitIncrementSeconds":         req.WaitIncrementSeconds,
-			"maxFailureWaitSeconds":        req.MaxFailureWaitSeconds,
-			"maxDeltaTimeSeconds":          req.MaxDeltaTimeSeconds,
+			"passwordPolicy":        kcReq.PasswordPolicy,
+			"bruteForceProtected":   req.BruteForceProtected,
+			"failureFactor":         req.FailureFactor,
+			"waitIncrementSeconds":  req.WaitIncrementSeconds,
+			"maxFailureWaitSeconds": req.MaxFailureWaitSeconds,
+			"maxDeltaTimeSeconds":   req.MaxDeltaTimeSeconds,
 		}); auditErr != nil {
 			h.logger.Warn("failed to write audit log for update_account_policy", zap.Error(auditErr))
 		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"updated":       true,
+		"updated":        true,
 		"passwordPolicy": kcReq.PasswordPolicy,
 	})
 }

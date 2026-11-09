@@ -73,7 +73,9 @@ func TestJ08_ParseMappingCSV_MaxRows(t *testing.T) {
 	}
 }
 func itoa(n int) string {
-	if n == 0 { return "0" }
+	if n == 0 {
+		return "0"
+	}
 	var buf [12]byte
 	i := len(buf)
 	for n > 0 {

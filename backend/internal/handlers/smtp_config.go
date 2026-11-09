@@ -26,12 +26,12 @@ import (
 
 // SMTPConfigResponse is returned by GET /api/v1/settings/smtp.
 type SMTPConfigResponse struct {
-	Host                string    `json:"host"`
-	Port                string    `json:"port"`
-	Username            string    `json:"username"`
-	FromAddress         string    `json:"fromAddress"`
-	PasswordConfigured  bool      `json:"passwordConfigured"`
-	UpdatedAt           time.Time `json:"updatedAt"`
+	Host               string    `json:"host"`
+	Port               string    `json:"port"`
+	Username           string    `json:"username"`
+	FromAddress        string    `json:"fromAddress"`
+	PasswordConfigured bool      `json:"passwordConfigured"`
+	UpdatedAt          time.Time `json:"updatedAt"`
 }
 
 // UpsertSMTPConfigRequest is the body for PUT /api/v1/settings/smtp.
@@ -57,12 +57,12 @@ func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		host          string
-		port          string
-		username      string
-		fromAddress   string
-		passwordHash  *string
-		updatedAt     time.Time
+		host         string
+		port         string
+		username     string
+		fromAddress  string
+		passwordHash *string
+		updatedAt    time.Time
 	)
 	err := h.db.QueryRow(r.Context(),
 		`SELECT host, port, username, from_address, password_hash, updated_at

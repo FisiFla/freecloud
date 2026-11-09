@@ -53,9 +53,9 @@ func TestCheckResourceInOrg_RejectsNonAllowlistedTable(t *testing.T) {
 	// Table/column not in the allowlist must be rejected even though the
 	// strings are only ever concatenated from the fixed map.
 	for _, tc := range []struct{ table, col string }{
-		{"audit_logs", "id"},   // not allowlisted
-		{"users", "id"},        // allowlisted table, wrong column
-		{"devices", "id"},      // allowlisted table, wrong column
+		{"audit_logs", "id"}, // not allowlisted
+		{"users", "id"},      // allowlisted table, wrong column
+		{"devices", "id"},    // allowlisted table, wrong column
 	} {
 		_, err := CheckResourceInOrg(context.Background(), &fakeQueryer{}, tc.table, tc.col, "x", "org-a")
 		if err == nil {

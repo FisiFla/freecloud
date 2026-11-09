@@ -38,6 +38,15 @@ jobs:
         run: cd keycloak-authenticator && mvn test
       - name: Race detector
         run: cd backend && go test -race ./...
+      - name: gofmt
+        run: |
+          cd backend
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt: the following files are not formatted (run 'gofmt -w' on them):"
+            echo "$unformatted"
+            exit 1
+          fi
       # Tooling is pinned to an exact version: @latest makes the build
       # unreproducible and lets a newly published module version execute inside
       # a job that holds GITHUB_TOKEN. Bump these deliberately.

@@ -23,11 +23,11 @@ import (
 
 // AppAccessPolicy is the per-app posture requirement set.
 type AppAccessPolicy struct {
-	AppID                  string   `json:"appId"`
-	RequireEnrolled        bool     `json:"requireEnrolled"`
-	RequireDiskEncrypted   bool     `json:"requireDiskEncrypted"`
-	RequireNoCriticalVulns bool     `json:"requireNoCriticalVulns"`
-	MaxOsAgeDays           *int     `json:"maxOsAgeDays,omitempty"`
+	AppID                  string `json:"appId"`
+	RequireEnrolled        bool   `json:"requireEnrolled"`
+	RequireDiskEncrypted   bool   `json:"requireDiskEncrypted"`
+	RequireNoCriticalVulns bool   `json:"requireNoCriticalVulns"`
+	MaxOsAgeDays           *int   `json:"maxOsAgeDays,omitempty"`
 	// D1: time-window, network, and geo conditions (Migration039).
 	AllowedTimeStart    *string  `json:"allowedTimeStart,omitempty"`    // "HH:MM" UTC
 	AllowedTimeEnd      *string  `json:"allowedTimeEnd,omitempty"`      // "HH:MM" UTC
@@ -94,10 +94,10 @@ func (h *Handler) GetAppAccessPolicy(w http.ResponseWriter, r *http.Request) {
 
 // UpsertAppAccessPolicyRequest is the JSON body for creating/updating an app policy.
 type UpsertAppAccessPolicyRequest struct {
-	RequireEnrolled        bool     `json:"requireEnrolled"`
-	RequireDiskEncrypted   bool     `json:"requireDiskEncrypted"`
-	RequireNoCriticalVulns bool     `json:"requireNoCriticalVulns"`
-	MaxOsAgeDays           *int     `json:"maxOsAgeDays,omitempty"`
+	RequireEnrolled        bool `json:"requireEnrolled"`
+	RequireDiskEncrypted   bool `json:"requireDiskEncrypted"`
+	RequireNoCriticalVulns bool `json:"requireNoCriticalVulns"`
+	MaxOsAgeDays           *int `json:"maxOsAgeDays,omitempty"`
 	// D1: time-window, network, and geo conditions.
 	AllowedTimeStart    *string  `json:"allowedTimeStart,omitempty"`
 	AllowedTimeEnd      *string  `json:"allowedTimeEnd,omitempty"`

@@ -148,13 +148,13 @@ type MeOrgMembership struct {
 // RBAC role, resolved active org, and every org they belong to (for the
 // frontend org switcher).
 type MeResponse struct {
-	Sub          string            `json:"sub"`
-	Email        string            `json:"email"`
-	GlobalRole   string            `json:"globalRole"`
-	ActiveOrgID  string            `json:"activeOrgId"`
-	ActiveRole   string            `json:"activeRole"`
-	Orgs         []MeOrgMembership `json:"orgs"`
-	IsSystemAdmin bool             `json:"isSystemAdmin"`
+	Sub           string            `json:"sub"`
+	Email         string            `json:"email"`
+	GlobalRole    string            `json:"globalRole"`
+	ActiveOrgID   string            `json:"activeOrgId"`
+	ActiveRole    string            `json:"activeRole"`
+	Orgs          []MeOrgMembership `json:"orgs"`
+	IsSystemAdmin bool              `json:"isSystemAdmin"`
 }
 
 // Me handles GET /api/v1/me.
