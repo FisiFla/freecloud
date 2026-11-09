@@ -210,6 +210,7 @@ func runServer() {
 			AdminUsername:                cfg.BootstrapAdminUser,
 			AdminPassword:                cfg.BootstrapAdminPassword,
 			TargetRealm:                  cfg.KeycloakRealm,
+			DashboardPublicURL:           cfg.CORSOrigin,
 			ServiceAccountSecretOverride: cfg.KeycloakClientSecret,
 			CreateDemoUser:               os.Getenv("CREATE_DEMO_USER") == "true",
 			SeedE2EAdmin:                 seedE2EAdmin,
@@ -414,7 +415,7 @@ func runServer() {
 	}
 
 	// Initialize JWT auth middleware, wrapping it with API token support (C2).
-	baseAuth := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience)
+	baseAuth := middleware.NewAuthMiddleware(cfg.KeycloakURL, cfg.KeycloakRealm, cfg.KeycloakAudience).WithExpectedIssuer(cfg.KeycloakIssuerURL)
 	authMW := middleware.NewAPITokenMiddleware(baseAuth, pool)
 
 	// CORS origin from config. The default is the local dashboard, used only

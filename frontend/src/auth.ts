@@ -1,9 +1,11 @@
 import NextAuth from "next-auth";
 import KeycloakProvider from "next-auth/providers/keycloak";
+import { customFetch } from "@auth/core";
 import { requiredEnv, rejectInsecureInProd, isProduction } from "@/lib/env";
 import {
   keycloakClientId,
   keycloakClientSecret,
+  keycloakCustomFetch,
   keycloakIssuer,
   type RefreshableToken,
 } from "@/lib/keycloak";
@@ -16,6 +18,8 @@ import { SESSION_MAX_AGE_SECONDS, jwtCallback } from "@/lib/session";
  *   AUTH_KEYCLOAK_ID          — Keycloak client ID
  *   AUTH_KEYCLOAK_SECRET      — Keycloak client secret
  *   AUTH_KEYCLOAK_ISSUER      — e.g. http://localhost:8081/realms/freecloud
+ *   AUTH_KEYCLOAK_INTERNAL_URL — optional split-horizon internal origin
+ *                                for server-side OIDC calls (lib/keycloak.ts)
  *   AUTH_SECRET               — used to sign the session cookie (was NEXTAUTH_SECRET)
  *   AUTH_URL                  — app base URL (was NEXTAUTH_URL); optional in prod
  *
@@ -54,6 +58,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       clientId: keycloakClientId,
       clientSecret: keycloakClientSecret,
       issuer: keycloakIssuer,
+      // Split-horizon: when AUTH_KEYCLOAK_INTERNAL_URL is set, Auth.js
+      // reaches Keycloak server-side over the internal origin while the
+      // browser keeps using the public issuer (see lib/keycloak.ts).
+      ...(keycloakCustomFetch ? { [customFetch]: keycloakCustomFetch } : {}),
     }),
   ],
   session: {

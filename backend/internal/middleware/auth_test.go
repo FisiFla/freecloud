@@ -276,6 +276,52 @@ func TestAuthMiddlewareWrongIssuer(t *testing.T) {
 	}
 }
 
+// TestAuthMiddlewareIssuerOverride verifies split-horizon issuer
+// validation: Keycloak is reached over an internal URL (JWKS) while
+// tokens carry the public issuer (KC_HOSTNAME). Without the override
+// every browser-issued token is rejected as "invalid issuer".
+func TestAuthMiddlewareIssuerOverride(t *testing.T) {
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
+	jwksSrv := startJWKSServer(t, jwksPayload)
+
+	publicIssuer := "http://localhost:8081/realms/freecloud"
+	now := time.Now()
+	tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
+		"sub":                "user",
+		"iss":                publicIssuer,
+		"aud":                "freecloud-dashboard",
+		"azp":                "freecloud-dashboard",
+		"preferred_username": "user",
+		"email":              "user@test.com",
+		"realm_access": map[string]interface{}{
+			"roles": []string{"admin"},
+		},
+		"exp": float64(now.Add(1 * time.Hour).Unix()),
+		"iat": float64(now.Unix()),
+	})
+
+	serve := func(am *AuthMiddleware) int {
+		handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenStr)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Internal URL only (pre-fix localhost behaviour): iss never matches.
+	if code := serve(NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")); code != http.StatusUnauthorized {
+		t.Errorf("without issuer override: expected 401, got %d", code)
+	}
+	// With the public issuer override (JWKS still via internal URL): 200.
+	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard").WithExpectedIssuer("http://localhost:8081")
+	if code := serve(am); code != http.StatusOK {
+		t.Errorf("with issuer override: expected 200, got %d", code)
+	}
+}
+
 // TestAuthMiddlewareExpiredToken verifies an expired token is rejected.
 func TestAuthMiddlewareExpiredToken(t *testing.T) {
 	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)

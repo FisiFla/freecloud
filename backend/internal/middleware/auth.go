@@ -404,6 +404,20 @@ func NewAuthMiddleware(keycloakURL, realm, audience string) *AuthMiddleware {
 	}
 }
 
+// WithExpectedIssuer overrides the expected token issuer base URL for
+// split-horizon deployments: Keycloak is reached over an internal URL
+// (KEYCLOAK_URL, used for JWKS) while browsers receive tokens whose iss
+// is the public KC_HOSTNAME origin. issuerBaseURL is the public origin
+// WITHOUT the /realms/<realm> suffix (e.g. http://localhost:8081).
+// Empty is a no-op. Returns the receiver for chaining.
+func (a *AuthMiddleware) WithExpectedIssuer(issuerBaseURL string) *AuthMiddleware {
+	if issuerBaseURL == "" {
+		return a
+	}
+	a.expectedIssuer = fmt.Sprintf("%s/realms/%s", strings.TrimRight(issuerBaseURL, "/"), a.realm)
+	return a
+}
+
 // refreshJWKS fetches the realm's JWKS document and stores the parsed keys
 // indexed by their "kid" header. Unlike before H2, this does the network
 // fetch and JSON parsing WITHOUT holding a.mu — only the final swap of the

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -32,6 +33,15 @@ type Config struct {
 	ServiceClientID string
 	// DashboardClientID is the public frontend OIDC client. Default: "freecloud-dashboard".
 	DashboardClientID string
+	// DashboardPublicURL is the dashboard's public origin (e.g.
+	// https://app.example.com — the same value as CORS_ORIGIN / AUTH_URL).
+	// When set, bootstrap stamps the dashboard client's OAuth redirect
+	// URIs and web origins from it (the Auth.js callback at
+	// <origin>/api/auth/callback/keycloak). A Keycloak client with no
+	// redirect URIs rejects every browser sign-in, so an unset value
+	// leaves interactive login broken (bootstrap warns). Empty in
+	// contexts with no browser flow (e2e ROPC).
+	DashboardPublicURL string
 	// PostureFlowAlias is the browser-flow copy name. Default: "browser-with-posture".
 	PostureFlowAlias string
 	// ServiceAccountSecretOverride pins the service-account secret. If empty,
@@ -453,21 +463,75 @@ func readClientSecret(ctx context.Context, gc *gocloak.GoCloak, token, realm, cl
 	return *cred.Value, nil
 }
 
-// ensureDashboardClient creates the freecloud-dashboard public OIDC client if absent.
+// dashboardCallbackURI derives the Auth.js OIDC callback and web origin
+// from the configured dashboard public URL. ok is false when the URL is
+// unset or not an absolute http(s) origin — callers then stamp nothing.
+func dashboardCallbackURI(cfg Config) (origin, callback string, ok bool) {
+	raw := strings.TrimRight(strings.TrimSpace(cfg.DashboardPublicURL), "/")
+	if raw == "" {
+		return "", "", false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", "", false
+	}
+	return raw, raw + "/api/auth/callback/keycloak", true
+}
+
+func hasString(list *[]string, want string) bool {
+	if list == nil {
+		return false
+	}
+	for _, s := range *list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// ensureDashboardClient creates the freecloud-dashboard public OIDC client
+// if absent and stamps its OAuth redirect URIs / web origins from the
+// configured dashboard origin. A client with no redirect URIs rejects
+// every browser sign-in at the authorize endpoint, so existing clients
+// missing the callback are backfilled (idempotent, operator-added
+// entries preserved).
 func ensureDashboardClient(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) error {
 	clientID := cfg.DashboardClientID
+	origin, callback, haveCallback := dashboardCallbackURI(cfg)
+	if !haveCallback && cfg.DashboardPublicURL != "" {
+		logger.Warn("bootstrap: DashboardPublicURL is not an absolute http(s) origin; dashboard redirect URIs NOT stamped, browser sign-in will fail until it is fixed", zap.String("dashboardPublicURL", cfg.DashboardPublicURL))
+	}
 	clients, err := gc.GetClients(ctx, token, cfg.TargetRealm, gocloak.GetClientsParams{ClientID: &clientID})
 	if err != nil {
 		return fmt.Errorf("bootstrap: list dashboard clients: %w", err)
 	}
 	if len(clients) > 0 {
+		existing := clients[0]
+		if haveCallback && (!hasString(existing.RedirectURIs, callback) || !hasString(existing.WebOrigins, origin)) {
+			if !hasString(existing.RedirectURIs, callback) {
+				uris := append([]string{}, deref(existing.RedirectURIs)...)
+				uris = append(uris, callback)
+				existing.RedirectURIs = &uris
+			}
+			if !hasString(existing.WebOrigins, origin) {
+				origins := append([]string{}, deref(existing.WebOrigins)...)
+				origins = append(origins, origin)
+				existing.WebOrigins = &origins
+			}
+			if err := gc.UpdateClient(ctx, token, cfg.TargetRealm, *existing); err != nil {
+				return fmt.Errorf("bootstrap: backfill dashboard redirect URIs: %w", err)
+			}
+			logger.Info("bootstrap: backfilled freecloud-dashboard redirect URIs", zap.String("callback", callback))
+			return nil
+		}
 		logger.Info("bootstrap: freecloud-dashboard client already exists")
 		return nil
 	}
 
 	trueVal := true
 	falseVal := false
-	_, err = gc.CreateClient(ctx, token, cfg.TargetRealm, gocloak.Client{
+	client := gocloak.Client{
 		ClientID:                  &clientID,
 		Name:                      gocloak.StringP("FreeCloud Dashboard"),
 		Enabled:                   gocloak.BoolP(true),
@@ -476,12 +540,24 @@ func ensureDashboardClient(ctx context.Context, gc *gocloak.GoCloak, token strin
 		ImplicitFlowEnabled:       &falseVal,
 		DirectAccessGrantsEnabled: &falseVal,
 		ServiceAccountsEnabled:    &falseVal,
-	})
+	}
+	if haveCallback {
+		client.RedirectURIs = &[]string{callback}
+		client.WebOrigins = &[]string{origin}
+	}
+	_, err = gc.CreateClient(ctx, token, cfg.TargetRealm, client)
 	if err != nil {
 		return fmt.Errorf("bootstrap: create dashboard client: %w", err)
 	}
 	logger.Info("bootstrap: created freecloud-dashboard client")
 	return nil
+}
+
+func deref(s *[]string) []string {
+	if s == nil {
+		return nil
+	}
+	return *s
 }
 
 // ensureServiceAccountRoles grants manage-users and manage-clients realm-management
