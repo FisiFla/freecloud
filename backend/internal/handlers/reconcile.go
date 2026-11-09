@@ -36,4 +36,3 @@ func (h *Handler) GetDrift(w http.ResponseWriter, r *http.Request) {
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
-

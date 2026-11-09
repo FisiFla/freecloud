@@ -711,8 +711,8 @@ func buildSAMLAttributes(name, acsURL, entityID string, opts *SAMLOptions) map[s
 	}
 
 	return map[string]string{
-		"saml_name_id_format":    nameIDFormat,
-		"saml_sp_entity_id":      entityID,
+		"saml_name_id_format": nameIDFormat,
+		"saml_sp_entity_id":   entityID,
 		"saml.assertion.consumer.service.post.binding.url": acsURL,
 		"saml_assertion_consumer_url_post":                 acsURL,
 		"saml.server.signature":                            "true",
@@ -727,7 +727,7 @@ func buildSAMLAttributes(name, acsURL, entityID string, opts *SAMLOptions) map[s
 		"saml.server.signature.logout":                     "true",
 		"saml_assertion_lifespan":                          "3600",
 		"saml.signature.algorithm":                         signingAlgo,
-		"saml.idp.initiated.sso.url.name":                 samlSlug(name),
+		"saml.idp.initiated.sso.url.name":                  samlSlug(name),
 	}
 }
 
@@ -1259,25 +1259,25 @@ func (k *KeycloakClient) RenameGroup(ctx context.Context, groupID, newName strin
 type RealmPolicyResult struct {
 	PasswordPolicy string `json:"passwordPolicy"`
 	// Brute-force protection fields.
-	BruteForceProtected bool  `json:"bruteForceProtected"`
-	FailureFactor       int   `json:"failureFactor"`
-	WaitIncrementSeconds int  `json:"waitIncrementSeconds"`
-	MaxFailureWaitSeconds int  `json:"maxFailureWaitSeconds"`
-	QuickLoginCheckMilliSeconds int64 `json:"quickLoginCheckMilliSeconds"`
-	MinimumQuickLoginWaitSeconds int  `json:"minimumQuickLoginWaitSeconds"`
-	MaxDeltaTimeSeconds  int   `json:"maxDeltaTimeSeconds"`
+	BruteForceProtected          bool  `json:"bruteForceProtected"`
+	FailureFactor                int   `json:"failureFactor"`
+	WaitIncrementSeconds         int   `json:"waitIncrementSeconds"`
+	MaxFailureWaitSeconds        int   `json:"maxFailureWaitSeconds"`
+	QuickLoginCheckMilliSeconds  int64 `json:"quickLoginCheckMilliSeconds"`
+	MinimumQuickLoginWaitSeconds int   `json:"minimumQuickLoginWaitSeconds"`
+	MaxDeltaTimeSeconds          int   `json:"maxDeltaTimeSeconds"`
 }
 
 // UpdateRealmPolicyRequest holds the fields to write back to the realm.
 type UpdateRealmPolicyRequest struct {
-	PasswordPolicy      string `json:"passwordPolicy"`
-	BruteForceProtected bool   `json:"bruteForceProtected"`
-	FailureFactor       int    `json:"failureFactor"`
-	WaitIncrementSeconds int   `json:"waitIncrementSeconds"`
-	MaxFailureWaitSeconds int  `json:"maxFailureWaitSeconds"`
-	QuickLoginCheckMilliSeconds int64 `json:"quickLoginCheckMilliSeconds"`
-	MinimumQuickLoginWaitSeconds int  `json:"minimumQuickLoginWaitSeconds"`
-	MaxDeltaTimeSeconds  int   `json:"maxDeltaTimeSeconds"`
+	PasswordPolicy               string `json:"passwordPolicy"`
+	BruteForceProtected          bool   `json:"bruteForceProtected"`
+	FailureFactor                int    `json:"failureFactor"`
+	WaitIncrementSeconds         int    `json:"waitIncrementSeconds"`
+	MaxFailureWaitSeconds        int    `json:"maxFailureWaitSeconds"`
+	QuickLoginCheckMilliSeconds  int64  `json:"quickLoginCheckMilliSeconds"`
+	MinimumQuickLoginWaitSeconds int    `json:"minimumQuickLoginWaitSeconds"`
+	MaxDeltaTimeSeconds          int    `json:"maxDeltaTimeSeconds"`
 }
 
 // GetRealmPolicy reads the realm representation and returns the password-policy

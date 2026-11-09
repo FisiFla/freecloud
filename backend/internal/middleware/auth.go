@@ -76,17 +76,17 @@ const (
 
 // permissionMatrix maps each permission to the roles that hold it.
 var permissionMatrix = map[Permission][]Role{
-	PermManageUsers:         {RoleSuperAdmin},
-	PermOnboardOffboard:     {RoleSuperAdmin},
-	PermReadUsers:           {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
-	PermManageApps:          {RoleSuperAdmin},
-	PermReadApps:            {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
-	PermReadAuditLogs:       {RoleSuperAdmin, RoleAuditor},
-	PermExportAuditLogs:     {RoleSuperAdmin, RoleAuditor},
-	PermManageGroups:        {RoleSuperAdmin},
-	PermReadGroups:          {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
-	PermManageDevices:       {RoleSuperAdmin, RoleHelpdesk},
-	PermReadCompliance:      {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermManageUsers:     {RoleSuperAdmin},
+	PermOnboardOffboard: {RoleSuperAdmin},
+	PermReadUsers:       {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermManageApps:      {RoleSuperAdmin},
+	PermReadApps:        {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermReadAuditLogs:   {RoleSuperAdmin, RoleAuditor},
+	PermExportAuditLogs: {RoleSuperAdmin, RoleAuditor},
+	PermManageGroups:    {RoleSuperAdmin},
+	PermReadGroups:      {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
+	PermManageDevices:   {RoleSuperAdmin, RoleHelpdesk},
+	PermReadCompliance:  {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
 	// PermManagePolicies gates CreateTeam + AssignTeamPolicy. Helpdesk was
 	// added 2026-08-02 (product decision: read + mutate within org). Both
 	// handlers remain org-scoped via requireFleetTeamInCallerOrg, so the

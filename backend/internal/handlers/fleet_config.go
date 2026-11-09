@@ -44,9 +44,9 @@ func (h *Handler) GetFleetConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		serverURL      string
-		apiTokenHash   *string
-		updatedAt      time.Time
+		serverURL    string
+		apiTokenHash *string
+		updatedAt    time.Time
 	)
 	err := h.db.QueryRow(r.Context(),
 		`SELECT server_url, api_token_hash, updated_at FROM fleet_config WHERE id = 1`,

@@ -39,9 +39,9 @@ func (f *fakeKC) CreateClient(_ context.Context, _, _ string, _ []string, _ stri
 }
 func (f *fakeKC) GetSAMLIdPInitiatedURL(_ context.Context, _ string) (string, error) { return "", nil }
 func (f *fakeKC) GetSAMLMetadataXML(_ context.Context) (string, error)               { return "", nil }
-func (f *fakeKC) DeleteClient(_ context.Context, _ string) error              { return nil }
-func (f *fakeKC) AssignUserToClient(_ context.Context, _, _ string) error     { return nil }
-func (f *fakeKC) UnassignUserFromClient(_ context.Context, _, _ string) error { return nil }
+func (f *fakeKC) DeleteClient(_ context.Context, _ string) error                     { return nil }
+func (f *fakeKC) AssignUserToClient(_ context.Context, _, _ string) error            { return nil }
+func (f *fakeKC) UnassignUserFromClient(_ context.Context, _, _ string) error        { return nil }
 func (f *fakeKC) GetUserGroups(_ context.Context, _ string) ([]*gocloak.Group, error) {
 	return nil, nil
 }
@@ -55,9 +55,9 @@ func (f *fakeKC) CreateGroupWithOrgID(_ context.Context, _, _ string) (string, e
 func (f *fakeKC) ListGroupsByOrg(_ context.Context, _ string, _, _ int) ([]*gocloak.Group, error) {
 	return nil, nil
 }
-func (f *fakeKC) AddUserToGroup(_ context.Context, _, _ string) error           { return nil }
-func (f *fakeKC) RemoveUserFromGroup(_ context.Context, _, _ string) error      { return nil }
-func (f *fakeKC) ListRealmRoles(_ context.Context) ([]*gocloak.Role, error)     { return nil, nil }
+func (f *fakeKC) AddUserToGroup(_ context.Context, _, _ string) error       { return nil }
+func (f *fakeKC) RemoveUserFromGroup(_ context.Context, _, _ string) error  { return nil }
+func (f *fakeKC) ListRealmRoles(_ context.Context) ([]*gocloak.Role, error) { return nil, nil }
 func (f *fakeKC) AssignRealmRoleToUser(_ context.Context, _ string, _ []gocloak.Role) error {
 	return nil
 }
@@ -89,11 +89,13 @@ func (f *fakeKC) GetRealmPolicy(_ context.Context) (*keycloakpkg.RealmPolicyResu
 func (f *fakeKC) UpdateRealmPolicy(_ context.Context, _ keycloakpkg.UpdateRealmPolicyRequest) error {
 	return nil
 }
+
 // B1: MFA self-service credential operations (not used by reconciler)
 func (f *fakeKC) GetUserCredentialsFull(_ context.Context, _ string) ([]*gocloak.CredentialRepresentation, error) {
 	return nil, nil
 }
 func (f *fakeKC) DeleteCredential(_ context.Context, _, _ string) error { return nil }
+
 // C1: LDAP/AD federation (not used by reconciler — satisfy interface)
 func (f *fakeKC) CreateFederationComponent(_ context.Context, _, _, _, _, _, _ string) (string, error) {
 	return "fake-component-id", nil
@@ -104,7 +106,7 @@ func (f *fakeKC) GetFederationComponents(_ context.Context) ([]*gocloak.Componen
 func (f *fakeKC) UpdateFederationComponent(_ context.Context, _, _, _, _, _, _, _ string) error {
 	return nil
 }
-func (f *fakeKC) DeleteFederationComponent(_ context.Context, _ string) error { return nil }
+func (f *fakeKC) DeleteFederationComponent(_ context.Context, _ string) error   { return nil }
 func (f *fakeKC) TestLDAPConnection(_ context.Context, _, _, _, _ string) error { return nil }
 func (f *fakeKC) TriggerFederationSync(_ context.Context, _, _ string) error    { return nil }
 func (f *fakeKC) GetUserByID(_ context.Context, userID string) (*gocloak.User, error) {
@@ -112,8 +114,9 @@ func (f *fakeKC) GetUserByID(_ context.Context, userID string) (*gocloak.User, e
 }
 
 // B1 setup wizard (not used by reconciler — satisfy interface)
-func (f *fakeKC) HasAdminUser(_ context.Context) (bool, error)                  { return false, nil }
+func (f *fakeKC) HasAdminUser(_ context.Context) (bool, error)                   { return false, nil }
 func (f *fakeKC) CreateAdminUser(_ context.Context, _, _ string) (string, error) { return "", nil }
+
 // D2: SMTP configuration (not used by reconciler — satisfy interface)
 func (f *fakeKC) UpdateRealmSMTP(_ context.Context, _ keycloakpkg.SMTPConfig) error { return nil }
 
