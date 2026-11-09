@@ -24,7 +24,6 @@ export const keycloakIssuer = requiredProdEnv(
   "http://localhost:8081/realms/freecloud",
 );
 
-/** The token fields the refresh flow reads and writes. */
 /**
  * Split-horizon Keycloak access (AUTH_KEYCLOAK_INTERNAL_URL).
  *
@@ -97,6 +96,7 @@ export const keycloakCustomFetch: typeof fetch | undefined = createKeycloakFetch
 // Server-side fetch honouring the split-horizon rewrite (token refresh).
 const keycloakServerFetch: typeof fetch = keycloakCustomFetch ?? liveFetch;
 
+/** The token fields the refresh flow reads and writes. */
 export interface RefreshableToken {
   accessToken?: string;
   idToken?: string;
