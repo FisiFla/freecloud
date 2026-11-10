@@ -92,6 +92,12 @@ type Handler struct {
 	// geoIP resolves client IPs to ISO country codes for geo-allowlist conditions (D1).
 	// Defaults to noopGeoIP{} which always returns "" (unknown) — fail-closed for geo conditions.
 	geoIP GeoIPLookup
+
+	// redisCheck, when non-nil, is probed by Readyz. Wired only when rate
+	// limiting is Redis-backed (see SetRedisCheck): the Redis limiter fails
+	// closed, so a Redis outage 429s every limited route and readiness must
+	// say so. Nil with the in-memory limiter — nothing external to lose.
+	redisCheck func(ctx context.Context) error
 }
 
 // SetFleetWebhookSecret sets the shared secret used to verify Fleet enrollment
@@ -180,6 +186,11 @@ func (h *Handler) SetAuditRetainFor(d time.Duration) { h.auditRetainFor = d }
 // Without this, geo conditions always fail closed (country unknown → deny).
 func (h *Handler) SetGeoIPLookup(g GeoIPLookup) { h.geoIP = g }
 
+// SetRedisCheck wires the Redis reachability probe Readyz reports. Call it
+// only when rate limiting is Redis-backed; leaving it unset keeps Redis out
+// of the readiness response entirely.
+func (h *Handler) SetRedisCheck(check func(ctx context.Context) error) { h.redisCheck = check }
+
 // Health returns a simple health check response.
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -191,8 +202,9 @@ func (h *Handler) Healthz(w http.ResponseWriter, r *http.Request) {
 }
 
 // Readyz is a readiness probe: 200 only when the database and Keycloak are
-// reachable, so an orchestrator stops routing to an instance that can't serve
-// real traffic. Returns 503 with per-dependency status otherwise.
+// reachable (and Redis too, when a redisCheck is wired), so an orchestrator
+// stops routing to an instance that can't serve real traffic. Returns 503
+// with per-dependency status otherwise.
 func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
@@ -215,6 +227,15 @@ func (h *Handler) Readyz(w http.ResponseWriter, r *http.Request) {
 		ready = false
 	} else {
 		checks["keycloak"] = "ok"
+	}
+
+	if h.redisCheck != nil {
+		if err := h.redisCheck(ctx); err != nil {
+			checks["redis"] = "unreachable"
+			ready = false
+		} else {
+			checks["redis"] = "ok"
+		}
 	}
 
 	status := http.StatusOK

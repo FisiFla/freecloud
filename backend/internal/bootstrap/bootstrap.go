@@ -18,6 +18,12 @@ import (
 	"github.com/FisiFla/freecloud/backend/internal/httpx"
 )
 
+// rawAdminHTTPClient bounds the raw admin HTTP calls in this package (the
+// flow-copy and execution-priority endpoints gocloak has no typed method
+// for). http.DefaultClient has no timeout, so a hung Keycloak would park
+// bootstrap forever.
+var rawAdminHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 // Config holds parameters for bootstrapping Keycloak.
 // ServiceAccountSecretOverride, if non-empty, is used as the freecloud-service
 // client secret (operator override); otherwise the existing secret is reused
@@ -740,7 +746,7 @@ func ensurePostureFlow(ctx context.Context, gc *gocloak.GoCloak, token string, c
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := rawAdminHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("bootstrap: copy browser flow: %w", err)
 	}
@@ -856,7 +862,7 @@ func lowerExecutionPriority(ctx context.Context, cfg Config, token, executionID 
 		return fmt.Errorf("build lower-priority request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := rawAdminHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("lower-priority request: %w", err)
 	}

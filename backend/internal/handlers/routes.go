@@ -60,12 +60,18 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	r.Get("/scim/v2/ResourceTypes", h.SCIMResourceTypes)
 	r.Get("/scim/v2/Schemas", h.SCIMSchemas)
 
+	// SCIM gets a generous per-IP throttle AHEAD of bearer auth (300/min):
+	// bounds token-guessing/DoS noise without touching legitimate IdP sync
+	// rates at pilot scale. Shared by the legacy and org-scoped groups.
+	scimLimiter := newLimiter(300, time.Minute, "scim")
+
 	// SCIM 2.0 provisioning — bearer-token authenticated, outside the user-JWT group.
 	// SCIMBearerToken is injected by SetupSCIM (called from main after config load).
 	// This is the LEGACY path: it authenticates on behalf of the Default
 	// Organization for backward compatibility with existing Okta/Entra
 	// integrations (see docs/adr/0005). Do not break it.
 	r.Group(func(r chi.Router) {
+		r.Use(scimLimiter.Middleware)
 		r.Use(h.scimBearerMW)
 		r.Get("/scim/v2/Users", h.SCIMListUsers)
 		r.Post("/scim/v2/Users", h.SCIMCreateUser)
@@ -88,6 +94,7 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 	// route). Reuses the exact same handlers as the legacy path since they
 	// are now org-context-aware.
 	r.Route("/scim/v2/orgs/{orgID}", func(r chi.Router) {
+		r.Use(scimLimiter.Middleware)
 		r.Use(h.SCIMOrgBearerMiddleware(h.db))
 		r.Get("/Users", h.SCIMListUsers)
 		r.Post("/Users", h.SCIMCreateUser)
@@ -103,7 +110,12 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 
 	// A1: access evaluation — bearer-token authenticated, outside the user-JWT group.
 	// Called by the Keycloak authenticator SPI (or any service) to gate SSO on posture.
+	// Throttle AHEAD of bearer auth (600/min): the SPI calls from Keycloak's
+	// own IP, so per-IP keying aggregates every login behind that one caller
+	// — the bound is a generous DoS/token-guessing ceiling, not a login quota.
+	accessEvalLimiter := newLimiter(600, time.Minute, "access_evaluate")
 	r.Group(func(r chi.Router) {
+		r.Use(accessEvalLimiter.Middleware)
 		r.Use(h.accessEvalBearerMW)
 		r.Post("/api/v1/access/evaluate", h.EvaluateAccess)
 	})
