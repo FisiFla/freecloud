@@ -43,11 +43,27 @@
 #   `docker compose ... config -q` directly (without sourcing) will therefore
 #   fail with that message — that is expected.
 
+# ── Log rotation (every service) ────────────────────────────────────────────
+# Without this, json-file logs grow unbounded on the host disk. 10m × 5 caps
+# each service at ~50 MB of retained logs.
+x-logging: &default-logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
+# ── Resource limits ─────────────────────────────────────────────────────────
+# Per-service memory limits below mirror docker/docker-compose.sim.yml (the
+# tuned 12 GB VPS simulator): they sum to ≈8.5 GB, leaving headroom on the
+# 12 GB target host for the OS, Docker and page cache. Raise them
+# proportionally on bigger hosts. Memory ONLY — no cpu limits: CPU
+# throttling hurts Keycloak/JVM latency under burst. No reservations: a
+# limit is a ceiling against a runaway service, not a scheduling claim.
+
 services:
 
   # ── Secret generation (C1) ────────────────────────────────────────────────
   secrets-init:
     image: busybox:1.36@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662  # busybox 1.36
+    logging: *default-logging
     # Run as the host user so the generated 0600 files stay owned by (and
     # readable by) the operator. FREECLOUD_UID/FREECLOUD_GID are exported by
     # the Makefile; a plain `docker compose up` leaves them at 0 (root).
@@ -66,6 +82,10 @@ services:
       context: ./postgres
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { memory: 2g }
     secrets:
       # The official Postgres image reads the password from POSTGRES_PASSWORD_FILE.
       - postgres_password
@@ -92,6 +112,11 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.keycloak
     restart: unless-stopped
+    logging: *default-logging
+    stop_grace_period: 20s
+    deploy:
+      resources:
+        limits: { memory: 3g }
     command: ["start"]
     secrets:
       - kc_admin_password
@@ -113,7 +138,14 @@ services:
       KC_HOSTNAME: ${KC_PUBLIC_URL}
       KC_PROXY_HEADERS: xforwarded
       KC_HTTP_ENABLED: "true"
-      KC_HEALTH_ENABLED: "true"
+      # Deliberately NO KC_HEALTH_ENABLED: in Keycloak 26.8 health-enabled is
+      # a BUILD option, so setting it here makes `kc.sh start` re-augment at
+      # boot — and that rebuild fails on this image (SmallRyeHealthProcessor
+      # dies on the posture SPI fat jar's shaded jakarta.json:
+      # "JsonProvider ... not a subtype"; reproduced against the published
+      # image recipe). Bake it into docker/Dockerfile.keycloak's
+      # `kc.sh build` (after fixing the fat-jar shading) before re-adding.
+      # Until then the healthcheck below probes the main port, not :9000.
       ACCESS_EVAL_URL: ${ACCESS_EVAL_URL:-http://backend:8080/api/v1/access/evaluate}
       # Device posture enforcement is ON by default in production: a stack that
       # forgets the variable must not silently run without posture checks.
@@ -128,6 +160,18 @@ services:
       # Client-IP Forwarding)" before changing this compose file's network
       # exposure.
       TRUST_PROXY: "true"
+    # bash /dev/tcp probe (the KC image ships no curl/wget). Proved live
+    # against the running stack: GET /realms/master
+    # -> HTTP 200 once Keycloak serves (KC_HOSTNAME pins the issuer, not
+    # request routing, so Host: localhost is answered). Generous budget:
+    # Keycloak's first boot is slow, and a false "unhealthy" strands every
+    # service_healthy dependent.
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /realms/master HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && head -n 1 <&3 | grep -q ' 200 '"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 120s
     depends_on:
       postgres:
         condition: service_healthy
@@ -141,6 +185,10 @@ services:
   redis:
     image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499  # redis 7-alpine
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { memory: 256m }
     volumes:
       - redis_data:/data
     healthcheck:
@@ -160,6 +208,10 @@ services:
       dockerfile: Dockerfile
     command: ["migrate"]
     restart: "no"
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { memory: 512m }
     environment:
       # Fail fast: an empty password produces a confusing "password
       # authentication failed" at connect time instead of a clear message.
@@ -175,6 +227,14 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    logging: *default-logging
+    # backend/cmd/server/main.go drains HTTP with a 30s context after
+    # SIGTERM; compose's default 10s grace SIGKILLs it mid-drain on every
+    # deploy. 35s = the 30s drain plus margin to log "server stopped".
+    stop_grace_period: 35s
+    deploy:
+      resources:
+        limits: { memory: 1g }
     secrets:
       - scim_bearer_token
       - setup_token
@@ -193,7 +253,16 @@ services:
       TRUSTED_PROXY_CIDRS: ${FREECLOUD_SUBNET:-172.30.0.0/24}
       DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set — run make prod-secrets-init and source .secrets/secrets.env}@postgres:5432/freecloud?sslmode=require
       REDIS_URL: redis://redis:6379/0
-      KEYCLOAK_URL: ${KC_PUBLIC_URL}
+      # Split-horizon (same pattern as docker-compose.localhost.yml):
+      # server-side JWKS/Admin/bootstrap calls go over the internal network,
+      # NEVER through Caddy — the Caddyfile now 404s /admin/* and
+      # /realms/master/* on the public KC vhost, so a public KEYCLOAK_URL
+      # would break bootstrap (master-realm login) and every Admin API call.
+      # Tokens still carry the public iss (KC_HOSTNAME), hence the issuer
+      # override; KC_HOSTNAME is in URL form, so discovery over the
+      # internal URL returns the public issuer.
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_ISSUER_URL: ${KC_PUBLIC_URL}
       KEYCLOAK_REALM: ${KEYCLOAK_REALM:-freecloud}
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-freecloud-service}
       # KEYCLOAK_CLIENT_SECRET: self-managed by Epic A bootstrap.
@@ -258,6 +327,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      keycloak:
+        condition: service_healthy
 
   # ── Frontend ──────────────────────────────────────────────────────────────
   frontend:
@@ -271,6 +342,11 @@ services:
         FREECLOUD_VERSION: ${FREECLOUD_VERSION:-1.7.0}
         GIT_SHA: ${GIT_SHA:-source}
     restart: unless-stopped
+    logging: *default-logging
+    stop_grace_period: 15s
+    deploy:
+      resources:
+        limits: { memory: 1536m }
     secrets:
       - auth_secret
     environment:
@@ -299,6 +375,10 @@ services:
   caddy:
     image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f  # caddy 2-alpine
     restart: unless-stopped
+    logging: *default-logging
+    deploy:
+      resources:
+        limits: { memory: 256m }
     ports:
       - "80:80"
       - "443:443"
