@@ -17,10 +17,19 @@ The PostgreSQL cluster contains two databases:
 two systems. Restoring `freecloud` without the matching Keycloak realm produces
 orphaned identities.
 
+The `.secrets/` directory must be backed up **with** the database. A database
+restore without the matching `PROVISIONING_MASTER_KEY`, `AUTH_SECRET`, and the
+other generated secrets is not a working restore (encrypted provisioning
+credentials become undecryptable). `scripts/backup-bundle.sh` (below) packages
+database + secrets into one artifact; prefer it over a bare database dump.
+
 ## Quick reference
 
 ```bash
-# 1. Take a backup
+# 0. Take a full backup bundle (database + .secrets/) — preferred
+make prod-backup            # production compose stack must be up
+
+# 1. Take a database-only backup
 DATABASE_URL=postgres://user:pass@host:5432/freecloud \
   scripts/backup.sh /var/backups/freecloud/
 
@@ -133,6 +142,11 @@ Assertions:
 - Row count in `audit_logs` matches source
 - Row count in `connected_apps` matches source
 - Row count in `devices` matches source
+- The dump contains a Keycloak database section (`keycloak`, per
+  `docker/postgres/init-keycloak-db.sql`) — a dump without one fails outright
+- The restored Keycloak database has `realm` and `user_entity` tables, and at
+  least one row in `realm` — a truncated Keycloak section fails here even when
+  the `freecloud` section is intact
 
 Exit code `0` = all assertions passed; `1` = one or more mismatches.
 
@@ -176,3 +190,123 @@ Purge old dumps from cron after your retention window:
 ```bash
 find /var/backups/freecloud/ -name "freecloud-backup-*.sql" -mtime +7 -delete
 ```
+
+## Backup bundles (database + secrets)
+
+`scripts/backup-bundle.sh` produces one artifact that restores a **working**
+stack, not just a database:
+
+| File | Contents |
+|---|---|
+| `cluster.sql` | `pg_dumpall` cluster dump (`freecloud` + `keycloak`), same format as `scripts/backup.sh` |
+| `secrets.tar` | tar of `.secrets/` (relative paths) — `PROVISIONING_MASTER_KEY`, `AUTH_SECRET`, DB/admin passwords, per-key secret files |
+| `.env.prod` | copy of the production env file, when present (the manifest notes when it is absent) |
+| `manifest.txt` | UTC timestamp, mode, hostname, git HEAD, `FREECLOUD_VERSION`, file sizes, and sha256 of `cluster.sql` + `secrets.tar` — never any secret values |
+
+The bundle is built in a staging directory and only renamed into place as
+`freecloud-bundle-<UTC timestamp>/` (directory `0700`, files `0600`) after the
+dump validates — a failed run never leaves something that looks like a good
+backup. `.secrets/` must exist or the script exits with an error.
+
+```bash
+# Production compose stack (must be up) — dumps via the postgres service:
+make prod-backup                       # = scripts/backup-bundle.sh --compose ./backups
+make prod-backup BACKUP_DIR=/var/backups/freecloud
+
+# Direct mode — any reachable PostgreSQL, reuses scripts/backup.sh:
+DATABASE_URL=postgres://user:pass@host:5432/freecloud \
+  scripts/backup-bundle.sh /var/backups/freecloud
+```
+
+### Encryption (`BACKUP_PASSPHRASE`)
+
+When `BACKUP_PASSPHRASE` is non-empty, the bundle is published as a single
+encrypted file `freecloud-bundle-<timestamp>.tar.gz.enc` instead of a
+directory (the plaintext staging copy is removed), with the manifest beside
+it as `freecloud-bundle-<timestamp>.manifest.txt`. The script prints the
+exact decrypt command as its final line:
+
+```bash
+BACKUP_PASSPHRASE=... make prod-backup
+
+# Decrypt + unpack (the passphrase is read from the environment):
+openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_PASSPHRASE \
+  -in freecloud-bundle-<timestamp>.tar.gz.enc | tar -xzf -
+```
+
+Store the passphrase somewhere that survives the host (password manager) —
+without it the encrypted bundle is unrecoverable.
+
+### Retention (`BACKUP_RETENTION_DAYS`)
+
+After a successful run, entries in the output directory matching
+`freecloud-bundle-*` older than `BACKUP_RETENTION_DAYS` (default `14`) are
+pruned and echoed. `0` disables pruning. Nothing with any other name is
+touched.
+
+### Scheduling
+
+Systemd units ship in `docker/systemd/` (nightly 02:30 + up to 15m randomized
+delay, missed runs fire on boot):
+
+```bash
+sudo cp docker/systemd/freecloud-backup.service \
+        docker/systemd/freecloud-backup.timer /etc/systemd/system/
+# Edit WorkingDirectory=/opt/freecloud in the .service if your checkout
+# lives elsewhere. For encrypted bundles, create
+# /opt/freecloud/.backup-passphrase (mode 0600) containing:
+#   BACKUP_PASSPHRASE=<passphrase>
+sudo systemctl daemon-reload
+sudo systemctl enable --now freecloud-backup.timer
+```
+
+Cron alternative:
+
+```cron
+30 2 * * *  cd /opt/freecloud && make prod-backup >> /var/log/freecloud-backup.log 2>&1
+```
+
+### Restore from a bundle on a fresh host
+
+1. Clone the repository at the commit named in `manifest.txt` (`git_head`).
+2. Decrypt the bundle first if it is a `.tar.gz.enc` (command above).
+3. Restore the secrets and config into the checkout:
+   ```bash
+   tar -xf freecloud-bundle-<timestamp>/secrets.tar   # recreates .secrets/
+   cp freecloud-bundle-<timestamp>/.env.prod .env.prod  # when the bundle has one
+   ```
+4. Run `make prod-secrets-init` — with the restored `.secrets/` in place this
+   is a no-op (the generator is idempotent and never overwrites existing
+   secrets), so the restored keys are kept.
+5. Start only PostgreSQL, then restore the cluster dump with the existing
+   restore path:
+   ```bash
+   set -a && . .secrets/secrets.env && set +a
+   docker compose -f docker/docker-compose.prod.yml --env-file .env.prod up -d postgres
+   RESTORE_DATABASE_URL=postgres://freecloud:<postgres-password>@localhost:5432/postgres \
+     scripts/restore.sh freecloud-bundle-<timestamp>/cluster.sql
+   ```
+   (Point the URL at wherever the new PostgreSQL is reachable; the password
+   is `POSTGRES_PASSWORD` from the restored `.secrets/secrets.env`.)
+6. Bring the stack up: `make prod-up`.
+7. Smoke-test: `curl -fsS https://api.example.com/readyz` should return `200`,
+   and an existing user should be able to sign in (this exercises the restored
+   Keycloak realm + secrets together).
+
+### Offsite copy (operator step)
+
+The bundle scripts deliberately do **not** upload anything — copying bundles
+off-host is an operator step, after the (preferably encrypted) bundle exists:
+
+```bash
+# rsync to a second machine:
+rsync -a --chmod=F600,D700 ./backups/freecloud-bundle-* \
+  backup-user@offsite.example.com:/srv/freecloud-backups/
+
+# or rclone to object storage:
+rclone copy ./backups/ offsite:freecloud-backups \
+  --include 'freecloud-bundle-*'
+```
+
+Replace the destinations with your real offsite target. A backup that lives
+only on the same disk as the database is not a backup.

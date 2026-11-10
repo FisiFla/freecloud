@@ -105,6 +105,98 @@ describe("request()", () => {
     await expect(listUsers()).rejects.not.toThrow(/postgres:\/\/fc:secret/);
   });
 
+  // --- Friendly mapping for transient upstream failures + dead sessions ---
+  const origLocation = window.location;
+
+  function mockLocation(pathname: string) {
+    const assign = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...origLocation, pathname, assign },
+    });
+    return assign;
+  }
+
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: origLocation,
+    });
+  });
+
+  it.each([502, 503, 504])(
+    "maps HTTP %i to the temporarily-unavailable message regardless of body",
+    async (status) => {
+      global.fetch = vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({ success: false, error: "backend unreachable: dial tcp secret-host" }),
+          { status, headers: { "content-type": "application/json" } },
+        ),
+      ) as unknown as typeof fetch;
+
+      await expect(listUsers()).rejects.toThrow(
+        "The server is temporarily unavailable. Please try again in a moment.",
+      );
+      await expect(listUsers()).rejects.not.toThrow(/secret-host/);
+    },
+  );
+
+  it("maps a non-JSON 503 to the temporarily-unavailable message", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response("Service Unavailable", {
+        status: 503,
+        headers: { "content-type": "text/plain" },
+      }),
+    ) as unknown as typeof fetch;
+
+    await expect(listUsers()).rejects.toThrow(
+      "The server is temporarily unavailable. Please try again in a moment.",
+    );
+  });
+
+  it("redirects to /signin?error=session_expired on 401 and throws the session-expired message", async () => {
+    const assign = mockLocation("/employees");
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: false, error: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+
+    await expect(listUsers()).rejects.toThrow(
+      "Your session has expired. Sign in again to continue.",
+    );
+    expect(assign).toHaveBeenCalledWith("/signin?error=session_expired");
+  });
+
+  it("throws the session-expired message on 401 without redirecting when already on /signin", async () => {
+    const assign = mockLocation("/signin");
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: false, error: "unauthorized" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+
+    await expect(listUsers()).rejects.toThrow(
+      "Your session has expired. Sign in again to continue.",
+    );
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it("passes other statuses' backend error through verbatim", async () => {
+    const assign = mockLocation("/employees");
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ success: false, error: "forbidden: insufficient permissions" }),
+        { status: 403, headers: { "content-type": "application/json" } },
+      ),
+    ) as unknown as typeof fetch;
+
+    await expect(listUsers()).rejects.toThrow("forbidden: insufficient permissions");
+    expect(assign).not.toHaveBeenCalled();
+  });
+
   it("maps the errors array to fieldErrors", async () => {
     global.fetch = vi.fn().mockResolvedValue(
       new Response(

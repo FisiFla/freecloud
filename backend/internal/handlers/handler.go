@@ -75,6 +75,11 @@ type Handler struct {
 	// when pgPool is nil (unit tests with a fake DBPool). It provides no
 	// additional safety in production — see acquireSetupLock in setup.go.
 	setupMu sync.Mutex
+	// setupToken gates POST /api/v1/setup (first-admin provisioning). Set via
+	// SetSetupToken. An empty token with setupTokenRequired=true fails closed
+	// (503); both unset keeps the dev/e2e behaviour (no token check).
+	setupToken         string
+	setupTokenRequired bool
 	// pgPool, when non-nil, is the same underlying database as db but
 	// retained as the concrete *pgxpool.Pool so Setup can take a
 	// cross-replica pg advisory lock (H3) via db.AcquireAdvisoryLock, which
@@ -127,6 +132,15 @@ func NewHandler(db DBPool, kc keycloak.KeycloakClientInterface, fc fleet.FleetCl
 // called at startup before the server starts accepting requests.
 func (h *Handler) SetSCIMBearerToken(token string) {
 	h.scimBearerMW = SCIMBearerMiddleware(token)
+}
+
+// SetSetupToken configures the one-time setup-token gate for
+// POST /api/v1/setup. Must be called at startup before the server starts
+// accepting requests. An empty token with required=true fails closed: setup
+// is refused (503) rather than left open to whoever reaches it first.
+func (h *Handler) SetSetupToken(token string, required bool) {
+	h.setupToken = token
+	h.setupTokenRequired = required
 }
 
 // SetAccessEvalToken configures the access-evaluation bearer-token middleware.

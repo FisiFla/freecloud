@@ -31,23 +31,30 @@ function isStaticPath(pathname: string): boolean {
 // to layout.tsx on the request headers.
 import { buildCsp } from "@/lib/csp";
 
-// checkProvisioned calls the backend setup-status endpoint.
-// Fails open (returns true = provisioned) on network errors so that
-// connectivity issues do not redirect every user to /setup.
-async function checkProvisioned(): Promise<boolean> {
+type ProvisionState = "provisioned" | "unprovisioned" | "unknown";
+
+// checkProvisioned calls the backend setup-status endpoint. "unknown"
+// covers every case where the probe cannot answer (network error, non-OK
+// response, malformed body). Callers decide per route: /setup renders on
+// "unknown" (a fresh deploy with the backend down must not bounce to a
+// login for a nonexistent admin), while every other route treats "unknown"
+// as provisioned so connectivity issues do not redirect every user to
+// /setup (the previous fail-open behaviour).
+async function checkProvisioned(): Promise<ProvisionState> {
   try {
     const res = await fetch(`${INTERNAL_API_URL}/api/v1/setup/status`, {
       cache: "no-store",
     });
-    if (!res.ok) return true;
+    if (!res.ok) return "unknown";
     const json = (await res.json()) as {
       success: boolean;
       data?: { provisioned: boolean };
     };
-    return json.data?.provisioned ?? true;
+    if (json.data?.provisioned === undefined) return "unknown";
+    return json.data.provisioned ? "provisioned" : "unprovisioned";
   } catch {
-    // Network error — assume provisioned so existing deploys keep working.
-    return true;
+    // Network error — the probe cannot answer.
+    return "unknown";
   }
 }
 
@@ -96,10 +103,13 @@ export default auth(async (request: NextAuthRequest) => {
   const nextWithNonce = (): NextResponse =>
     cspResponse(NextResponse.next({ request: { headers: requestHeaders } }));
 
-  // /setup path — if already provisioned, redirect to home.
+  // /setup path — if already provisioned, redirect to home. "unknown"
+  // renders the setup page (same as unprovisioned): on a fresh deploy whose
+  // backend is not up yet, redirecting /setup → / → /signin is a dead end
+  // (a login form for an admin that does not exist).
   if (pathname === "/setup" || pathname.startsWith("/setup/")) {
-    const provisioned = await checkProvisioned();
-    if (provisioned) {
+    const provisionState = await checkProvisioned();
+    if (provisionState === "provisioned") {
       return cspResponse(NextResponse.redirect(new URL("/", request.url)));
     }
     return nextWithNonce();
@@ -110,8 +120,10 @@ export default auth(async (request: NextAuthRequest) => {
   }
 
   // Not yet provisioned — send everyone to /setup regardless of auth state.
-  const provisioned = await checkProvisioned();
-  if (!provisioned) {
+  // "unknown" is treated as provisioned here (fail open, as before) so a
+  // backend blip does not lock every signed-in user into /setup.
+  const provisionState = await checkProvisioned();
+  if (provisionState === "unprovisioned") {
     return cspResponse(NextResponse.redirect(new URL("/setup", request.url)));
   }
 

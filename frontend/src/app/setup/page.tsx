@@ -15,6 +15,7 @@ export default function SetupPage() {
   const [adminPassword, setAdminPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [orgName, setOrgName] = useState("");
+  const [setupToken, setSetupToken] = useState("");
   const [fieldErrors, setFieldErrors] = useState<FieldError[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [alreadyProvisioned, setAlreadyProvisioned] = useState(false);
@@ -41,8 +42,13 @@ export default function SetupPage() {
       const res = await fetch(`/api/v1/setup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adminEmail, adminPassword, orgName }),
+        body: JSON.stringify({ adminEmail, adminPassword, orgName, setupToken }),
       });
+
+      if (res.status === 403) {
+        setFieldErrors([{ field: "setupToken", message: "Invalid setup token. Copy SETUP_TOKEN from .secrets/secrets.env on the server." }]);
+        return;
+      }
 
       if (res.status === 409) {
         setAlreadyProvisioned(true);
@@ -177,6 +183,27 @@ export default function SetupPage() {
             />
             {getFieldError("confirmPassword") && (
               <p className="mt-1 text-sm text-red-600 dark:text-red-400">{getFieldError("confirmPassword")}</p>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor="setup-token" className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
+              Setup token
+            </label>
+            <input
+              id="setup-token"
+              type="password"
+              autoComplete="off"
+              value={setupToken}
+              onChange={(e) => setSetupToken(e.target.value)}
+              placeholder="SETUP_TOKEN from the server"
+              className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100"
+            />
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              Found in .secrets/secrets.env on the server (SETUP_TOKEN). Leave blank on local development stacks.
+            </p>
+            {getFieldError("setupToken") && (
+              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{getFieldError("setupToken")}</p>
             )}
           </div>
 

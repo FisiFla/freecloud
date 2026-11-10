@@ -8,6 +8,7 @@
 #   POSTGRES_PASSWORD    — internal Postgres password
 #   KC_ADMIN_PASSWORD    — first-boot Keycloak admin password
 #   SCIM_BEARER_TOKEN    — inbound SCIM provisioning bearer token
+#   SETUP_TOKEN          — one-time first-admin provisioning token (POST /api/v1/setup)
 #   ACCESS_EVAL_TOKEN    — posture-evaluation token (backend ↔ Keycloak SPI)
 #   FLEET_WEBHOOK_SECRET — Fleet enrollment-callback HMAC (+ default device-cookie HMAC)
 #   PROVISIONING_MASTER_KEY — AES-256-GCM key for stored connector secrets
@@ -52,7 +53,7 @@ SECRETS_DIR=${SECRETS_DIR:-/run/freecloud/files}
 
 # Keys owned by the generator. Anything else in secrets.env is operator-managed
 # and is copied through untouched.
-GENERATED_KEYS="POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY"
+GENERATED_KEYS="POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN SETUP_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY"
 
 gen() {
   # 32 random bytes → 64-char hex string (256 bits of entropy).

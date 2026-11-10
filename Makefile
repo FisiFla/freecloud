@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db test-integration prod-build prod-pull prod-up prod-down localhost-up localhost-down prod-secrets-init verify-provisioning-live
+.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db test-integration prod-build prod-pull prod-up prod-down prod-backup localhost-up localhost-down prod-secrets-init verify-provisioning-live
 
 # Host uid/gid of the operator running make. Exported so the secret generator
 # (docker/init-secrets/generate.sh) can create .secrets/* owned by that user
@@ -68,6 +68,15 @@ prod-up: prod-secrets-init
 prod-down:
 	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod down
 
+# Full backup bundle: PostgreSQL cluster dump (via the prod compose postgres
+# service, which must be up) + .secrets/ + manifest. See
+# docs/BACKUP_RESTORE.md. BACKUP_PASSPHRASE / BACKUP_RETENTION_DAYS in the
+# environment are passed through to scripts/backup-bundle.sh.
+BACKUP_DIR ?= ./backups
+
+prod-backup:
+	scripts/backup-bundle.sh --compose $(BACKUP_DIR)
+
 # C1/C2 — All-in-one localhost stack (no TLS, no required env).
 # Generates secrets on first boot, then starts all services.
 # Open http://localhost:3000 when up.
@@ -107,7 +116,7 @@ verify-secrets:
 	@tmp="$$(mktemp -d)"; \
 		trap 'rm -rf "$$tmp"' EXIT; \
 		SECRETS_FILE="$$tmp/secrets.env" SECRETS_DIR="$$tmp/files" sh docker/init-secrets/generate.sh >/dev/null; \
-		for key in POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY; do \
+		for key in POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN SETUP_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY; do \
 			value=$$(sed -n "s/^$$key=//p" "$$tmp/secrets.env" | head -n 1); \
 			if [ -z "$$value" ]; then \
 				echo "missing or empty $$key in generated secrets.env"; \
