@@ -374,7 +374,7 @@ Authentication: `Authorization: Bearer <SCIM_BEARER_TOKEN>`.
 | `PORT` | `8080` | — | HTTP listen port |
 | `DATABASE_URL` | `postgres://freecloud:freecloud@localhost:5432/freecloud?sslmode=disable` | Yes | PostgreSQL DSN — must use `sslmode=require` or stronger in production |
 | `KEYCLOAK_URL` | `http://localhost:8081` | Yes | Keycloak base URL (JWKS/Admin/bootstrap calls) |
-| `KEYCLOAK_ISSUER_URL` | `""` | — | Public issuer origin when it differs from `KEYCLOAK_URL` (split-horizon dev stacks); expected `iss` becomes `KEYCLOAK_ISSUER_URL/realms/KEYCLOAK_REALM` |
+| `KEYCLOAK_ISSUER_URL` | `""` | — | Public issuer origin when it differs from `KEYCLOAK_URL` (split-horizon: production sets `KEYCLOAK_URL=http://keycloak:8080` internally and this to the public Keycloak URL; the localhost stack uses the same pattern); expected `iss` becomes `KEYCLOAK_ISSUER_URL/realms/KEYCLOAK_REALM` |
 | `KEYCLOAK_REALM` | `freecloud` | — | Keycloak realm name |
 | `KEYCLOAK_CLIENT_ID` | `admin-cli` | Yes | Confidential service-account client (not `admin-cli`) |
 | `KEYCLOAK_CLIENT_SECRET` | `""` | Yes | Service-account client secret |

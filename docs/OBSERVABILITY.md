@@ -94,7 +94,11 @@ docker compose \
   --env-file .env.prod \
   up -d
 
-# Grafana is on port 3100 (override with GF_PORT in .env.prod)
+# Grafana listens on the host loopback only — http://127.0.0.1:3100 on the host
+# (override the port with GF_PORT in .env.prod). It is deliberately NOT
+# internet-facing; reach it over SSH from your laptop:
+#   ssh -L 3100:127.0.0.1:3100 <host>
+# then open http://localhost:3100 locally.
 ```
 
 The overlay adds four services:
@@ -120,7 +124,7 @@ dashboard are provisioned automatically from
 | Variable | Default | Description |
 |---|---|---|
 | `GF_ADMIN_PASSWORD` | *(none — required)* | Grafana admin password. The compose file fails to start Grafana when it is unset, so there is no usable default; set a strong one. |
-| `GF_PORT` | `3100` | Host port for Grafana |
+| `GF_PORT` | `3100` | Host port for Grafana — bound to `127.0.0.1` only, so use localhost on the host or an SSH tunnel (`ssh -L 3100:127.0.0.1:3100 <host>`), not the host's public address |
 | `SLACK_ALERT_WEBHOOK_URL` | *(unset — Slack delivery off)* | Slack incoming-webhook URL for **Alertmanager** delivery of the alerts above. This is a secret: set it in `.secrets/secrets.env` (hand-added key), **not** in `.env.prod`. It is separate from the backend's `NOTIFY_SLACK`/`SLACK_WEBHOOK_URL` in-app event notifications (see `docs/API.md`) — the two may point at the same or different channels. |
 
 ## Slack alert routing
