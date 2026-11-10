@@ -69,7 +69,8 @@ type Config struct {
 	// SetupToken is the one-time token required by POST /api/v1/setup to
 	// create the first admin. Deliberately NOT required by Validate(): after
 	// provisioning the operator may remove it, and enforcement (fail-closed
-	// in production) lives in the setup handler.
+	// in production) lives in the setup handler. Enforcement is inert in
+	// dev/e2e — see EffectiveSetupToken, which is what main wires.
 	SetupToken string
 
 	// AccessEvalToken authenticates POST /api/v1/access/evaluate calls from the
@@ -472,6 +473,19 @@ func (c *Config) Validate() error {
 func IsDevOrE2E() bool {
 	env := os.Getenv("APP_ENV")
 	return env == "development" || env == "test"
+}
+
+// EffectiveSetupToken returns the setup token the setup handler should
+// enforce. In dev/e2e it is always empty (token gate inert): the localhost
+// stack loads a generated SETUP_TOKEN from .secrets/secrets.env via
+// env_file, and honoring it there would break the zero-config first setup
+// (docs/QUICKSTART.md). Outside dev/e2e the configured token passes
+// through — fail-closed, like IsDevOrE2E.
+func (c *Config) EffectiveSetupToken() string {
+	if IsDevOrE2E() {
+		return ""
+	}
+	return c.SetupToken
 }
 
 // DeviceCookieSigningSecret returns the HMAC key for freecloud-device-id.
