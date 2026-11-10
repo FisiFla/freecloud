@@ -26,6 +26,13 @@
 #
 # Caddy auto-provisions TLS. Postgres serves TLS on the internal network.
 #
+# Release images: FREECLOUD_VERSION (from .env.prod) pins every app image
+# (backend/migrate, frontend, keycloak) to a published ghcr.io release tag.
+# `make prod-pull` + `make prod-up` then deploys that release without
+# compiling on the host; `make prod-build` remains for offline/source builds
+# (the `build:` blocks below are kept for that path). Rollback = set
+# FREECLOUD_VERSION back to the previous release and re-run prod-pull/prod-up.
+#
 # Note on POSTGRES_PASSWORD / KC_ADMIN_PASSWORD interpolation:
 #   The Postgres password has to appear in the DATABASE_URL string that compose
 #   resolves at parse time, so it is interpolated from the host environment.
@@ -53,6 +60,8 @@ services:
 
   # ── Postgres ──────────────────────────────────────────────────────────────
   postgres:
+    # Built on the host from ./postgres; intentionally not published to GHCR.
+    image: freecloud-postgres:local
     build:
       context: ./postgres
       dockerfile: Dockerfile
@@ -78,6 +87,7 @@ services:
 
   # ── Keycloak ──────────────────────────────────────────────────────────────
   keycloak:
+    image: ghcr.io/fisifla/freecloud/keycloak:${FREECLOUD_VERSION:-1.7.0}
     build:
       context: ..
       dockerfile: docker/Dockerfile.keycloak
@@ -144,6 +154,7 @@ services:
   # for it to complete successfully, so a rolling deploy never has a replica
   # racing another replica (or this job) to apply the same migration.
   migrate:
+    image: ghcr.io/fisifla/freecloud/backend:${FREECLOUD_VERSION:-1.7.0}
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -159,6 +170,7 @@ services:
 
   # ── Backend ───────────────────────────────────────────────────────────────
   backend:
+    image: ghcr.io/fisifla/freecloud/backend:${FREECLOUD_VERSION:-1.7.0}
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -249,6 +261,7 @@ services:
 
   # ── Frontend ──────────────────────────────────────────────────────────────
   frontend:
+    image: ghcr.io/fisifla/freecloud/frontend:${FREECLOUD_VERSION:-1.7.0}
     build:
       context: ../frontend
       dockerfile: Dockerfile

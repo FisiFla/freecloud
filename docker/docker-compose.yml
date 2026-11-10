@@ -32,8 +32,7 @@ services:
       KC_DB_DATABASE: keycloak
       KC_DB_USERNAME: freecloud
       KC_DB_PASSWORD: freecloud
-      KC_HOSTNAME: localhost
-      KC_HOSTNAME_PORT: 8081
+      KC_HOSTNAME: http://localhost:8081
       ACCESS_EVAL_URL: http://host.docker.internal:8080/api/v1/access/evaluate
       ACCESS_EVAL_TOKEN: ""
       POSTURE_CHECK_ENABLED: "false"

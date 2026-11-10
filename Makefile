@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db test-integration prod-build prod-up prod-down prod-backup localhost-up localhost-down prod-secrets-init verify-provisioning-live
+.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db test-integration prod-build prod-pull prod-up prod-down prod-backup localhost-up localhost-down prod-secrets-init verify-provisioning-live
 
 # Host uid/gid of the operator running make. Exported so the secret generator
 # (docker/init-secrets/generate.sh) can create .secrets/* owned by that user
@@ -50,6 +50,13 @@ build-frontend:
 # network; Caddy terminates TLS for the public hostnames.
 prod-build:
 	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod build
+
+# Pull the pinned release images for FREECLOUD_VERSION (from .env.prod)
+# instead of compiling on the host. Like prod-up it sources the generated
+# secrets first, so compose can interpolate POSTGRES_PASSWORD when parsing.
+prod-pull: prod-secrets-init
+	@set -a && . .secrets/secrets.env && set +a && \
+		docker compose -f docker/docker-compose.prod.yml --env-file .env.prod pull backend frontend keycloak migrate
 
 # C3: prod-up generates secrets (if not yet present) then sources them into the
 # shell so compose can interpolate POSTGRES_PASSWORD / KC_ADMIN_PASSWORD into
