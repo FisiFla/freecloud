@@ -468,6 +468,84 @@ func TestKeyForTokenManyUnknownKidsSingleUpstreamFetch(t *testing.T) {
 	}
 }
 
+// primeStaleJWKS builds an AuthMiddleware whose JWKS cache is primed from a
+// live test server, then forced stale with the refresh rate limiter reset,
+// then the server is closed so the next refresh attempt fails (Keycloak down).
+func primeStaleJWKS(t *testing.T) (*AuthMiddleware, *rsa.PrivateKey, string, string) {
+	t.Helper()
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(jwksPayload))
+	}))
+	issuer := srv.URL + "/realms/freecloud"
+	am := NewAuthMiddleware(srv.URL, "freecloud", "freecloud-dashboard")
+	if err := am.refreshJWKS(); err != nil {
+		srv.Close()
+		t.Fatalf("prime JWKS cache: %v", err)
+	}
+	am.mu.Lock()
+	am.lastFetch = time.Now().Add(-jwksCacheTTL - time.Minute)
+	am.lastAttempt = time.Time{}
+	am.mu.Unlock()
+	srv.Close()
+	return am, privKey, kid, issuer
+}
+
+func staleFallbackClaims(issuer string) jwt.MapClaims {
+	now := time.Now()
+	return jwt.MapClaims{
+		"sub":                "user",
+		"iss":                issuer,
+		"aud":                "freecloud-dashboard",
+		"azp":                "freecloud-dashboard",
+		"preferred_username": "user",
+		"email":              "user@test.com",
+		"realm_access":       map[string]interface{}{"roles": []string{"admin"}},
+		"exp":                float64(now.Add(1 * time.Hour).Unix()),
+		"iat":                float64(now.Unix()),
+	}
+}
+
+// TestKeyForTokenStaleCacheFallbackKnownKid: with a stale cache and Keycloak
+// down, a token whose kid is cached must still validate via the stale key.
+func TestKeyForTokenStaleCacheFallbackKnownKid(t *testing.T) {
+	am, privKey, kid, issuer := primeStaleJWKS(t)
+	tokenStr := signedToken(t, privKey, kid, staleFallbackClaims(issuer))
+
+	handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("stale cache + Keycloak down + known kid: expected 200, got %d — body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestKeyForTokenStaleCacheUnknownKidErrors: an unknown kid cannot be
+// satisfied by the stale cache, so the refresh error must surface.
+func TestKeyForTokenStaleCacheUnknownKidErrors(t *testing.T) {
+	am, privKey, _, issuer := primeStaleJWKS(t)
+	tokenStr := signedToken(t, privKey, "no-such-kid", staleFallbackClaims(issuer))
+	if _, err := am.keyForToken(tokenStr); err == nil {
+		t.Error("stale cache + Keycloak down + unknown kid: expected error, got nil")
+	}
+}
+
+// TestKeyForTokenStaleCacheNoKidFallsBackToAllKeys: no kid + non-empty stale
+// cache + Keycloak down returns (nil, nil) so the caller tries every key.
+func TestKeyForTokenStaleCacheNoKidFallsBackToAllKeys(t *testing.T) {
+	am, privKey, _, issuer := primeStaleJWKS(t)
+	tokenStr := signedToken(t, privKey, "", staleFallbackClaims(issuer))
+	key, err := am.keyForToken(tokenStr)
+	if err != nil || key != nil {
+		t.Errorf("stale cache + Keycloak down + no kid: expected (nil, nil), got (%v, %v)", key, err)
+	}
+}
+
 // ---- H8: disabled-user JWT rejection ----
 
 // fakeUserStatusDB is a minimal TokenDB fake for isUserDisabled's

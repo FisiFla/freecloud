@@ -107,6 +107,46 @@ func TestRouterOnboardRateLimited(t *testing.T) {
 	}
 }
 
+// TestRouterSCIMAndAccessEvalThrottledAheadOfAuth proves the SCIM and
+// access-evaluate limiters run ahead of their bearer-auth middleware: with a
+// tiny limit injected for those limiter names, unauthenticated requests get
+// 401 (auth) until the budget is spent, then 429 (limiter) — a limiter
+// behind auth could never 429 an unauthenticated caller.
+func TestRouterSCIMAndAccessEvalThrottledAheadOfAuth(t *testing.T) {
+	h := setupTestHandler(t)
+	tinyFactory := func(limit int, window time.Duration, name string) middleware.Limiter {
+		if name == "scim" || name == "access_evaluate" {
+			return middleware.NewRateLimiter(2, window)
+		}
+		return middleware.NewRateLimiter(limit, window)
+	}
+	r := chi.NewRouter()
+	SetupRoutes(r, h, fakeAuthMW, tinyFactory)
+
+	cases := []struct{ method, path, remote string }{
+		{http.MethodGet, "/scim/v2/Users", "10.0.0.61:5000"},
+		{http.MethodPost, "/api/v1/access/evaluate", "10.0.0.62:5000"},
+	}
+	for _, tc := range cases {
+		for i := 1; i <= 2; i++ {
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`))
+			req.RemoteAddr = tc.remote
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, req)
+			if rec.Code == http.StatusTooManyRequests {
+				t.Fatalf("%s %s request %d: rate-limited before the tiny limit was spent", tc.method, tc.path, i)
+			}
+		}
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`))
+		req.RemoteAddr = tc.remote
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusTooManyRequests {
+			t.Errorf("%s %s over-limit: expected 429, got %d (body: %s)", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestRouterReadOnlyCanReadUsersButCannotOnboard(t *testing.T) {
 	h := setupTestHandler(t)
 	r := newRoleTestRouter(h, middleware.RoleReadOnly)

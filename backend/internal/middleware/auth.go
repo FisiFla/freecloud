@@ -16,6 +16,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
+	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -537,8 +538,28 @@ func (a *AuthMiddleware) keyForToken(tokenString string) (*rsa.PublicKey, error)
 	// holding a write lock — many callers land here concurrently without
 	// serializing the whole API behind one outbound HTTP call.
 	if _, err, _ := a.sf.Do("jwks", func() (interface{}, error) {
-		return nil, a.refreshJWKSRateLimited()
+		err := a.refreshJWKSRateLimited()
+		if err != nil {
+			// Logged here, inside the single-flight, so a failed refresh
+			// attempt warns once rather than once per token sharing it.
+			zap.L().Warn("jwks refresh failed; falling back to stale cached keys if available", zap.Error(err))
+		}
+		return nil, err
 	}); err != nil {
+		// Refresh failed (e.g. Keycloak down). A stale cached key is still
+		// a valid verification key — iss/aud/exp/signature are all checked
+		// against it exactly as for a fresh one — so serve from the cache
+		// when it can satisfy this token instead of 401ing every request
+		// for the duration of a Keycloak outage.
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+		if header.Kid != "" {
+			if key, ok := a.keysByKid[header.Kid]; ok {
+				return key, nil
+			}
+		} else if len(a.keysByKid) > 0 {
+			return nil, nil
+		}
 		return nil, err
 	}
 

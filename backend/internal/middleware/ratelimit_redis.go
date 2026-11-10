@@ -48,14 +48,21 @@ return current
 //
 // The returned close func shuts down the shared Redis client; call it during
 // graceful shutdown.
-func NewLimiterFactory(redisURL string, trustedProxies []string, logger *zap.Logger) (factory func(limit int, window time.Duration, name string) Limiter, close func(), err error) {
+//
+// ping is non-nil only for the Redis-backed factory: it reports whether the
+// shared Redis client can currently reach Redis, so readiness probes can
+// fail when the limiter backend is down (the Redis limiter fails closed, so
+// a Redis outage would otherwise 429 every limited route while /readyz
+// stayed green). The in-memory factory returns a nil ping — nothing
+// external to lose.
+func NewLimiterFactory(redisURL string, trustedProxies []string, logger *zap.Logger) (factory func(limit int, window time.Duration, name string) Limiter, ping func(ctx context.Context) error, close func(), err error) {
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	// Validate the trusted-proxy configuration up front so a malformed CIDR
 	// is a startup error rather than a silently mis-keyed limiter.
 	if _, err := NewClientKeyer(trustedProxies); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if redisURL == "" {
 		logger.Warn("rate limiter: REDIS_URL not set, falling back to in-memory per-replica rate limiting. " +
@@ -72,12 +79,12 @@ func NewLimiterFactory(redisURL string, trustedProxies []string, logger *zap.Log
 				rl = NewRateLimiter(limit, window)
 			}
 			return rl
-		}, func() {}, nil
+		}, nil, func() {}, nil
 	}
 
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	client := redis.NewClient(opts)
 
@@ -85,13 +92,13 @@ func NewLimiterFactory(redisURL string, trustedProxies []string, logger *zap.Log
 	defer cancel()
 	if err := client.Ping(pingCtx).Err(); err != nil {
 		_ = client.Close()
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	logger.Info("rate limiter: using Redis-backed shared rate limiting", zap.String("addr", opts.Addr))
 
 	return func(limit int, window time.Duration, name string) Limiter {
 		return NewRedisRateLimiter(client, limit, window, name, logger, trustedProxies)
-	}, func() { _ = client.Close() }, nil
+	}, func(ctx context.Context) error { return client.Ping(ctx).Err() }, func() { _ = client.Close() }, nil
 }
 
 // RedisRateLimiter is a Redis-backed, per-client fixed-window rate limiter.

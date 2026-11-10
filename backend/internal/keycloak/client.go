@@ -217,10 +217,18 @@ type KeycloakClient struct {
 	tokenExpiry time.Time
 }
 
+// gocloakRequestTimeout bounds every gocloak (resty) request to Keycloak.
+// gocloak's default resty client has NO timeout, so a hung Keycloak would
+// park admin operations indefinitely (same failure mode as issue #139's
+// hand-built calls above).
+const gocloakRequestTimeout = 30 * time.Second
+
 // NewClient creates a new KeycloakClient.
 func NewClient(url, clientID, clientSecret, realm string) *KeycloakClient {
+	gc := gocloak.NewClient(url)
+	gc.RestyClient().SetTimeout(gocloakRequestTimeout)
 	return &KeycloakClient{
-		client:       gocloak.NewClient(url),
+		client:       gc,
 		clientID:     clientID,
 		clientSecret: clientSecret,
 		realm:        realm,
