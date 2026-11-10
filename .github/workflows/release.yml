@@ -9,7 +9,43 @@ permissions:
   packages: write
 
 jobs:
+  # Release gate: a tag must not publish images unless the Verify workflow's
+  # `verify` job succeeded for the exact tagged commit. github.sha is the
+  # tag's commit for both tag pushes and a workflow_dispatch run on a tag,
+  # so one check-runs lookup covers both. Job-level permissions replace the
+  # workflow-level ones for this job, hence contents: read is restated;
+  # checks: read is what the check-runs API needs. This job deliberately
+  # does not get packages: write.
+  verify-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - name: Require a successful Verify run for ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Latest `verify` check run for this commit (re-runs create new
+          # check runs; the newest one is the current verdict). Emitting one
+          # TSV row per run and sorting keeps this correct across --paginate
+          # pages, where --jq would otherwise run once per page.
+          latest="$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs?per_page=100" --paginate \
+            --jq '.check_runs[] | select(.name == "verify") | [.started_at, .status, (.conclusion // "-")] | @tsv' \
+            | sort | tail -n 1 | cut -f2- | tr '\t' ' ')"
+          if [ -z "$latest" ]; then
+            echo "::error::No Verify workflow 'verify' check run exists for commit ${{ github.sha }}. Refusing to release an unverified commit: push the commit to main (or open/update a PR) and wait for Verify to succeed, then re-tag."
+            exit 1
+          fi
+          echo "Latest 'verify' check run for ${{ github.sha }}: $latest"
+          if [ "$latest" != "completed success" ]; then
+            echo "::error::Verify has not succeeded for commit ${{ github.sha }} (latest verify check run: $latest). Refusing to release."
+            exit 1
+          fi
+
   images:
+    needs: verify-gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
