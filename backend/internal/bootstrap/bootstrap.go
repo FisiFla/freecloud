@@ -219,20 +219,105 @@ func ensureAdminRole(ctx context.Context, gc *gocloak.GoCloak, token, realm stri
 // be much longer), independent of that check ever misfiring.
 const accessTokenLifespanSeconds = 300 // 5 minutes
 
+// Realm hardening values (Keycloak's own admin-console brute-force template,
+// bounded SSO lifespans, single-use refresh tokens). Keycloak's install
+// defaults leave bruteForceProtected=false, no password policy, long SSO
+// lifespans and endlessly reusable refresh tokens, so bootstrap sets these
+// on creation and converges pre-existing realms to them.
+const (
+	realmFailureFactor                = 30
+	realmQuickLoginCheckMilliSeconds  = int64(1000)
+	realmMinimumQuickLoginWaitSeconds = 60
+	realmWaitIncrementSeconds         = 60
+	realmMaxFailureWaitSeconds        = 900
+	realmMaxDeltaTimeSeconds          = 43200
+	realmSsoSessionIdleTimeout        = 1800  // 30 minutes
+	realmSsoSessionMaxLifespan        = 28800 // 8 hours, matching the frontend session maxAge (frontend/src/lib/session.ts SESSION_MAX_AGE_SECONDS)
+	realmRefreshTokenMaxReuse         = 0
+)
+
+// realmPasswordPolicy must stay in step with minAdminPasswordLength (12) in
+// backend/internal/handlers/setup.go — bootstrap cannot import handlers.
+const realmPasswordPolicy = "length(12) and notUsername(undefined)"
+
+func intDrifted(got *int, want int) bool       { return got == nil || *got != want }
+func int64Drifted(got *int64, want int64) bool { return got == nil || *got != want }
+func boolDrifted(got *bool, want bool) bool    { return got == nil || *got != want }
+func stringDrifted(got *string, want string) bool {
+	return got == nil || *got != want
+}
+
+// hardenRealm sets every hardened field that has drifted on realm and reports
+// whether anything changed. Nil-safe: GetRealm may omit any field.
+func hardenRealm(realm *gocloak.RealmRepresentation) bool {
+	changed := false
+	if intDrifted(realm.AccessTokenLifespan, accessTokenLifespanSeconds) {
+		realm.AccessTokenLifespan = gocloak.IntP(accessTokenLifespanSeconds)
+		changed = true
+	}
+	if boolDrifted(realm.BruteForceProtected, true) {
+		realm.BruteForceProtected = gocloak.BoolP(true)
+		changed = true
+	}
+	if intDrifted(realm.FailureFactor, realmFailureFactor) {
+		realm.FailureFactor = gocloak.IntP(realmFailureFactor)
+		changed = true
+	}
+	if int64Drifted(realm.QuickLoginCheckMilliSeconds, realmQuickLoginCheckMilliSeconds) {
+		realm.QuickLoginCheckMilliSeconds = gocloak.Int64P(realmQuickLoginCheckMilliSeconds)
+		changed = true
+	}
+	if intDrifted(realm.MinimumQuickLoginWaitSeconds, realmMinimumQuickLoginWaitSeconds) {
+		realm.MinimumQuickLoginWaitSeconds = gocloak.IntP(realmMinimumQuickLoginWaitSeconds)
+		changed = true
+	}
+	if intDrifted(realm.WaitIncrementSeconds, realmWaitIncrementSeconds) {
+		realm.WaitIncrementSeconds = gocloak.IntP(realmWaitIncrementSeconds)
+		changed = true
+	}
+	if intDrifted(realm.MaxFailureWaitSeconds, realmMaxFailureWaitSeconds) {
+		realm.MaxFailureWaitSeconds = gocloak.IntP(realmMaxFailureWaitSeconds)
+		changed = true
+	}
+	if intDrifted(realm.MaxDeltaTimeSeconds, realmMaxDeltaTimeSeconds) {
+		realm.MaxDeltaTimeSeconds = gocloak.IntP(realmMaxDeltaTimeSeconds)
+		changed = true
+	}
+	if stringDrifted(realm.PasswordPolicy, realmPasswordPolicy) {
+		realm.PasswordPolicy = gocloak.StringP(realmPasswordPolicy)
+		changed = true
+	}
+	if intDrifted(realm.SsoSessionIdleTimeout, realmSsoSessionIdleTimeout) {
+		realm.SsoSessionIdleTimeout = gocloak.IntP(realmSsoSessionIdleTimeout)
+		changed = true
+	}
+	if intDrifted(realm.SsoSessionMaxLifespan, realmSsoSessionMaxLifespan) {
+		realm.SsoSessionMaxLifespan = gocloak.IntP(realmSsoSessionMaxLifespan)
+		changed = true
+	}
+	if boolDrifted(realm.RevokeRefreshToken, true) {
+		realm.RevokeRefreshToken = gocloak.BoolP(true)
+		changed = true
+	}
+	if intDrifted(realm.RefreshTokenMaxReuse, realmRefreshTokenMaxReuse) {
+		realm.RefreshTokenMaxReuse = gocloak.IntP(realmRefreshTokenMaxReuse)
+		changed = true
+	}
+	return changed
+}
+
 // ensureRealm creates the target realm if it does not already exist, and
-// keeps accessTokenLifespanSeconds enforced on realms created before this
-// change too (idempotent — matches ensurePostureFlow's pattern of updating
-// an already-existing realm for a setting introduced later).
+// converges realms created before the hardening settings existed to them
+// (idempotent — one UpdateRealm when anything drifted, none otherwise).
 func ensureRealm(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) error {
 	realm, err := gc.GetRealm(ctx, token, cfg.TargetRealm)
 	if err == nil {
 		logger.Info("bootstrap: realm already exists")
-		if realm.AccessTokenLifespan == nil || *realm.AccessTokenLifespan != accessTokenLifespanSeconds {
-			realm.AccessTokenLifespan = gocloak.IntP(accessTokenLifespanSeconds)
+		if hardenRealm(realm) {
 			if err := gc.UpdateRealm(ctx, token, *realm); err != nil {
-				return fmt.Errorf("bootstrap: update access token lifespan: %w", err)
+				return fmt.Errorf("bootstrap: converge realm hardening: %w", err)
 			}
-			logger.Info("bootstrap: updated access token lifespan", zap.Int("seconds", accessTokenLifespanSeconds))
+			logger.Info("bootstrap: converged realm hardening (brute-force protection, password policy, SSO lifespans, refresh-token reuse)")
 		}
 		return nil
 	}
@@ -241,7 +326,7 @@ func ensureRealm(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Con
 	}
 
 	logger.Info("bootstrap: creating realm")
-	_, err = gc.CreateRealm(ctx, token, gocloak.RealmRepresentation{
+	newRealm := gocloak.RealmRepresentation{
 		Realm:                  gocloak.StringP(cfg.TargetRealm),
 		Enabled:                gocloak.BoolP(true),
 		DisplayName:            gocloak.StringP("FreeCloud"),
@@ -250,8 +335,9 @@ func ensureRealm(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Con
 		ResetPasswordAllowed:   gocloak.BoolP(true),
 		EditUsernameAllowed:    gocloak.BoolP(true),
 		RegistrationAllowed:    gocloak.BoolP(false),
-		AccessTokenLifespan:    gocloak.IntP(accessTokenLifespanSeconds),
-	})
+	}
+	hardenRealm(&newRealm)
+	_, err = gc.CreateRealm(ctx, token, newRealm)
 	return err
 }
 

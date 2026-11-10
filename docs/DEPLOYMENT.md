@@ -31,7 +31,7 @@ cp .env.prod.example .env.prod
 The following are generated automatically on first boot by the `secrets-init`
 container and stored in `.secrets/secrets.env`. You do not set them in `.env.prod`:
 
-`POSTGRES_PASSWORD`, `AUTH_SECRET`, `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`,
+`POSTGRES_PASSWORD`, `AUTH_SECRET`, `SCIM_BEARER_TOKEN`, `SETUP_TOKEN`, `ACCESS_EVAL_TOKEN`,
 `FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD`, `PROVISIONING_MASTER_KEY`
 
 The same values are also written one-per-file under `.secrets/files/`. The
@@ -149,7 +149,10 @@ has been removed.
 ### First login
 
 Open `https://app.example.com`. You will be redirected to the setup wizard (`/setup`)
-on a fresh database. Create your first admin account there. On subsequent boots the
+on a fresh database. Create your first admin account there, pasting the one-time
+`SETUP_TOKEN` from `.secrets/secrets.env` on the server into the Setup token field.
+After provisioning you may delete the token from `.secrets/secrets.env` (setup then
+returns `409` anyway). On subsequent boots the
 wizard is skipped automatically (the realm is already provisioned).
 
 ### Verify

@@ -66,6 +66,12 @@ type Config struct {
 	// Required in production — Validate() rejects an empty value outside dev/test.
 	SCIMBearerToken string
 
+	// SetupToken is the one-time token required by POST /api/v1/setup to
+	// create the first admin. Deliberately NOT required by Validate(): after
+	// provisioning the operator may remove it, and enforcement (fail-closed
+	// in production) lives in the setup handler.
+	SetupToken string
+
 	// AccessEvalToken authenticates POST /api/v1/access/evaluate calls from the
 	// Keycloak authenticator SPI (or any other service that needs to gate SSO on
 	// device posture). Must be a high-entropy secret. Required in production.
@@ -195,6 +201,7 @@ func Load() *Config {
 		DeviceCookieSecret:    secrets.get("DEVICE_COOKIE_SECRET", ""),
 		ProvisioningMasterKey: secrets.get("PROVISIONING_MASTER_KEY", ""),
 		SCIMBearerToken:       secrets.get("SCIM_BEARER_TOKEN", ""),
+		SetupToken:            secrets.get("SETUP_TOKEN", ""),
 		AccessEvalToken:       secrets.get("ACCESS_EVAL_TOKEN", ""),
 
 		// D1 — Notifications

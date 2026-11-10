@@ -109,7 +109,7 @@ verify-secrets:
 	@tmp="$$(mktemp -d)"; \
 		trap 'rm -rf "$$tmp"' EXIT; \
 		SECRETS_FILE="$$tmp/secrets.env" SECRETS_DIR="$$tmp/files" sh docker/init-secrets/generate.sh >/dev/null; \
-		for key in POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY; do \
+		for key in POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN SETUP_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY; do \
 			value=$$(sed -n "s/^$$key=//p" "$$tmp/secrets.env" | head -n 1); \
 			if [ -z "$$value" ]; then \
 				echo "missing or empty $$key in generated secrets.env"; \

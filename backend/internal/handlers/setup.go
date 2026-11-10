@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -22,7 +23,7 @@ import (
 const setupAdvisoryLockID int64 = 8241093572
 
 // SetupStatus handles GET /api/v1/setup/status.
-// Returns {"provisioned": bool} — unauthenticated, read-only.
+// Returns {"provisioned": bool, "setupTokenRequired": bool} — unauthenticated, read-only.
 // "Provisioned" is derived from Keycloak state: true when at least one user
 // holds the "admin" realm role (no migration required).
 func (h *Handler) SetupStatus(w http.ResponseWriter, r *http.Request) {
@@ -33,11 +34,14 @@ func (h *Handler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	respondJSON(w, http.StatusOK, map[string]bool{"provisioned": provisioned})
+	respondJSON(w, http.StatusOK, map[string]bool{
+		"provisioned":        provisioned,
+		"setupTokenRequired": h.setupToken != "" || h.setupTokenRequired,
+	})
 }
 
 // Setup handles POST /api/v1/setup.
-// Body: {adminEmail, adminPassword, orgName}
+// Body: {adminEmail, adminPassword, orgName, setupToken}
 // Fail-closed: returns 409 once provisioned.
 //
 // H3: first-run provisioning is serialized by a distributed pg advisory lock
@@ -54,6 +58,7 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 		AdminEmail    string `json:"adminEmail"`
 		AdminPassword string `json:"adminPassword"`
 		OrgName       string `json:"orgName"`
+		SetupToken    string `json:"setupToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid JSON")
@@ -73,6 +78,21 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(errs) > 0 {
 		respondValidationErrors(w, errs)
+		return
+	}
+
+	// One-time setup-token gate: without it, whoever reaches a fresh
+	// deployment first owns it. Checked before the lock (a pure function of
+	// the request + startup config). Token values are never logged.
+	if h.setupToken != "" {
+		if subtle.ConstantTimeCompare([]byte(body.SetupToken), []byte(h.setupToken)) != 1 {
+			h.logger.Warn("setup: rejected request with invalid setup token")
+			respondError(w, http.StatusForbidden, "invalid setup token")
+			return
+		}
+	} else if h.setupTokenRequired {
+		h.logger.Error("setup: SETUP_TOKEN is not configured on the server; refusing first-admin provisioning")
+		respondError(w, http.StatusServiceUnavailable, "setup token is not configured on the server")
 		return
 	}
 

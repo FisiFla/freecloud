@@ -39,6 +39,13 @@ type fakeKC struct {
 	createdAccessTokenLifespan   *int
 	updatedAccessTokenLifespan   *int
 
+	// Realm hardening: realmFields are extra fields served on GET realm
+	// (simulating a pre-existing realm's current values); the created/updated
+	// bodies capture what bootstrap sent so tests can assert every field.
+	realmFields        map[string]interface{}
+	createdRealmBody   map[string]interface{}
+	updatedRealmBodies []map[string]interface{}
+
 	// A1: e2e-admin seeding.
 	e2eAdminExists           bool
 	e2eAdminUserCreateCalls  int32
@@ -104,6 +111,7 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		f.realmExists = true
 		var body map[string]interface{}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.createdRealmBody = body
 		if v, ok := body["accessTokenLifespan"].(float64); ok {
 			iv := int(v)
 			f.createdAccessTokenLifespan = &iv
@@ -122,6 +130,9 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 				if f.realmAccessTokenLifespan != nil {
 					body["accessTokenLifespan"] = *f.realmAccessTokenLifespan
 				}
+				for k, v := range f.realmFields {
+					body[k] = v
+				}
 				_ = json.NewEncoder(w).Encode(body)
 			} else {
 				http.Error(w, `{"error":"Realm not found."}`, http.StatusNotFound)
@@ -132,6 +143,7 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 			atomic.AddInt32(&f.realmPutCalls, 1)
 			var body map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&body)
+			f.updatedRealmBodies = append(f.updatedRealmBodies, body)
 			if v, ok := body["accessTokenLifespan"].(float64); ok {
 				iv := int(v)
 				f.updatedAccessTokenLifespan = &iv
@@ -760,6 +772,7 @@ func TestBootstrap_ExistingRealmAccessTokenLifespanAlreadyCorrect_NoUpdate(t *te
 	f.realmExists = true
 	correct := accessTokenLifespanSeconds
 	f.realmAccessTokenLifespan = &correct
+	f.realmFields = hardenedRealmFields() // lifespan alone no longer means "already correct"
 
 	_, err := Run(context.Background(), Config{
 		KeycloakURL:   f.srv.URL,
@@ -775,6 +788,103 @@ func TestBootstrap_ExistingRealmAccessTokenLifespanAlreadyCorrect_NoUpdate(t *te
 	// the lifespan check redundantly issued its own PUT here, this would be 2.
 	if got := atomic.LoadInt32(&f.realmPutCalls); got != 1 {
 		t.Errorf("expected exactly 1 realm PUT (from posture-flow binding only, no extra lifespan update), got %d", got)
+	}
+}
+
+// hardenedRealmFields is the fully-hardened realm state ensureRealm must
+// converge to, keyed by Keycloak's JSON field names.
+func hardenedRealmFields() map[string]interface{} {
+	return map[string]interface{}{
+		"bruteForceProtected":          true,
+		"failureFactor":                float64(30),
+		"quickLoginCheckMilliSeconds":  float64(1000),
+		"minimumQuickLoginWaitSeconds": float64(60),
+		"waitIncrementSeconds":         float64(60),
+		"maxFailureWaitSeconds":        float64(900),
+		"maxDeltaTimeSeconds":          float64(43200),
+		"passwordPolicy":               realmPasswordPolicy,
+		"ssoSessionIdleTimeout":        float64(1800),
+		"ssoSessionMaxLifespan":        float64(28800),
+		"revokeRefreshToken":           true,
+		"refreshTokenMaxReuse":         float64(0),
+	}
+}
+
+func assertRealmHardened(t *testing.T, body map[string]interface{}, where string) {
+	t.Helper()
+	for k, want := range hardenedRealmFields() {
+		got, ok := body[k]
+		if !ok {
+			t.Errorf("%s: realm body missing %q (want %v)", where, k, want)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s: realm body %q = %v, want %v", where, k, got, want)
+		}
+	}
+}
+
+func runBootstrap(t *testing.T, f *fakeKC) {
+	t.Helper()
+	_, err := Run(context.Background(), Config{
+		KeycloakURL:   f.srv.URL,
+		AdminUsername: "admin",
+		AdminPassword: "admin",
+		TargetRealm:   "freecloud",
+	})
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+}
+
+// TestBootstrap_NewRealmIsHardened verifies a freshly created realm carries
+// brute-force protection, the password policy, bounded SSO lifespans and
+// single-use refresh tokens instead of Keycloak's permissive defaults.
+func TestBootstrap_NewRealmIsHardened(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+	f.realmExists = false
+	runBootstrap(t, f)
+	if f.createdRealmBody == nil {
+		t.Fatal("expected a realm creation call")
+	}
+	assertRealmHardened(t, f.createdRealmBody, "create")
+}
+
+// TestBootstrap_ExistingRealmHardeningBackfilled verifies a pre-existing
+// realm at Keycloak defaults gets exactly one hardening UpdateRealm.
+func TestBootstrap_ExistingRealmHardeningBackfilled(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+	f.realmExists = true // all hardened fields absent, as an old realm would be
+	runBootstrap(t, f)
+	hardening := 0
+	for _, body := range f.updatedRealmBodies {
+		if body["bruteForceProtected"] == true {
+			hardening++
+			assertRealmHardened(t, body, "update")
+		}
+	}
+	if hardening != 1 {
+		t.Errorf("expected exactly 1 hardening realm update, got %d (total PUTs %d)", hardening, len(f.updatedRealmBodies))
+	}
+}
+
+// TestBootstrap_AlreadyHardenedRealmNoUpdate verifies idempotency: a realm
+// already carrying every hardened value triggers no hardening update (the
+// only PUT left is ensurePostureFlow's browserFlow binding).
+func TestBootstrap_AlreadyHardenedRealmNoUpdate(t *testing.T) {
+	f := newFakeKC(t)
+	defer f.srv.Close()
+	f.realmExists = true
+	correct := accessTokenLifespanSeconds
+	f.realmAccessTokenLifespan = &correct
+	f.realmFields = hardenedRealmFields()
+	runBootstrap(t, f)
+	// The posture-flow PUT echoes the whole realm (hardened fields included),
+	// so the PUT count is the signal: a redundant hardening update would make 2.
+	if got := atomic.LoadInt32(&f.realmPutCalls); got != 1 {
+		t.Errorf("expected exactly 1 realm PUT (posture-flow binding only), got %d", got)
 	}
 }
 
