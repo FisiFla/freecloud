@@ -14,9 +14,12 @@
 # resolves the database DSN at parse time and fails fast without it.)
 #
 # Prometheus scrapes the backend's /metrics endpoint and probes /readyz through
-# the blackbox exporter. Grafana is exposed on port 3100 (change GF_PORT in
+# the blackbox exporter. Grafana is bound to 127.0.0.1:3100 on the host
+# (change GF_PORT in
 # .env.prod to override). The dashboard and alert rules are provisioned
-# automatically from docker/observability/. Fired alerts are delivered by
+# automatically from docker/observability/. Reach Grafana via an SSH tunnel
+# (ssh -L 3100:127.0.0.1:3100 <host>) — it is deliberately NOT internet-
+# facing; Prometheus and Alertmanager publish no host port at all. Fired alerts are delivered by
 # Alertmanager to Slack when the operator has set SLACK_ALERT_WEBHOOK_URL in
 # .secrets/secrets.env (see docs/OBSERVABILITY.md "Slack alert routing");
 # with no webhook set, everything still runs, alerts are just not delivered.
@@ -25,10 +28,16 @@
 # (both compose files belong to one project), so Prometheus can reach
 # backend:8080 without exposing /metrics publicly.
 
+# Same rotation anchor as docker-compose.prod.yml (anchors don't cross files).
+x-logging: &default-logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "5" }
+
 services:
   prometheus:
     image: prom/prometheus:v2.53.0@sha256:075b1ba2c4ebb04bc3a6ab86c06ec8d8099f8fda1c96ef6d104d9bb1def1d8bc  # prometheus v2.53.0
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
@@ -47,6 +56,7 @@ services:
   blackbox-exporter:
     image: prom/blackbox-exporter:v0.25.0@sha256:b04a9fef4fa086a02fc7fcd8dcdbc4b7b35cc30cdee860fdc6a19dd8b208d63e  # blackbox-exporter v0.25.0
     restart: unless-stopped
+    logging: *default-logging
     command:
       - "--config.file=/etc/blackbox_exporter/config.yml"
     volumes:
@@ -69,6 +79,7 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5  # alertmanager v0.27.0
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager
@@ -81,11 +92,12 @@ services:
   grafana:
     image: grafana/grafana:11.1.0@sha256:079600c9517b678c10cda6006b4487d3174512fd4c6cface37df7822756ed7a5  # grafana 11.1.0
     restart: unless-stopped
+    logging: *default-logging
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:?set GF_ADMIN_PASSWORD in .env.prod}
       - GF_USERS_ALLOW_SIGN_UP=false
     ports:
-      - "${GF_PORT:-3100}:3000"
+      - "127.0.0.1:${GF_PORT:-3100}:3000"
     volumes:
       - grafana_data:/var/lib/grafana
       - ./observability/grafana-provisioning:/etc/grafana/provisioning:ro
