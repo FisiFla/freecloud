@@ -165,6 +165,7 @@ services:
     restart: unless-stopped
     secrets:
       - scim_bearer_token
+      - setup_token
       - access_eval_token
       - fleet_webhook_secret
       - provisioning_master_key
@@ -192,6 +193,7 @@ services:
       # The backend resolves secrets through <VAR>_FILE → <VAR>_VAULT_PATH →
       # plain env (backend/internal/config/secrets.go).
       SCIM_BEARER_TOKEN_FILE: /run/secrets/scim_bearer_token
+      SETUP_TOKEN_FILE: /run/secrets/setup_token
       ACCESS_EVAL_TOKEN_FILE: /run/secrets/access_eval_token
       FLEET_WEBHOOK_SECRET_FILE: /run/secrets/fleet_webhook_secret
       KC_BOOTSTRAP_PASSWORD_FILE: /run/secrets/kc_admin_password
@@ -339,3 +341,5 @@ secrets:
     file: ../.secrets/files/fleet_webhook_secret
   provisioning_master_key:
     file: ../.secrets/files/provisioning_master_key
+  setup_token:
+    file: ../.secrets/files/setup_token

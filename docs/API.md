@@ -70,9 +70,21 @@ All `/api/v1/` responses use a standard JSON envelope:
 | POST | `/api/v1/fleet/enrollment-callback` | FleetDM enrollment webhook (HMAC-authenticated) |
 | POST | `/api/v1/access/evaluate` | Posture check for conditional access SPI (`ACCESS_EVAL_TOKEN`) |
 | POST | `/api/v1/auth/forgot-password` | Public password-reset trigger (rate-limited 10/min) |
+| GET | `/api/v1/setup/status` | First-run provisioning state: `{provisioned, setupTokenRequired}` |
+| POST | `/api/v1/setup` | Create the first admin (see below) |
 | GET | `/scim/v2/Users[/{id}]` | SCIM 2.0 user operations (`SCIM_BEARER_TOKEN`) |
 | POST/PATCH/DELETE | `/scim/v2/Users/{id}` | SCIM 2.0 user operations |
 | GET/POST/PATCH/DELETE | `/scim/v2/Groups[/{id}]` | SCIM 2.0 group operations |
+
+### First-run setup
+
+`POST /api/v1/setup` creates the first admin. Body: `{adminEmail, adminPassword, orgName, setupToken}`.
+`setupToken` must match the server's one-time `SETUP_TOKEN` when one is configured (production):
+a missing or wrong token returns `403`. When a production server has no `SETUP_TOKEN`
+configured it fails closed with `503` instead of provisioning. On dev/test stacks with no
+token configured the field may be left blank. Once an admin exists the endpoint returns `409`.
+`GET /api/v1/setup/status` reports `setupTokenRequired` so the setup page can tell whether
+the token field applies.
 
 ## API Endpoints (JWT-authenticated)
 
@@ -372,6 +384,7 @@ Authentication: `Authorization: Bearer <SCIM_BEARER_TOKEN>`.
 | `FLEET_WEBHOOK_SECRET` | `""` | Yes | HMAC key for enrollment callback |
 | `PROVISIONING_MASTER_KEY` | `""` | Yes | Base64 AES-256 key for stored integration secrets |
 | `SCIM_BEARER_TOKEN` | `""` | Yes | Bearer token for SCIM provisioning |
+| `SETUP_TOKEN` | `""` | Yes (first run) | One-time token required by `POST /api/v1/setup`; may be removed after provisioning |
 | `ACCESS_EVAL_TOKEN` | `""` | Yes | Bearer token for access evaluation |
 | `CORS_ORIGIN` | `http://localhost:3000` | Yes | Allowed CORS origin |
 | `RECONCILE_INTERVAL` | `15m` | — | Keycloak↔DB reconciliation job interval (`0` to disable) |

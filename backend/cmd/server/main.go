@@ -381,6 +381,7 @@ func runServer() {
 	}
 	handler.SetDeviceCookieSecret(cfg.DeviceCookieSigningSecret())
 	handler.SetSCIMBearerToken(cfg.SCIMBearerToken)
+	handler.SetSetupToken(cfg.SetupToken, !config.IsDevOrE2E())
 	handler.SetAccessEvalToken(cfg.AccessEvalToken)
 	handler.SetReconciler(rec)
 	if eventNotifier != nil {
