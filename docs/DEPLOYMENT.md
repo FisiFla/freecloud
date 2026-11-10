@@ -65,11 +65,45 @@ cluster. Rotate one secret at a time instead:
 | `FLEET_WEBHOOK_SECRET` | Remove the line, re-run `make prod-secrets-init`, restart the backend, and update the webhook secret in Fleet. | Enrollment callbacks with the old secret are rejected. Also rotates the device-cookie signing key unless `DEVICE_COOKIE_SECRET` is set. |
 | `PROVISIONING_MASTER_KEY` | Remove the line, re-run `make prod-secrets-init`, restart the backend, and re-enter the connector tokens in Settings → Integrations. | Stored connector secrets have to be re-entered (they can no longer be decrypted). |
 | `POSTGRES_PASSWORD` | **Not rotatable by re-running the generator** — the Postgres image applies the password only when the data directory is empty. Change it in the database and update the file:<br>`ALTER ROLE freecloud WITH PASSWORD '<new>';`<br>then set `POSTGRES_PASSWORD=<new>` in `.secrets/secrets.env`, re-run `make prod-secrets-init` and restart the backend. | The backend must be restarted with the new DSN. |
-| `KC_ADMIN_PASSWORD` | **Not rotatable by re-running the generator** — Keycloak stores the admin password in its own database after first boot. Change it with `kcadm` (master realm) and update `.secrets/secrets.env` the same way as above. | The Keycloak master-realm admin password changes. |
+| `KC_ADMIN_PASSWORD` | **Not rotatable by re-running the generator** — Keycloak stores the admin password in its own database after first boot. Change it with `kcadm` over the **internal** Keycloak port (see [Keycloak admin access](#keycloak-admin-access-internal-only); the public URL 404s admin paths), then update `.secrets/secrets.env` the same way as above. | The Keycloak master-realm admin password changes. |
 
 After changing anything in `.secrets/secrets.env`, re-run
 `make prod-secrets-init` so the per-key secret files are refreshed, then
 recreate the affected services (`make prod-up`).
+
+### Keycloak admin access (internal only)
+
+The public Keycloak vhost returns **404** for `/admin/*` and
+`/realms/master/*` (`@kcadmin` in `docker/Caddyfile`). The admin console and
+any master-realm `kcadm` call against the public `KC_PUBLIC_URL` therefore
+fail — administer Keycloak from inside the compose network instead.
+
+From a shell on the host (repo root), with the secrets loaded:
+
+```bash
+set -a && . .secrets/secrets.env && set +a
+KC="docker compose -f docker/docker-compose.prod.yml --env-file .env.prod exec -T keycloak"
+$KC /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 \
+  --realm master --user admin --password "$KC_ADMIN_PASSWORD"
+# Example: rotate the master-realm admin password, then store the new value in
+# .secrets/secrets.env, re-run `make prod-secrets-init`, and `make prod-up`.
+$KC /opt/keycloak/bin/kcadm.sh set-password -r master --username admin \
+  --new-password "$NEW_KC_ADMIN_PASSWORD"
+```
+
+`http://localhost:8080` here is Keycloak's own HTTP listener as seen from
+inside its container (`KC_HTTP_ENABLED=true`, no host port published), so the
+traffic never passes through Caddy. For the browser-based admin console,
+forward the container's port over SSH — from your laptop, with `$KC_IP` the
+container's bridge address (`docker inspect` it on the host first):
+
+```bash
+ssh -N -L 8080:$KC_IP:8080 <host>
+```
+
+then open `http://localhost:8080/admin`. Do not publish Keycloak's port or
+punch a hole in the Caddy `@kcadmin` block for this (the Caddyfile comments
+show a temporary IP-allowlist snippet for emergencies — revert it after).
 
 ### Optional: `DEVICE_COOKIE_SECRET`
 
@@ -276,6 +310,16 @@ If the GHCR packages are private, run `docker login ghcr.io` on the host
   reliably locked); check Keycloak connectivity and retry.
 - **Enrollment callback returns 401** — `FLEET_WEBHOOK_SECRET` mismatch between
   the backend and Fleet's webhook configuration.
+- **No Keycloak `:9000` health endpoint — expected.** `KC_HEALTH_ENABLED` is
+  deliberately **not** set in production: in Keycloak 26.8 it is a build-time
+  option, and enabling it makes `kc.sh start` re-augment at boot, which fails
+  on this image (`SmallRyeHealthProcessor` dies on the posture-check SPI fat
+  jar's shaded `jakarta.json` copy). The compose healthcheck therefore probes
+  the main `:8080` port instead (`GET /realms/master` over bash `/dev/tcp`,
+  which the Keycloak image ships — unlike curl/wget). Proper fix (future
+  work, **not done**): add shade `<relocations>` for the SPI's JSON classes in
+  `keycloak-authenticator/pom.xml` and bake `KC_HEALTH_ENABLED` into the
+  image's `kc.sh build` in `docker/Dockerfile.keycloak`.
 
 ## Scale note
 

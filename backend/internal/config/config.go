@@ -45,8 +45,10 @@ type Config struct {
 	// KeycloakIssuerURL optionally overrides the expected JWT issuer
 	// base URL when tokens carry a public iss (KC_HOSTNAME) that
 	// differs from the internal KEYCLOAK_URL used for JWKS/Admin calls
-	// (split-horizon, e.g. the localhost dev stack). Empty = derive
-	// the issuer from KeycloakURL (single-URL deployments: prod, e2e).
+	// (split-horizon: production sets KEYCLOAK_URL=http://keycloak:8080
+	// internally and this to the public Keycloak URL, as does the
+	// localhost dev stack). Empty = derive the issuer from KeycloakURL
+	// (single-URL deployments, e.g. e2e).
 	KeycloakIssuerURL    string
 	KeycloakRealm        string
 	KeycloakClientID     string
@@ -359,8 +361,8 @@ func (c *Config) Validate() error {
 		add("CORS_ORIGIN must not be \"*\"; set the explicit dashboard origin (e.g. https://dashboard.example.com)")
 	}
 	// A malformed issuer override rejects every token as "invalid
-	// issuer" in ANY environment (its primary user is the development
-	// localhost stack), so it is validated before the env branch.
+	// issuer" in ANY environment (used by both the production and the
+	// localhost stacks), so it is validated before the env branch.
 	if c.KeycloakIssuerURL != "" {
 		u, perr := url.Parse(c.KeycloakIssuerURL)
 		if perr != nil || u.Scheme == "" || u.Host == "" {

@@ -249,6 +249,13 @@ to insecure defaults):
 See `.env.prod.example` for the full set including Caddy public hostnames, SMTP,
 Slack, Webhook, and SIEM variables.
 
+Split-horizon Keycloak URLs: in production `KEYCLOAK_URL` is the *internal*
+service address (`http://keycloak:8080`) used for server-side JWKS, Admin API,
+and bootstrap calls, while `KEYCLOAK_ISSUER_URL` is set to the public Keycloak
+URL — tokens carry the public `iss`, so the backend must expect that issuer
+even though it fetches JWKS internally. This is not a dev-only mechanism:
+`docker/docker-compose.prod.yml` and the localhost stack both wire it this way.
+
 ## Multi-Organisation Tenancy (v1.7)
 
 FreeCloud supports multiple organisations in one deployment (MSP-style) using a
