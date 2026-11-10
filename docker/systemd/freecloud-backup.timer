@@ -1,0 +1,15 @@
+# freecloud-backup.timer — runs freecloud-backup.service nightly at 02:30
+# (plus up to 15m randomized delay; missed runs fire on next boot).
+# Install steps: see the header of freecloud-backup.service.
+
+[Unit]
+Description=Nightly FreeCloud backup bundle
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=freecloud-backup.service
+
+[Install]
+WantedBy=timers.target
