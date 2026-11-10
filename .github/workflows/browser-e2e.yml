@@ -36,18 +36,18 @@ jobs:
       - name: Start localhost stack (docs/QUICKSTART.md)
         run: make localhost-up
 
-      - name: Wait for frontend sign-in page
+      - name: Wait for frontend health
         run: |
-          echo "Waiting for http://localhost:3000/signin..."
+          echo "Waiting for http://localhost:3000/api/health..."
           for i in $(seq 1 60); do
-            if curl -sf http://localhost:3000/signin >/dev/null 2>&1; then
+            if curl -sf http://localhost:3000/api/health >/dev/null 2>&1; then
               echo "Frontend ready."
               break
             fi
             echo "  attempt $i/60..."
             sleep 5
           done
-          curl -sf http://localhost:3000/signin >/dev/null || (echo "Frontend not ready after 300s." && exit 1)
+          curl -sf http://localhost:3000/api/health >/dev/null || (echo "Frontend not ready after 300s." && exit 1)
 
       - name: Install frontend deps + Chromium
         run: |

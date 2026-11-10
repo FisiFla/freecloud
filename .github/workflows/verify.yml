@@ -39,6 +39,11 @@ jobs:
         # iss vs internal Keycloak URLs) must stay self-consistent or
         # browser sign-in silently breaks again.
         run: scripts/check-localhost-issuer.sh
+      - name: Localhost secrets ordering
+        # A fresh boot must generate .secrets/secrets.env before any
+        # container is created (env_file is resolved at create time) or
+        # services start with empty secrets and sign-in 500s.
+        run: scripts/check-localhost-secrets.sh
       - name: Keycloak SPI tests
         run: cd keycloak-authenticator && mvn test
       - name: Race detector
