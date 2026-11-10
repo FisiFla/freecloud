@@ -1,4 +1,4 @@
-.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db test-integration prod-build prod-up prod-down localhost-up localhost-down prod-secrets-init verify-provisioning-live
+.PHONY: dev-up dev-down db-migrate kc-build build-backend build-frontend clean verify verify-secrets verify-db verify-all test-db test-integration prod-build prod-up prod-down prod-backup localhost-up localhost-down prod-secrets-init verify-provisioning-live
 
 # Host uid/gid of the operator running make. Exported so the secret generator
 # (docker/init-secrets/generate.sh) can create .secrets/* owned by that user
@@ -60,6 +60,15 @@ prod-up: prod-secrets-init
 
 prod-down:
 	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod down
+
+# Full backup bundle: PostgreSQL cluster dump (via the prod compose postgres
+# service, which must be up) + .secrets/ + manifest. See
+# docs/BACKUP_RESTORE.md. BACKUP_PASSPHRASE / BACKUP_RETENTION_DAYS in the
+# environment are passed through to scripts/backup-bundle.sh.
+BACKUP_DIR ?= ./backups
+
+prod-backup:
+	scripts/backup-bundle.sh --compose $(BACKUP_DIR)
 
 # C1/C2 — All-in-one localhost stack (no TLS, no required env).
 # Generates secrets on first boot, then starts all services.

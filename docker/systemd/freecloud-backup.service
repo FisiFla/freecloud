@@ -1,0 +1,29 @@
+# freecloud-backup.service — nightly FreeCloud backup bundle
+# (PostgreSQL cluster + .secrets/). See docs/BACKUP_RESTORE.md.
+#
+# Install:
+#   sudo cp docker/systemd/freecloud-backup.service \
+#           docker/systemd/freecloud-backup.timer /etc/systemd/system/
+#   # (or symlink them instead of copying)
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now freecloud-backup.timer
+#
+# Edit WorkingDirectory below (and the EnvironmentFile path) to the real
+# checkout location if it is not /opt/freecloud.
+#
+# Optional encryption: create /opt/freecloud/.backup-passphrase (mode 0600,
+# owned by root) containing one line:
+#   BACKUP_PASSPHRASE=<passphrase>
+# The leading "-" on EnvironmentFile makes the file optional — without it,
+# bundles are written unencrypted.
+
+[Unit]
+Description=FreeCloud backup bundle (PostgreSQL cluster + .secrets)
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/freecloud
+EnvironmentFile=-/opt/freecloud/.backup-passphrase
+ExecStart=/usr/bin/make prod-backup
