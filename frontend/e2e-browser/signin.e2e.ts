@@ -74,6 +74,24 @@ test("browser sign-in loop completes (setup -> Keycloak -> app)", async ({ page 
   await page.locator("#password").fill(password);
   await page.locator("#kc-login").click();
 
+  // Keycloak Verify Profile interstitial: setup collects only an email, so
+  // the first admin has no first/last name and KC 26's declarative user
+  // profile (both attributes required) stops the FIRST login at an
+  // "Update Account Information" required-action page. A real first admin
+  // completes it once; model that here when it appears. (Found via the
+  // retained trace: final URL login-actions/required-action, UPDATE_PROFILE.)
+  const profileHeading = page.getByRole("heading", { name: "Update Account Information" });
+  await Promise.race([
+    page.waitForURL((url) => url.origin === appOrigin, { timeout: 60_000 }),
+    profileHeading.waitFor({ state: "visible", timeout: 60_000 }),
+  ]);
+  if (await profileHeading.isVisible()) {
+    logStep(page, "keycloak update-profile interstitial");
+    await page.locator("#firstName").fill("E2E");
+    await page.locator("#lastName").fill("Admin");
+    await page.getByRole("button", { name: "Submit" }).click();
+  }
+
   // The #286 loop: the browser must come BACK to the app origin and stay
   // there — not bounce between /signin and Keycloak.
   await page.waitForURL((url) => url.origin === appOrigin, { timeout: 60_000 });
