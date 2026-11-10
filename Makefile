@@ -61,9 +61,14 @@ prod-pull: prod-secrets-init
 # C3: prod-up generates secrets (if not yet present) then sources them into the
 # shell so compose can interpolate POSTGRES_PASSWORD / KC_ADMIN_PASSWORD into
 # URL strings in docker-compose.prod.yml.
+# Deliberately NO --build: the app images are the pinned release images
+# (FREECLOUD_VERSION, see prod-pull), and --build would silently rebuild from
+# local source and retag over them, defeating pinning/rollback. Compose still
+# builds any image that is missing locally (e.g. freecloud-postgres:local on
+# first deploy); to deploy from source instead, run `make prod-build` first.
 prod-up: prod-secrets-init
 	@set -a && . .secrets/secrets.env && set +a && \
-		docker compose -f docker/docker-compose.prod.yml --env-file .env.prod up -d --build
+		docker compose -f docker/docker-compose.prod.yml --env-file .env.prod up -d
 
 prod-down:
 	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod down

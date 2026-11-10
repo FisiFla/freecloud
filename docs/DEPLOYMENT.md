@@ -22,7 +22,7 @@ cp .env.prod.example .env.prod
 | Variable | Purpose |
 |---|---|
 | `DASHBOARD_DOMAIN` / `API_DOMAIN` / `KC_DOMAIN` | Public hostnames Caddy serves + gets TLS for |
-| `DASHBOARD_PUBLIC_URL` / `API_PUBLIC_URL` / `KC_PUBLIC_URL` | The `https://` URLs for the above |
+| `DASHBOARD_PUBLIC_URL` / `KC_PUBLIC_URL` | The `https://` URLs for the dashboard and Keycloak (no API URL: the browser uses the same-origin BFF) |
 | `FLEET_URL` / `FLEET_API_TOKEN` | Real FleetDM API endpoint + token |
 | `POSTURE_CHECK_ENABLED` | Device-posture enforcement at login. **Defaults to `true`** in the production stack — a stack that forgets the variable must not silently run without posture checks. Set it to `false` only deliberately. |
 
@@ -127,7 +127,8 @@ and `NOTIFY_WEBHOOK` + `WEBHOOK_URL` + `WEBHOOK_SECRET`.
 ## Deploy
 
 ```bash
-make prod-up        # docker compose ... up -d --build
+make prod-pull      # fetch the pinned release images (FREECLOUD_VERSION)
+make prod-up        # docker compose ... up -d (no build; source deploys: make prod-build first)
 ```
 
 Startup sequence (all automatic, single command):
