@@ -2,15 +2,50 @@
 # The hostnames are injected from the compose environment.
 
 {$DASHBOARD_DOMAIN} {
-	reverse_proxy frontend:3000
+	# Active health checking: Caddy takes the frontend out of rotation
+	# (clean 502 instead of hanging connections) while /api/health fails —
+	# the same endpoint the frontend image's Docker HEALTHCHECK probes.
+	# (Subdirectives stable since Caddy 2.4; compose pins caddy 2-alpine.)
+	reverse_proxy frontend:3000 {
+		health_uri /api/health
+		health_interval 15s
+		health_timeout 3s
+	}
 }
 
 {$API_DOMAIN} {
 	respond /metrics 404
-	reverse_proxy backend:8080
+	# The backend image is distroless (no shell/wget), so it cannot carry a
+	# Docker healthcheck — this active check is its routing health signal.
+	reverse_proxy backend:8080 {
+		health_uri /healthz
+		health_interval 15s
+		health_timeout 3s
+	}
 }
 
 {$KC_DOMAIN} {
+	# The admin console and the master realm are NOT served to the public
+	# internet: the master realm is the keys to every other realm, and only
+	# the freecloud realm needs to be reachable. (This also blocks
+	# master-realm OIDC — intended; nothing public authenticates against
+	# master. The backend's Keycloak admin calls use the internal
+	# http://keycloak:8080 URL and never pass through Caddy.)
+	#
+	# To administer Keycloak, tunnel in over SSH and use the internal path,
+	# e.g. from a shell on the host:  docker compose exec keycloak kcadm ...
+	# or temporarily allowlist your own IP by replacing the two lines below
+	# with:
+	#   @kcadmin path /admin/* /realms/master/*
+	#   @kcadminremote remote_ip 203.0.113.10/32
+	#   handle @kcadmin {
+	#       handle @kcadminremote {
+	#           reverse_proxy keycloak:8080
+	#       }
+	#       respond 404
+	#   }
+	@kcadmin path /admin/* /realms/master/*
+	respond @kcadmin 404
 	# Keycloak is proxied directly, so it gets none of the hardening headers
 	# the backend (cmd/server/main.go) and the frontend (next.config.js) set on
 	# their own responses — without this the login page, where users type their

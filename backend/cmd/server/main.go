@@ -67,7 +67,10 @@ func runMigrate() {
 		logger.Fatal("migrate: DATABASE_URL could not be resolved", zap.Strings("secret_errors", cfg.SecretErrors()))
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// 10 minutes: this one context bounds the whole migration run (pool
+	// setup included), and a large backfill migration on a small VPS can
+	// legitimately take minutes while holding the advisory lock.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
 	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
@@ -491,11 +494,17 @@ func runServer() {
 			"proxy shares ONE rate-limit bucket, so a single client can exhaust the budget for all tenants. " +
 			"Set TRUSTED_PROXY_CIDRS to the proxy's network range to derive per-client buckets.")
 	}
-	newLimiter, closeLimiterFactory, err := middleware.NewLimiterFactory(cfg.RedisURL, cfg.TrustedProxyCIDRs, logger)
+	newLimiter, redisPing, closeLimiterFactory, err := middleware.NewLimiterFactory(cfg.RedisURL, cfg.TrustedProxyCIDRs, logger)
 	if err != nil {
 		logger.Fatal("failed to initialize rate limiter", zap.Error(err))
 	}
 	defer closeLimiterFactory()
+	// Redis-backed limiter ⇒ Redis is a serving dependency (the limiter
+	// fails closed without it), so /readyz must report it. redisPing is nil
+	// for the in-memory factory, which has nothing external to lose.
+	if redisPing != nil {
+		handler.SetRedisCheck(redisPing)
+	}
 
 	// Register routes (auth + actor middleware applied inside)
 	handlers.SetupRoutes(r, handler, authMW.Middleware, newLimiter)
