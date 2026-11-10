@@ -1,9 +1,15 @@
 "use client";
 
 import { signIn } from "next-auth/react";
-import { Cloud } from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
+import { AlertCircle, Cloud } from "lucide-react";
+import { signInErrorMessage } from "@/lib/signin-error";
 
-export default function SignIn() {
+function SignInContent() {
+  const searchParams = useSearchParams();
+  const errorMessage = signInErrorMessage(searchParams.get("error"));
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">
       <div className="bg-white rounded-2xl shadow-lg p-10 w-full max-w-sm text-center dark:bg-slate-900">
@@ -15,6 +21,16 @@ export default function SignIn() {
         </div>
         <h1 className="text-2xl font-semibold text-slate-900 mb-2 dark:text-slate-100">Welcome back</h1>
         <p className="text-slate-500 mb-8 dark:text-slate-400">Sign in to your control plane</p>
+
+        {errorMessage && (
+          <div
+            role="alert"
+            className="mb-6 flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-left text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300"
+          >
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+            <p>{errorMessage}</p>
+          </div>
+        )}
 
         <button
           onClick={() => signIn("keycloak", { callbackUrl: "/" })}
@@ -31,5 +47,13 @@ export default function SignIn() {
         </a>
       </div>
     </div>
+  );
+}
+
+export default function SignIn() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-slate-50 dark:bg-slate-950" />}>
+      <SignInContent />
+    </Suspense>
   );
 }

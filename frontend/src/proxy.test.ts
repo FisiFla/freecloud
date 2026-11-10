@@ -161,6 +161,54 @@ describe("middleware (src/proxy.ts)", () => {
     expect(res.status).toBe(200);
   });
 
+  // --- First-run dead end: /setup must render when provisioning is unknown ---
+  it("renders /setup when the setup-status probe cannot reach the backend (unknown)", async () => {
+    global.fetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED")) as unknown as typeof fetch;
+    const res = await handler(makeRequest("http://localhost/setup"), EVENT);
+    // Fresh deploy + backend down must not bounce /setup to a login for a
+    // nonexistent admin — the setup page itself renders.
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("renders /setup when the setup-status probe returns a non-OK response (unknown)", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response("upstream unavailable", { status: 502 }),
+    ) as unknown as typeof fetch;
+    const res = await handler(makeRequest("http://localhost/setup"), EVENT);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("redirects /setup to home when already provisioned", async () => {
+    // beforeEach stubs provisioned: true.
+    const res = await handler(makeRequest("http://localhost/setup"), EVENT);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toBe("http://localhost/");
+  });
+
+  it("renders /setup when the backend reports the deployment is not provisioned", async () => {
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, data: { provisioned: false } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+    const res = await handler(makeRequest("http://localhost/setup"), EVENT);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
+  it("keeps non-/setup behaviour unchanged when provisioning is unknown (treated as provisioned)", async () => {
+    global.fetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED")) as unknown as typeof fetch;
+    const res = await handler(
+      makeRequest("http://localhost/", { auth: { user: { sub: "u1" } } }),
+      EVENT,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("location")).toBeNull();
+  });
+
   it("redirects to /setup when the backend reports the deployment is not provisioned", async () => {
     global.fetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ success: true, data: { provisioned: false } }), {
