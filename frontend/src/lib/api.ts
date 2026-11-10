@@ -372,6 +372,23 @@ async function request<T>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
+  // Transient upstream failures (BFF 502 backend-unreachable / 504 timeout,
+  // or a proxy 503) get one friendly, retryable message regardless of body —
+  // the raw upstream detail is meaningless to the user and stays server-side.
+  if (res.status === 502 || res.status === 503 || res.status === 504) {
+    throw new ApiError("The server is temporarily unavailable. Please try again in a moment.");
+  }
+
+  // A 401 means the session is gone (BFF has no usable token). Send the user
+  // to sign in again instead of leaving every page showing failing requests;
+  // the thrown error covers non-browser callers and the /signin page itself.
+  if (res.status === 401) {
+    if (typeof window !== "undefined" && window.location.pathname !== "/signin") {
+      window.location.assign("/signin?error=session_expired");
+    }
+    throw new ApiError("Your session has expired. Sign in again to continue.");
+  }
+
   // Handle non-JSON responses (e.g. empty 200)
   const text = await res.text();
   let json: ApiEnvelope<T>;
