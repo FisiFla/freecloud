@@ -10,8 +10,10 @@ on:
   pull_request:
     paths:
       - 'backend/**'
+      - 'frontend/**'
       - 'docker/**'
       - 'keycloak-authenticator/**'
+      - 'scripts/prod-smoke.sh'
       - '.github/workflows/e2e.yml'
 
 permissions:
@@ -197,3 +199,23 @@ jobs:
         if: always()
         run: |
           docker compose -f docker/docker-compose.e2e.yml -f docker/docker-compose.e2e-ha.yml down -v
+
+  # Production-artifact smoke: boots docker/docker-compose.prod.yml +
+  # docker/Caddyfile exactly as committed (Caddy TLS via its internal CA on
+  # *.localhost, _FILE secrets, Keycloak `start`, sslmode=require) and
+  # asserts the operator-facing paths through Caddy, including the
+  # setup-token first-run flow. All logic lives in scripts/prod-smoke.sh so
+  # CI and humans run the same thing; the script dumps compose ps + service
+  # logs itself on failure and always tears down. Runs on PRs (paths above
+  # now include frontend/** because this job exercises the frontend image),
+  # nightly, and on dispatch, like the e2e job.
+  prod-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: build-kc-spi
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Boot production compose stack and smoke-test through Caddy
+        run: bash scripts/prod-smoke.sh
