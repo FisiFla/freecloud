@@ -367,3 +367,31 @@ func TestIsDevOrE2E_FailsClosed(t *testing.T) {
 		}
 	}
 }
+
+// TestEffectiveSetupToken_DevInertProdEnforced pins the setup-token
+// environment policy: the localhost stack (APP_ENV=development) loads a
+// generated SETUP_TOKEN from .secrets/secrets.env via env_file, but first
+// setup there must stay tokenless (docs/QUICKSTART.md zero-config promise);
+// outside dev/e2e the configured token is passed through for enforcement,
+// fail-closed for unset/unrecognized APP_ENV.
+func TestEffectiveSetupToken_DevInertProdEnforced(t *testing.T) {
+	cases := []struct {
+		appEnv string
+		token  string
+		want   string
+	}{
+		{"development", "tok-123", ""},
+		{"test", "tok-123", ""},
+		{"production", "tok-123", "tok-123"},
+		{"production", "", ""},
+		{"staging", "tok-123", "tok-123"},
+		{"", "tok-123", "tok-123"},
+	}
+	for _, c := range cases {
+		t.Setenv("APP_ENV", c.appEnv)
+		cfg := &Config{SetupToken: c.token}
+		if got := cfg.EffectiveSetupToken(); got != c.want {
+			t.Errorf("EffectiveSetupToken() with APP_ENV=%q token=%q: got %q, want %q", c.appEnv, c.token, got, c.want)
+		}
+	}
+}

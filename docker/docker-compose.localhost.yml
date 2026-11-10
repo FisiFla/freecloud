@@ -1,16 +1,25 @@
 # C2 — All-in-one localhost compose (no TLS, no required env).
 #
-# Bring up with:
-#   docker compose -f docker/docker-compose.localhost.yml up --build
-#   or: make localhost-up
+# Bring up with: make localhost-up
+# (A bare `docker compose up` only works once .secrets/secrets.env exists;
+# see the secrets ordering note below. First run:
+#   docker compose -f docker/docker-compose.localhost.yml run --rm secrets-init
+#   docker compose -f docker/docker-compose.localhost.yml up --build)
 #
 # Then open http://localhost:3000.
 #
 # How secrets work (C1):
-#   `secrets-init` runs first and writes .secrets/secrets.env on first boot,
-#   then exits (idempotent — skips generation if the file already exists).
-#   All services that need those secrets load the file via env_file
-#   (required: false so `docker compose config` passes before first run).
+#   `secrets-init` writes .secrets/secrets.env on first boot, then exits
+#   (idempotent — only missing keys are generated). Services load that file
+#   via env_file, and Compose resolves env_file when it CREATES a container
+#   — but a fresh `up` creates containers before their dependencies finish
+#   starting, so even with the `depends_on: secrets-init` edges below a
+#   first boot could create the frontend before the file existed, leaving
+#   it with an empty AUTH_SECRET until recreated. `make localhost-up`
+#   therefore runs secrets-init to completion BEFORE `up`; the depends_on
+#   edges remain for start-order. scripts/check-localhost-secrets.sh
+#   guards both halves of this invariant in CI.
+#   (required: false so `docker compose config` passes before first run.)
 #   Delete .secrets/secrets.env to rotate all generated tokens.
 #
 # Internal credentials (postgres password, Keycloak admin password) are fixed
@@ -104,6 +113,8 @@ services:
     ports:
       - "8081:8080"
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
 
@@ -191,6 +202,8 @@ services:
     ports:
       - "8080:8080"
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -235,7 +248,10 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - backend
+      secrets-init:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
 
 volumes:
   pgdata:

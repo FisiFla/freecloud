@@ -87,6 +87,7 @@ prod-backup:
 # Open http://localhost:3000 when up.
 localhost-up:
 	@mkdir -p .secrets
+	docker compose -f docker/docker-compose.localhost.yml run --rm secrets-init
 	docker compose -f docker/docker-compose.localhost.yml up --build -d
 
 localhost-down:
