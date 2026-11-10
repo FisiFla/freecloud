@@ -427,7 +427,6 @@ Authentication: `Authorization: Bearer <SCIM_BEARER_TOKEN>`.
 | `API_DOMAIN` | Public hostname for the Go backend API |
 | `KC_DOMAIN` | Public hostname for Keycloak |
 | `DASHBOARD_PUBLIC_URL` | Full `https://` URL for the dashboard |
-| `API_PUBLIC_URL` | Full `https://` URL for the API (used as `NEXT_PUBLIC_API_URL` at build time) |
 | `KC_PUBLIC_URL` | Full `https://` URL for Keycloak |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Postgres credentials |
 | `KC_BOOTSTRAP_ADMIN_USERNAME` / `KC_BOOTSTRAP_ADMIN_PASSWORD` | Keycloak bootstrap admin |

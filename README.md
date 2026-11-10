@@ -221,7 +221,8 @@ make prod-up                        # build images + bring the stack up (detache
   Keycloak URL, or any missing secret. Postgres serves TLS so `sslmode=require`
   works on the internal network; the backend runs schema migrations on startup.
 - The backend image is `distroless:nonroot`; the frontend runs as a non-root node
-  user. `NEXT_PUBLIC_API_URL` is baked at build time from `API_PUBLIC_URL`.
+  user. The browser only ever talks to the dashboard origin (same-origin BFF),
+  so there is no build-time API URL.
 
 There is no separate Keycloak setup step. On first boot the backend's bootstrap
 engine creates the realm, the default groups, and the `freecloud-service`

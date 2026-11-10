@@ -266,7 +266,10 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_URL: ${API_PUBLIC_URL}
+        # Baked into source builds so /api/version can report what is running;
+        # pulled release images carry the values from release.yml instead.
+        FREECLOUD_VERSION: ${FREECLOUD_VERSION:-1.7.0}
+        GIT_SHA: ${GIT_SHA:-source}
     restart: unless-stopped
     secrets:
       - auth_secret

@@ -23,7 +23,8 @@ jobs:
             context: frontend
             file: frontend/Dockerfile
             build_args: |
-              NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+              FREECLOUD_VERSION=${{ github.ref_name }}
+              GIT_SHA=${{ github.sha }}
           # The Keycloak image carries the posture-check SPI. It is built from
           # the repo root because the Dockerfile also needs the Maven module.
           - name: keycloak
