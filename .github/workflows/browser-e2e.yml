@@ -1,0 +1,73 @@
+name: Browser E2E
+
+# Real-browser (Playwright/Chromium) sign-in loop against a fresh localhost
+# stack: /setup -> /signin -> Keycloak login -> dashboard. Regression guard
+# for #286 ("after signing up I can't sign in") — a redirect-loop class of
+# failure no mocked/unit/go-e2e test can catch.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Nightly at 03:00 UTC (e2e.yml owns 02:00)
+    - cron: '0 3 * * *'
+  pull_request:
+    paths:
+      - 'frontend/**'
+      - 'backend/**'
+      - 'docker/**'
+      - 'keycloak-authenticator/**'
+      - '.github/workflows/browser-e2e.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  browser-signin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: '26'
+
+      - name: Start localhost stack (docs/QUICKSTART.md)
+        run: make localhost-up
+
+      - name: Wait for frontend sign-in page
+        run: |
+          echo "Waiting for http://localhost:3000/signin..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000/signin >/dev/null 2>&1; then
+              echo "Frontend ready."
+              break
+            fi
+            echo "  attempt $i/60..."
+            sleep 5
+          done
+          curl -sf http://localhost:3000/signin >/dev/null || (echo "Frontend not ready after 300s." && exit 1)
+
+      - name: Install frontend deps + Chromium
+        run: |
+          cd frontend
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run browser sign-in e2e (fresh mode)
+        env:
+          E2E_BASE_URL: http://localhost:3000
+          E2E_KC_URL: http://localhost:8081
+        run: |
+          cd frontend && npm run test:browser
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          docker compose -f docker/docker-compose.localhost.yml logs --tail=150
+
+      - name: Tear down localhost stack
+        if: always()
+        run: |
+          docker compose -f docker/docker-compose.localhost.yml down -v

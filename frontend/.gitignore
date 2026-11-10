@@ -1,0 +1,4 @@
+# Playwright browser e2e artifacts (traces, failure output) — never commit.
+test-results/
+playwright-report/
+e2e-browser/test-results/
