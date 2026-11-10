@@ -225,15 +225,41 @@ an untested backup is not a backup.
 
 ## Upgrades
 
-1. Back up (above).
-2. Pull/rebuild: `make prod-up` (rebuilds images and recreates containers).
-3. The one-shot `migrate` container applies any new migrations before the
-   backend starts; check `docker compose logs migrate` if the backend reports
-   the schema is behind.
-4. Smoke-test `/readyz` and a login.
+The production stack runs the published release images (`backend`/`migrate`,
+`frontend`, `keycloak`) pinned by `FREECLOUD_VERSION` in `.env.prod` (the
+release tag without its leading `v`, e.g. `1.7.0` for git tag `v1.7.0`).
 
-**Rollback:** redeploy the previous image tag and, if a migration must be undone,
-restore the pre-upgrade backup (migrations are forward-only).
+1. Back up first: `make prod-backup`.
+2. Set `FREECLOUD_VERSION=<new tag, no v>` in `.env.prod`.
+3. Pull the new release images: `make prod-pull`.
+4. Deploy: `make prod-up`. The one-shot `migrate` container applies any new
+   migrations before the backend starts; check
+   `docker compose -f docker/docker-compose.prod.yml logs migrate` if the
+   backend reports the schema is behind.
+5. Verify: `curl -fsS https://api.example.com/readyz` returns 200 (your API
+   domain), the dashboard loads and a login succeeds, and
+   `GET https://app.example.com/api/version` (your dashboard domain) reports
+   the new tag.
+
+**Rollback:** set `FREECLOUD_VERSION` back to the previous release in
+`.env.prod`, then `make prod-pull` and `make prod-up`.
+
+> **Warning — database migrations are forward-only.** If the failed upgrade's
+> `migrate` step applied schema changes, rolling the images back alone is
+> **not** enough: the older backend will face a newer schema. In that case
+> restore the pre-upgrade backup bundle first (see
+> [docs/BACKUP_RESTORE.md](BACKUP_RESTORE.md)), then roll the images back.
+> You can tell whether migrations ran from the `migrate` service's logs from
+> the upgrade (`docker compose -f docker/docker-compose.prod.yml logs
+> migrate` shows the migrations it applied) and from the release notes for
+> the version you upgraded to.
+
+The Postgres image (`freecloud-postgres:local`) is built on the host from
+`docker/postgres/`; it is intentionally not published and not versioned by
+`FREECLOUD_VERSION`.
+
+If the GHCR packages are private, run `docker login ghcr.io` on the host
+(with a token that can read packages) before `make prod-pull`.
 
 ## Troubleshooting
 
