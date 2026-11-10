@@ -62,6 +62,19 @@ jobs:
         run: |
           cd frontend && npm run test:browser
 
+      - name: Upload browser-test trace on failure
+        # The retained Playwright trace (final URL + page state) is the only
+        # evidence that distinguishes a bad-credentials re-render from a
+        # page-expired / required-action stall on the Keycloak host.
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: browser-signin-trace
+          path: |
+            frontend/test-results/
+            frontend/e2e-browser/test-results/
+          if-no-files-found: ignore
+
       - name: Dump logs on failure
         if: failure()
         run: |
