@@ -68,17 +68,19 @@ func TestSetupStatusProvisioned(t *testing.T) {
 }
 
 func TestSetupCreatesFirstAdmin(t *testing.T) {
+	var gotFirst, gotLast string
 	called := false
 	h := NewHandler(&fakeDB{}, &fakeKeycloak{
 		hasAdminUserFn: func(_ context.Context) (bool, error) { return false, nil },
-		createAdminUserFn: func(_ context.Context, email, password string) (string, error) {
+		createAdminUserFn: func(_ context.Context, email, password, firstName, lastName string) (string, error) {
 			called = true
+			gotFirst, gotLast = firstName, lastName
 			return "new-admin-id", nil
 		},
 	}, &fakeFleet{}, zap.NewNop())
 	r := newTestRouter(h)
 
-	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp"}`
+	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp","adminFirstName":"Ada","adminLastName":"Lovelace"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -90,6 +92,9 @@ func TestSetupCreatesFirstAdmin(t *testing.T) {
 	if !called {
 		t.Fatal("expected createAdminUserFn to be called")
 	}
+	if gotFirst != "Ada" || gotLast != "Lovelace" {
+		t.Fatalf("expected CreateAdminUser to receive first/last name (Ada, Lovelace), got (%q, %q)", gotFirst, gotLast)
+	}
 }
 
 func TestSetupRejectsSecondCall(t *testing.T) {
@@ -98,7 +103,7 @@ func TestSetupRejectsSecondCall(t *testing.T) {
 	}, &fakeFleet{}, zap.NewNop())
 	r := newTestRouter(h)
 
-	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp"}`
+	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp","adminFirstName":"Ada","adminLastName":"Lovelace"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -114,7 +119,7 @@ func TestSetupRejectsSecondCall(t *testing.T) {
 func setupTokenHandler(token string, required bool, created *bool) http.Handler {
 	h := NewHandler(&fakeDB{}, &fakeKeycloak{
 		hasAdminUserFn: func(_ context.Context) (bool, error) { return false, nil },
-		createAdminUserFn: func(_ context.Context, email, password string) (string, error) {
+		createAdminUserFn: func(_ context.Context, email, password, firstName, lastName string) (string, error) {
 			*created = true
 			return "new-admin-id", nil
 		},
@@ -135,7 +140,7 @@ func postSetup(t *testing.T, r http.Handler, body string) *httptest.ResponseReco
 func TestSetupTokenConfiguredMissingTokenForbidden(t *testing.T) {
 	created := false
 	r := setupTokenHandler("s3cret-setup-token", true, &created)
-	rec := postSetup(t, r, `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme"}`)
+	rec := postSetup(t, r, `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","adminFirstName":"Ada","adminLastName":"Lovelace"}`)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -147,7 +152,7 @@ func TestSetupTokenConfiguredMissingTokenForbidden(t *testing.T) {
 func TestSetupTokenConfiguredWrongTokenForbidden(t *testing.T) {
 	created := false
 	r := setupTokenHandler("s3cret-setup-token", true, &created)
-	rec := postSetup(t, r, `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","setupToken":"wrong"}`)
+	rec := postSetup(t, r, `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","adminFirstName":"Ada","adminLastName":"Lovelace","setupToken":"wrong"}`)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -159,7 +164,7 @@ func TestSetupTokenConfiguredWrongTokenForbidden(t *testing.T) {
 func TestSetupTokenConfiguredCorrectTokenProvisions(t *testing.T) {
 	created := false
 	r := setupTokenHandler("s3cret-setup-token", true, &created)
-	rec := postSetup(t, r, `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","setupToken":"s3cret-setup-token"}`)
+	rec := postSetup(t, r, `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","adminFirstName":"Ada","adminLastName":"Lovelace","setupToken":"s3cret-setup-token"}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -171,7 +176,7 @@ func TestSetupTokenConfiguredCorrectTokenProvisions(t *testing.T) {
 func TestSetupTokenRequiredButUnconfiguredFailsClosed(t *testing.T) {
 	created := false
 	r := setupTokenHandler("", true, &created)
-	rec := postSetup(t, r, `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","setupToken":"anything"}`)
+	rec := postSetup(t, r, `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","adminFirstName":"Ada","adminLastName":"Lovelace","setupToken":"anything"}`)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected 503, got %d (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -235,18 +240,38 @@ func TestSetupValidation(t *testing.T) {
 	}{
 		{
 			name: "missing orgName",
-			body: `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":""}`,
+			body: `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"","adminFirstName":"Ada","adminLastName":"Lovelace"}`,
 			want: "orgName",
 		},
 		{
 			name: "bad email",
-			body: `{"adminEmail":"not-an-email","adminPassword":"securepass12","orgName":"Acme"}`,
+			body: `{"adminEmail":"not-an-email","adminPassword":"securepass12","orgName":"Acme","adminFirstName":"Ada","adminLastName":"Lovelace"}`,
 			want: "adminEmail",
 		},
 		{
 			name: "short password",
-			body: `{"adminEmail":"admin@example.com","adminPassword":"short","orgName":"Acme"}`,
+			body: `{"adminEmail":"admin@example.com","adminPassword":"short","orgName":"Acme","adminFirstName":"Ada","adminLastName":"Lovelace"}`,
 			want: "adminPassword",
+		},
+		{
+			name: "missing adminFirstName",
+			body: `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","adminLastName":"Lovelace"}`,
+			want: "adminFirstName",
+		},
+		{
+			name: "blank adminLastName",
+			body: `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","adminFirstName":"Ada","adminLastName":"   "}`,
+			want: "adminLastName",
+		},
+		{
+			name: "adminFirstName too long",
+			body: `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","adminFirstName":"` + strings.Repeat("a", 101) + `","adminLastName":"Lovelace"}`,
+			want: "adminFirstName",
+		},
+		{
+			name: "adminLastName too long",
+			body: `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme","adminFirstName":"Ada","adminLastName":"` + strings.Repeat("b", 101) + `"}`,
+			want: "adminLastName",
 		},
 	}
 

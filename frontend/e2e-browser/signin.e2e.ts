@@ -48,6 +48,8 @@ test("browser sign-in loop completes (setup -> Keycloak -> app)", async ({ page 
     logStep(page, "setup wizard");
 
     await page.getByLabel("Organization name").fill("E2E Org");
+    await page.locator("#adminFirstName").fill("E2E");
+    await page.locator("#adminLastName").fill("Admin");
     await page.getByLabel("Admin email").fill(adminEmail);
     await page.getByLabel("Password", { exact: true }).fill(adminPassword);
     await page.getByLabel("Confirm password").fill(adminPassword);
@@ -74,12 +76,14 @@ test("browser sign-in loop completes (setup -> Keycloak -> app)", async ({ page 
   await page.locator("#password").fill(password);
   await page.locator("#kc-login").click();
 
-  // Keycloak Verify Profile interstitial: setup collects only an email, so
-  // the first admin has no first/last name and KC 26's declarative user
-  // profile (both attributes required) stops the FIRST login at an
-  // "Update Account Information" required-action page. A real first admin
-  // completes it once; model that here when it appears. (Found via the
-  // retained trace: final URL login-actions/required-action, UPDATE_PROFILE.)
+  // Keycloak Verify Profile interstitial: KC 26's declarative user profile
+  // (first/last name both required) stops the FIRST login of a user created
+  // without names at an "Update Account Information" required-action page.
+  // The setup wizard now collects both names, so a setup-created admin is
+  // not expected to land here — but users created via other paths (or an
+  // EXISTING-mode bare Keycloak user) still can, so complete it once when
+  // it appears. (Found via the retained trace: final URL
+  // login-actions/required-action, UPDATE_PROFILE.)
   const profileHeading = page.getByRole("heading", { name: "Update Account Information" });
   await Promise.race([
     page.waitForURL((url) => url.origin === appOrigin, { timeout: 60_000 }),

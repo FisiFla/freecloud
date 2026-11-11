@@ -273,7 +273,7 @@ json_check 'd["data"]["provisioned"] is False and d["data"]["setupTokenRequired"
   || fail "setup/status must be provisioned:false + setupTokenRequired:true; body: $(cat "${BODY_FILE}")"
 pass "GET /api/v1/setup/status -> provisioned:false, setupTokenRequired:true"
 
-SETUP_BODY_NO_TOKEN='{"adminEmail":"smoke-admin@example.com","adminPassword":"smoke-password-123","orgName":"Prod Smoke"}'
+SETUP_BODY_NO_TOKEN='{"adminEmail":"smoke-admin@example.com","adminPassword":"smoke-password-123","adminFirstName":"Smoke","adminLastName":"Admin","orgName":"Prod Smoke"}'
 smoke_request api.localhost POST https://api.localhost/api/v1/setup \
   -H 'Content-Type: application/json' -d "${SETUP_BODY_NO_TOKEN}"
 assert_status 403 "POST /api/v1/setup without setupToken"
@@ -286,6 +286,8 @@ import json, os
 print(json.dumps({
     "adminEmail": "smoke-admin@example.com",
     "adminPassword": "smoke-password-123",
+    "adminFirstName": "Smoke",
+    "adminLastName": "Admin",
     "orgName": "Prod Smoke",
     "setupToken": os.environ["SETUP_TOKEN_VALUE"],
 }))')"

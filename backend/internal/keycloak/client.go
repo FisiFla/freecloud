@@ -153,10 +153,10 @@ type KeycloakClientInterface interface {
 	// first-run provisioning is needed.
 	HasAdminUser(ctx context.Context) (bool, error)
 
-	// CreateAdminUser creates a user in Keycloak with the given email/password,
-	// assigns the "admin" realm role, and returns the Keycloak user ID.
-	// Used by the setup wizard.
-	CreateAdminUser(ctx context.Context, email, password string) (string, error)
+	// CreateAdminUser creates a user in Keycloak with the given email/password
+	// and first/last name, assigns the "admin" realm role, and returns the
+	// Keycloak user ID. Used by the setup wizard.
+	CreateAdminUser(ctx context.Context, email, password, firstName, lastName string) (string, error)
 	// D2: SMTP configuration.
 	// UpdateRealmSMTP writes the SMTP relay settings into the Keycloak realm so
 	// that outbound emails (password reset, MFA) use the organisation's mail relay.
@@ -1564,19 +1564,24 @@ func (k *KeycloakClient) HasAdminUser(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-// CreateAdminUser creates a Keycloak user with the given email and password,
-// ensures the "admin" realm role exists, assigns it, and returns the user ID.
-func (k *KeycloakClient) CreateAdminUser(ctx context.Context, email, password string) (string, error) {
+// CreateAdminUser creates a Keycloak user with the given email, password and
+// first/last name, ensures the "admin" realm role exists, assigns it, and
+// returns the user ID.
+func (k *KeycloakClient) CreateAdminUser(ctx context.Context, email, password, firstName, lastName string) (string, error) {
 	token, err := k.login(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	// Create the user.
+	// Create the user. FirstName/LastName come from the setup wizard: KC 26's
+	// declarative user profile requires both, and without them the first
+	// login stops at the "Update Account Information" interstitial.
 	userID, err := k.client.CreateUser(ctx, token, k.realm, gocloak.User{
-		Username: &email,
-		Email:    &email,
-		Enabled:  gocloak.BoolP(true),
+		Username:  &email,
+		Email:     &email,
+		FirstName: &firstName,
+		LastName:  &lastName,
+		Enabled:   gocloak.BoolP(true),
 	})
 	if err != nil {
 		return "", fmt.Errorf("create admin user: %w", err)

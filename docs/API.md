@@ -78,7 +78,10 @@ All `/api/v1/` responses use a standard JSON envelope:
 
 ### First-run setup
 
-`POST /api/v1/setup` creates the first admin. Body: `{adminEmail, adminPassword, orgName, setupToken}`.
+`POST /api/v1/setup` creates the first admin. Body: `{adminEmail, adminPassword, adminFirstName, adminLastName, orgName, setupToken}`.
+`adminFirstName`/`adminLastName` are required (non-empty, ≤ 100 chars): KC 26's declarative user
+profile demands both, and without them the first login stops at the "Update Account Information"
+interstitial.
 `setupToken` must match the server's one-time `SETUP_TOKEN` when one is configured (production):
 a missing or wrong token returns `403`. When a production server has no `SETUP_TOKEN`
 configured it fails closed with `503` instead of provisioning. On dev/test stacks with no
