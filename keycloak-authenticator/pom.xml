@@ -114,6 +114,31 @@
                         <configuration>
                             <shadedArtifactAttached>false</shadedArtifactAttached>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <!-- Relocate the shaded JSON-P API + impl under our own
+                                 namespace: un-relocated jakarta.json classes clash
+                                 with Keycloak's own copy and crash
+                                 SmallRyeHealthProcessor when KC_HEALTH_ENABLED
+                                 is on. The SPI's own xyz.fisicaro classes, the
+                                 AuthenticatorFactory services entry, and
+                                 theme-resources/ are deliberately NOT relocated. -->
+                            <relocations>
+                                <relocation>
+                                    <pattern>jakarta.json</pattern>
+                                    <shadedPattern>xyz.fisicaro.freecloud.shaded.jakarta.json</shadedPattern>
+                                </relocation>
+                                <relocation>
+                                    <pattern>org.eclipse.parsson</pattern>
+                                    <shadedPattern>xyz.fisicaro.freecloud.shaded.org.eclipse.parsson</shadedPattern>
+                                </relocation>
+                            </relocations>
+                            <transformers>
+                                <!-- Merges META-INF/services entries AND rewrites
+                                     both the service names and the listed impl
+                                     classes through the relocations above, so the
+                                     shaded JsonProvider stays discoverable via
+                                     ServiceLoader under its new name. -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
                             <filters>
                                 <filter>
                                     <artifact>*:*</artifact>

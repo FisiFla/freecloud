@@ -46,7 +46,16 @@ RUN chmod +x /opt/keycloak/bin/freecloud-entrypoint.sh
 
 # Pre-build Keycloak so startup is fast and providers are compiled-in.
 # KC_DB is required by `kc.sh build` even though the value is overridden at runtime.
+# KC_HEALTH_ENABLED is a BUILD-time option in Keycloak 26: it must be set here
+# (KC's own documented pattern) so the management (:9000) health endpoints are
+# compiled in. The ENV persists to runtime, so `kc.sh start` sees the same value
+# as the build and does not re-augment at boot. Safe for all compose stacks:
+# the extra :9000 listener simply stays unmapped where it is not needed.
+# (Previously impossible: the SPI fat jar's un-relocated jakarta.json copy
+# crashed SmallRyeHealthProcessor — fixed via shade <relocations> in
+# keycloak-authenticator/pom.xml.)
 ENV KC_DB=postgres
+ENV KC_HEALTH_ENABLED=true
 RUN /opt/keycloak/bin/kc.sh build
 
 # Runtime environment variables are supplied by docker-compose at startup.
