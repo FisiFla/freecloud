@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"testing"
 	"time"
 )
@@ -393,5 +395,94 @@ func TestEffectiveSetupToken_DevInertProdEnforced(t *testing.T) {
 		if got := cfg.EffectiveSetupToken(); got != c.want {
 			t.Errorf("EffectiveSetupToken() with APP_ENV=%q token=%q: got %q, want %q", c.appEnv, c.token, got, c.want)
 		}
+	}
+}
+
+// Every security-critical secret Validate() requires in production must
+// reject known placeholder/trivial values: the generic literals plus the
+// documented non-prod defaults from the e2e/localhost compose files and the
+// frontend example env (see placeholderSecrets in config.go). Matching is
+// case-insensitive and whitespace-trimmed, so " ChangeMe " is rejected too.
+func TestValidateProductionRejectsPlaceholderSecrets(t *testing.T) {
+	secrets := []string{
+		"FLEET_API_TOKEN",
+		"FLEET_WEBHOOK_SECRET",
+		"PROVISIONING_MASTER_KEY",
+		"SCIM_BEARER_TOKEN",
+		"ACCESS_EVAL_TOKEN",
+		"KC_BOOTSTRAP_PASSWORD",
+	}
+	placeholders := []string{
+		"changeme",
+		"change-me",
+		"change_me",
+		"admin-local",
+		"change-me-to-a-random-string",
+		"placeholder",
+		"secret",
+		"password",
+		"admin",
+		"admin123",
+		"e2e-fleet-token",
+		"e2e-webhook-secret",
+		"e2e-scim-token",
+		"e2e-access-eval-token",
+		"localhost-dev-fleet-token",
+		"x",          // single-char
+		" ChangeMe ", // case-insensitive + trimmed
+	}
+	for _, key := range secrets {
+		for _, value := range placeholders {
+			t.Run(key+"/"+value, func(t *testing.T) {
+				setSecureProdEnv(t)
+				t.Setenv(key, value)
+				cfg := Load()
+				if err := cfg.Validate(); err == nil {
+					t.Errorf("expected error for %s=%q in production, got nil", key, value)
+				}
+			})
+		}
+	}
+}
+
+// A high-entropy random value must pass: the placeholder check must not
+// reject real secrets. (The fixed literals in setSecureProdEnv are covered
+// by TestValidateProductionAllSecure.)
+func TestValidateProductionAcceptsRandomSecrets(t *testing.T) {
+	setSecureProdEnv(t)
+	randomHex := func() string {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			t.Fatal(err)
+		}
+		return hex.EncodeToString(b)
+	}
+	t.Setenv("FLEET_API_TOKEN", randomHex())
+	t.Setenv("FLEET_WEBHOOK_SECRET", randomHex())
+	t.Setenv("SCIM_BEARER_TOKEN", randomHex())
+	t.Setenv("ACCESS_EVAL_TOKEN", randomHex())
+	t.Setenv("KC_BOOTSTRAP_PASSWORD", randomHex())
+	cfg := Load()
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected no error for random prod secrets, got %v", err)
+	}
+}
+
+// Placeholder rejection is production-only: dev and test keep accepting the
+// documented non-prod defaults (the e2e/localhost stacks run on them).
+func TestValidateDevAcceptsPlaceholderSecrets(t *testing.T) {
+	for _, env := range []string{"development", "test"} {
+		t.Run(env, func(t *testing.T) {
+			t.Setenv("APP_ENV", env)
+			t.Setenv("FLEET_API_TOKEN", "changeme")
+			t.Setenv("FLEET_WEBHOOK_SECRET", "e2e-webhook-secret")
+			t.Setenv("SCIM_BEARER_TOKEN", "x")
+			t.Setenv("ACCESS_EVAL_TOKEN", "secret")
+			t.Setenv("KC_BOOTSTRAP_PASSWORD", "admin")
+			cfg := Load()
+			if err := cfg.Validate(); err != nil {
+				t.Errorf("expected no error for placeholder secrets in %s, got %v", env, err)
+			}
+		})
 	}
 }

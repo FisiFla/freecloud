@@ -108,4 +108,4 @@ Non-secret fields (URLs, feature flags, timeouts) use the plain env var only.
 
 ## Validation
 
-`config.Validate()` remains fail-closed: it rejects empty or insecure-default values for all required secrets in any non-development environment (`APP_ENV` ≠ `development`/`test`). A misconfigured `_FILE` path that returns empty will therefore cause the server to refuse to start, surfacing the misconfiguration immediately rather than running with a missing secret.
+`config.Validate()` remains fail-closed: it rejects empty, insecure-default, or known placeholder/trivial values (`changeme`, `secret`, the documented e2e/dev defaults, single characters — the `placeholderSecrets` set in `backend/internal/config/config.go`) for all required secrets in any non-development environment (`APP_ENV` ≠ `development`/`test`). A misconfigured `_FILE` path that returns empty will therefore cause the server to refuse to start, surfacing the misconfiguration immediately rather than running with a missing secret.

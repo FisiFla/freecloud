@@ -19,7 +19,9 @@ reports within a few days.
   Keycloak client, a localhost Keycloak URL, or a missing
   `FLEET_API_TOKEN` / `FLEET_WEBHOOK_SECRET` / `SCIM_BEARER_TOKEN` /
   `ACCESS_EVAL_TOKEN` / `PROVISIONING_MASTER_KEY` / `CORS_ORIGIN` /
-  `REDIS_URL` / `KEYCLOAK_AUDIENCE` or a weak `KC_BOOTSTRAP_PASSWORD`.
+  `REDIS_URL` / `KEYCLOAK_AUDIENCE` or a weak `KC_BOOTSTRAP_PASSWORD`, and
+  known placeholder/trivial secret values (`changeme`, `secret`, the
+  documented e2e/dev defaults, single characters) are rejected outright.
   `KEYCLOAK_CLIENT_SECRET` is **optional**: the bootstrap engine provisions the
   confidential service client and manages its own secret at runtime. The
   frontend refuses to start in production with the placeholder `AUTH_SECRET` or
