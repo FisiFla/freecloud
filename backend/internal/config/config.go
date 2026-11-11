@@ -27,6 +27,40 @@ const defaultKeycloakClientID = "freecloud-service"
 // outside development so production never points at a localhost identity provider.
 const defaultKeycloakURL = "http://localhost:8081"
 
+// placeholderSecrets is the single documented list of trivial/placeholder
+// values rejected for security-critical secrets in production (Wave 2 #8).
+// Matching is case-insensitive on the whitespace-trimmed value, and single
+// characters are rejected too (see isPlaceholderSecret). The set covers the
+// generic literals operators actually paste, plus the exact documented
+// non-prod defaults, so a compose file copied from dev/e2e can never pass
+// prod validation.
+var placeholderSecrets = map[string]bool{
+	// Generic trivial values.
+	"changeme": true, "change-me": true, "change_me": true, "placeholder": true,
+	"secret": true, "password": true, "admin": true, "admin123": true,
+	// KC_BOOTSTRAP_PASSWORD default in docker-compose.localhost.yml.
+	"admin-local": true,
+	// frontend/.env.local.example AUTH_SECRET placeholder.
+	"change-me-to-a-random-string": true,
+	// docker/docker-compose.e2e.yml + docker/docker-compose.e2e-ha.yml.
+	"e2e-fleet-token": true, "e2e-webhook-secret": true,
+	"e2e-scim-token": true, "e2e-access-eval-token": true,
+	// docker/docker-compose.localhost.yml.
+	"localhost-dev-fleet-token": true,
+}
+
+// isPlaceholderSecret reports whether v is a known placeholder/trivial
+// secret value: a case-insensitive, whitespace-trimmed member of
+// placeholderSecrets, or a single character. Empty values return false —
+// the required checks reject those with their own "must be set" message.
+func isPlaceholderSecret(v string) bool {
+	t := strings.ToLower(strings.TrimSpace(v))
+	if t == "" {
+		return false
+	}
+	return len(t) < 2 || placeholderSecrets[t]
+}
+
 // deviceCookieKeyLabel is the domain-separation label used when deriving the
 // device-identity cookie HMAC key from a master secret.
 //
@@ -250,6 +284,36 @@ func Load() *Config {
 	}
 	c.secretErrors = secrets.errs
 
+	// DATABASE_PASSWORD_FILE delivers the Postgres password as a mounted
+	// secret (prod compose) so DATABASE_URL itself carries no password
+	// (Wave 2 #14). Only the _FILE form is honored — there is no
+	// DATABASE_PASSWORD plain-var injection. A failure (unreadable or
+	// empty file, unusable DSN) mirrors secrets.go semantics exactly: the
+	// value degrades to EMPTY (never a password from a different source)
+	// and the error is recorded, so Validate() refuses to start and the
+	// migrate one-shot exits with "DATABASE_URL could not be resolved"
+	// instead of a confusing auth failure at connect time.
+	if pwFile := os.Getenv("DATABASE_PASSWORD_FILE"); pwFile != "" {
+		pwData, readErr := os.ReadFile(pwFile)
+		pw := strings.TrimRight(string(pwData), "\n\r")
+		switch {
+		case readErr != nil:
+			c.secretErrors = append(c.secretErrors, fmt.Sprintf("reading DATABASE_PASSWORD_FILE (%s): %v", pwFile, readErr))
+			c.DatabaseURL = ""
+		case pw == "":
+			c.secretErrors = append(c.secretErrors, fmt.Sprintf("DATABASE_PASSWORD_FILE (%s) is empty", pwFile))
+			c.DatabaseURL = ""
+		default:
+			injected, injErr := injectDatabasePassword(c.DatabaseURL, pw)
+			if injErr != nil {
+				c.secretErrors = append(c.secretErrors, injErr.Error())
+				c.DatabaseURL = ""
+			} else {
+				c.DatabaseURL = injected
+			}
+		}
+	}
+
 	// Durations: an unparsable value is recorded and rejected by Validate()
 	// rather than silently replaced by a default (issue #130).
 	c.ReconcileInterval = c.duration("RECONCILE_INTERVAL", getEnv("RECONCILE_INTERVAL", "15m"))
@@ -307,6 +371,30 @@ func parseDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid duration %q: must not be negative", s)
 	}
 	return d, nil
+}
+
+// injectDatabasePassword returns dsn with its password component set to
+// password (URL-escaped), so file-delivered values containing reserved
+// characters (@ : / ? # %) stay valid inside the DSN.
+//
+// Documented rule: the file password ALWAYS REPLACES a password already
+// embedded in the DSN. Setting DATABASE_PASSWORD_FILE declares the file
+// the password source; silently keeping the embedded value instead would
+// be the source confusion secrets.go exists to prevent.
+//
+// Only the URI DSN form (postgres://user@host/db?...) is supported: a
+// keyword/value DSN or a DSN without a user fails closed with an error,
+// because there is no user to attach the password to.
+func injectDatabasePassword(dsn, password string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("DATABASE_PASSWORD_FILE is set but DATABASE_URL is not a valid URI: %v", err)
+	}
+	if u.User == nil {
+		return "", fmt.Errorf("DATABASE_PASSWORD_FILE is set but DATABASE_URL has no user to attach the password to (want postgres://user@host/db?...)")
+	}
+	u.User = url.UserPassword(u.User.Username(), password)
+	return u.String(), nil
 }
 
 // splitCSV splits a comma-separated environment value into its non-empty,
@@ -406,20 +494,30 @@ func (c *Config) Validate() error {
 	}
 	if c.FleetAPIToken == "" {
 		add("FLEET_API_TOKEN must be set")
+	} else if isPlaceholderSecret(c.FleetAPIToken) {
+		add("FLEET_API_TOKEN must not be a placeholder or trivial value")
 	}
 	if c.FleetWebhookSecret == "" {
 		add("FLEET_WEBHOOK_SECRET must be set (used to authenticate Fleet enrollment callbacks)")
+	} else if isPlaceholderSecret(c.FleetWebhookSecret) {
+		add("FLEET_WEBHOOK_SECRET must not be a placeholder or trivial value")
 	}
 	if c.ProvisioningMasterKey == "" {
 		add("PROVISIONING_MASTER_KEY must be set (used to encrypt stored integration secrets)")
+	} else if isPlaceholderSecret(c.ProvisioningMasterKey) {
+		add("PROVISIONING_MASTER_KEY must not be a placeholder or trivial value")
 	} else if raw, err := base64.StdEncoding.DecodeString(c.ProvisioningMasterKey); err != nil || len(raw) != 32 {
 		add("PROVISIONING_MASTER_KEY must be a base64-encoded 32-byte key")
 	}
 	if c.SCIMBearerToken == "" {
 		add("SCIM_BEARER_TOKEN must be set (used to authenticate inbound SCIM provisioning requests)")
+	} else if isPlaceholderSecret(c.SCIMBearerToken) {
+		add("SCIM_BEARER_TOKEN must not be a placeholder or trivial value")
 	}
 	if c.AccessEvalToken == "" {
 		add("ACCESS_EVAL_TOKEN must be set (used to authenticate access evaluation requests)")
+	} else if isPlaceholderSecret(c.AccessEvalToken) {
+		add("ACCESS_EVAL_TOKEN must not be a placeholder or trivial value")
 	}
 	if c.DatabaseURL == "" || c.DatabaseURL == defaultDatabaseURL {
 		add("DATABASE_URL must be set to a real database, not the insecure default")
@@ -453,11 +551,10 @@ func (c *Config) Validate() error {
 	}
 	// Bootstrap admin password used to provision Keycloak on first start.
 	// Reject empty/well-known defaults so a hand-rolled prod deploy cannot
-	// leave master-realm admin/admin reachable.
-	weakBootstrap := map[string]bool{
-		"": true, "admin": true, "password": true, "changeme": true, "admin123": true,
-	}
-	if weakBootstrap[strings.ToLower(strings.TrimSpace(c.BootstrapAdminPassword))] {
+	// leave master-realm admin/admin reachable. Shares the common
+	// placeholder set ("admin" and "admin123" included) so there is exactly
+	// one trivial-value list.
+	if c.BootstrapAdminPassword == "" || isPlaceholderSecret(c.BootstrapAdminPassword) {
 		add("KC_BOOTSTRAP_PASSWORD must be set to a strong non-default value")
 	}
 

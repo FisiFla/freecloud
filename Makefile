@@ -149,6 +149,16 @@ verify-secrets:
 		if [ "$$(cat "$$tmp/files/slack_alert_webhook_url")" != "https://hooks.slack.com/services/TEST/TEST/TEST" ]; then \
 			echo "files/slack_alert_webhook_url does not mirror hand-added SLACK_ALERT_WEBHOOK_URL after re-run"; \
 			exit 1; \
+		fi; \
+		if [ ! -f "$$tmp/files/fleet_api_token" ]; then \
+			echo "missing per-key secret file files/fleet_api_token (FLEET_API_TOKEN Docker secret must always exist, empty when unset)"; \
+			exit 1; \
+		fi; \
+		echo 'FLEET_API_TOKEN=fleet-test-token-123' >> "$$tmp/secrets.env"; \
+		SECRETS_FILE="$$tmp/secrets.env" SECRETS_DIR="$$tmp/files" sh docker/init-secrets/generate.sh >/dev/null; \
+		if [ "$$(cat "$$tmp/files/fleet_api_token")" != "fleet-test-token-123" ]; then \
+			echo "files/fleet_api_token does not mirror hand-added FLEET_API_TOKEN after re-run"; \
+			exit 1; \
 		fi
 
 # DB-backed integration tests against TEST_DATABASE_URL (or a spun-up Postgres).

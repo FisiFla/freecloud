@@ -31,6 +31,15 @@
 # valid: Alertmanager starts and simply does not deliver to Slack.
 # See docs/OBSERVABILITY.md "Slack alert routing".
 #
+# FLEET_API_TOKEN is likewise operator-managed (it is issued by the
+# operator's FleetDM instance, so it cannot be generated): set it in
+# .secrets/secrets.env and this script mirrors it to
+# .secrets/files/fleet_api_token, the Docker secret the prod backend reads
+# via FLEET_API_TOKEN_FILE. Unlike the Slack webhook, an unset token is NOT
+# valid — prod Validate() refuses to start the backend without it, so a
+# missing value fails fast with "FLEET_API_TOKEN must be set" instead of a
+# confusing Fleet error at runtime.
+#
 # KEYCLOAK_CLIENT_SECRET is absent: Epic A's bootstrap engine self-manages it.
 #
 # Rotation semantics (docs/DEPLOYMENT.md "Rotating secrets"):
@@ -54,6 +63,11 @@ SECRETS_DIR=${SECRETS_DIR:-/run/freecloud/files}
 # Keys owned by the generator. Anything else in secrets.env is operator-managed
 # and is copied through untouched.
 GENERATED_KEYS="POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN SETUP_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY"
+
+# Operator-managed keys mirrored one-per-file (like the generated ones) so
+# they can be mounted as Docker secrets. Unlike GENERATED_KEYS these are
+# never created here: an unset key mirrors as an empty file.
+MIRRORED_KEYS="SLACK_ALERT_WEBHOOK_URL FLEET_API_TOKEN"
 
 gen() {
   # 32 random bytes → 64-char hex string (256 bits of entropy).
@@ -94,15 +108,17 @@ for key in ${GENERATED_KEYS}; do
   fi
 done
 
-# The slack alert webhook file must exist and mirror the hand-added
-# SLACK_ALERT_WEBHOOK_URL value, so a missing or stale file also counts as
-# incomplete (this is what makes rotation work: edit secrets.env, re-run).
-slack_file="${SECRETS_DIR}/slack_alert_webhook_url"
-slack_current=""
-[ -f "${slack_file}" ] && slack_current=$(cat "${slack_file}")
-if [ ! -f "${slack_file}" ] || [ "${slack_current}" != "$(value_of SLACK_ALERT_WEBHOOK_URL)" ]; then
-  files_ok=0
-fi
+# The mirrored operator-managed files must exist and match the hand-added
+# secrets.env values, so a missing or stale file also counts as incomplete
+# (this is what makes rotation work: edit secrets.env, re-run).
+for key in ${MIRRORED_KEYS}; do
+  mirror_file="${SECRETS_DIR}/$(lower_key "${key}")"
+  mirror_current=""
+  [ -f "${mirror_file}" ] && mirror_current=$(cat "${mirror_file}")
+  if [ ! -f "${mirror_file}" ] || [ "${mirror_current}" != "$(value_of "${key}")" ]; then
+    files_ok=0
+  fi
+done
 
 if [ -z "${missing}" ] && [ "${files_ok}" -eq 1 ]; then
   echo "[secrets-init] secrets.env already complete — skipping generation"
@@ -179,13 +195,15 @@ for key in ${GENERATED_KEYS}; do
   mv -f "${tmp}" "${SECRETS_DIR}/${lower}"
 done
 
-# Operator-managed slack alert webhook: mirror the hand-added value (or just
-# a newline when unset — see header) so the Alertmanager Docker secret in
-# docker-compose.observability.yml always resolves.
-slack_tmp="${SECRETS_DIR}/.slack_alert_webhook_url.tmp.$$"
-printf '%s\n' "$(value_of SLACK_ALERT_WEBHOOK_URL)" > "${slack_tmp}"
-chmod 0444 "${slack_tmp}"
-mv -f "${slack_tmp}" "${SECRETS_DIR}/slack_alert_webhook_url"
+# Operator-managed keys: mirror the hand-added value (or just a newline
+# when unset — see header) so the Docker secrets always resolve.
+for key in ${MIRRORED_KEYS}; do
+  lower=$(lower_key "${key}")
+  mirror_tmp="${SECRETS_DIR}/.${lower}.tmp.$$"
+  printf '%s\n' "$(value_of "${key}")" > "${mirror_tmp}"
+  chmod 0444 "${mirror_tmp}"
+  mv -f "${mirror_tmp}" "${SECRETS_DIR}/${lower}"
+done
 
 chmod 600 "${SECRETS_FILE}"
 echo "[secrets-init] wrote ${SECRETS_FILE} and ${SECRETS_DIR}/<key>"

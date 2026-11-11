@@ -23,7 +23,8 @@ cp .env.prod.example .env.prod
 |---|---|
 | `DASHBOARD_DOMAIN` / `API_DOMAIN` / `KC_DOMAIN` | Public hostnames Caddy serves + gets TLS for |
 | `DASHBOARD_PUBLIC_URL` / `KC_PUBLIC_URL` | The `https://` URLs for the dashboard and Keycloak (no API URL: the browser uses the same-origin BFF) |
-| `FLEET_URL` / `FLEET_API_TOKEN` | Real FleetDM API endpoint + token |
+| `FLEET_URL` | Real FleetDM API endpoint |
+| `FLEET_API_TOKEN` (in `.secrets/secrets.env`, **not** `.env.prod`) | Token from the FleetDM instance. Hand-added key: the generator mirrors it to `.secrets/files/fleet_api_token` and the backend reads it via `FLEET_API_TOKEN_FILE`. Required — the backend refuses to start without it. |
 | `POSTURE_CHECK_ENABLED` | Device-posture enforcement at login. **Defaults to `true`** in the production stack — a stack that forgets the variable must not silently run without posture checks. Set it to `false` only deliberately. |
 
 ### Auto-generated secrets (do not set manually)
@@ -49,6 +50,18 @@ next `make prod-up` fails with "Permission denied".
 
 The `KEYCLOAK_CLIENT_SECRET` is self-managed by the Epic A bootstrap and is not
 stored in `.secrets/secrets.env`.
+
+`FLEET_API_TOKEN` is the one operator-provided secret in `.secrets/secrets.env`:
+add a `FLEET_API_TOKEN=<token>` line by hand (before or after the first
+`make prod-secrets-init` — the generator preserves hand-added keys and mirrors
+the value to `.secrets/files/fleet_api_token` on every run). The backend
+reads it via `FLEET_API_TOKEN_FILE`, so it never appears in
+`docker inspect`.
+
+The Postgres password likewise never appears in `docker inspect`: `DATABASE_URL`
+in the compose file carries no password — the backend and `migrate` inject it
+from `DATABASE_PASSWORD_FILE` (the same `postgres_password` Docker secret the
+`postgres` service reads) at config load.
 
 ### Rotating secrets
 

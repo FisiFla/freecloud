@@ -91,3 +91,8 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: ${{ matrix.build_args }}
+          # Release hygiene (Wave 2 #13): every published image carries an
+          # SBOM + SLSA provenance attestation, verifiable with
+          # `gh attestation verify oci://<image>`.
+          sbom: true
+          provenance: mode=max
