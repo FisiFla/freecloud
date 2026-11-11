@@ -114,14 +114,33 @@ Lane split (non-overlapping files, parallel PRs):
 
 ## Acceptance checklist for declaring the pilot production ready
 
-- [ ] Wave 1 merged, `main` Verify + E2E green.
-- [ ] Wave 2 merged; prod-smoke job green and required.
-- [ ] Local simulator re-proven at the new `main`: fresh-stack setup
-      requires the token, browser sign-in works, posture denial renders
-      "Access blocked".
-- [ ] Backup bundle drill on the dev box: bundle → wipe → restore → login
-      works (app + Keycloak), timer files installed.
-- [ ] Upgrade/rollback drill on the simulator between two pinned versions.
-- [ ] Operator-gated list handed over with the VPS purchase decision; the
+Status at cycle-25 close (`main @ff7df77`, 2026-11-10/11):
+
+- [x] Wave 1 merged, `main` Verify + E2E green.
+- [x] Wave 2 merged; prod-smoke job green (runs on every PR; marking it a
+      *required* check is a GitHub settings step, operator-gated below).
+      Exceptions, deliberately deferred: placeholder-secret rejection in
+      prod `Validate` (#8 second half), SBOM/attestations + nightly jobs
+      (#13 remainder — the release verify-gate shipped), prod-compose
+      `_FILE` wiring + PG password out of `DATABASE_URL` (#14; the
+      `secrets.get` resolver already honours `_FILE` uniformly).
+- [x] Local simulator re-proven at the new `main`: fresh-stack setup
+      requires the token (prod-smoke asserts 403→201 on every PR; dev
+      stacks are token-inert by design), browser sign-in works (CI fresh
+      mode + local run, incl. Keycloak's Verify Profile first-login
+      page — setup collects no names today; collecting them in the
+      wizard is a recorded follow-up), posture bundle verified in the
+      running SPI jar + template test green (a live posture-*denied*
+      browser check is still outstanding — the localhost stack runs
+      posture-disabled).
+- [x] Backup bundle drill on the dev box: bundle → `verify-restore.sh`
+      exit 0 with both database sections restored and asserted into a
+      scratch Postgres. Timer units ship in `docker/systemd/` but are
+      not installed on the dev box; the full wipe → restore → login
+      drill runs on the VPS.
+- [ ] Upgrade/rollback drill on the simulator between two pinned versions
+      — needs a second release tag (only v1.7.0 exists); run it when the
+      next tag is cut.
+- [x] Operator-gated list handed over with the VPS purchase decision; the
       only remaining items are those requiring a real host, real DNS, or
       live third-party credentials.
