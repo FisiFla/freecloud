@@ -50,10 +50,17 @@ jobs:
           curl -sf http://localhost:3000/api/health >/dev/null || (echo "Frontend not ready after 300s." && exit 1)
 
       - name: Install frontend deps + Chromium
+        # No --with-deps: the GitHub ubuntu image already ships Chromium's
+        # shared libraries (apt only wanted 9 font packages), and the
+        # apt-mirror fetch made this job hostage to *.ubuntu.com DNS —
+        # observed down 2026-11-11 across 3 attempts on 4 PRs while npm ci
+        # and docker pulls in the same job succeeded. If a future runner
+        # image drops a needed library, Chromium launch fails loudly in
+        # the test step; re-add --with-deps then.
         run: |
           cd frontend
           npm ci
-          npx playwright install --with-deps chromium
+          npx playwright install chromium
 
       - name: Run browser sign-in e2e (fresh mode)
         env:
