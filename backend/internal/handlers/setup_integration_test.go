@@ -64,7 +64,7 @@ func (k *raceKeycloak) HasAdminUser(ctx context.Context) (bool, error) {
 	return k.provisioned, nil
 }
 
-func (k *raceKeycloak) CreateAdminUser(ctx context.Context, email, password string) (string, error) {
+func (k *raceKeycloak) CreateAdminUser(ctx context.Context, email, password, firstName, lastName string) (string, error) {
 	time.Sleep(k.createDelay)
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -89,7 +89,7 @@ func TestSetupConcurrentReplicasSingleWinner(t *testing.T) {
 	h1 := NewHandler(pool1, kc, &fakeFleet{}, zap.NewNop())
 	h2 := NewHandler(pool2, kc, &fakeFleet{}, zap.NewNop())
 
-	body := []byte(`{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp"}`)
+	body := []byte(`{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp","adminFirstName":"Ada","adminLastName":"Lovelace"}`)
 
 	start := make(chan struct{})
 	statuses := make(chan int, 2)

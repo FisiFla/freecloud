@@ -323,16 +323,16 @@ If the GHCR packages are private, run `docker login ghcr.io` on the host
   reliably locked); check Keycloak connectivity and retry.
 - **Enrollment callback returns 401** — `FLEET_WEBHOOK_SECRET` mismatch between
   the backend and Fleet's webhook configuration.
-- **No Keycloak `:9000` health endpoint — expected.** `KC_HEALTH_ENABLED` is
-  deliberately **not** set in production: in Keycloak 26.8 it is a build-time
-  option, and enabling it makes `kc.sh start` re-augment at boot, which fails
-  on this image (`SmallRyeHealthProcessor` dies on the posture-check SPI fat
-  jar's shaded `jakarta.json` copy). The compose healthcheck therefore probes
-  the main `:8080` port instead (`GET /realms/master` over bash `/dev/tcp`,
-  which the Keycloak image ships — unlike curl/wget). Proper fix (future
-  work, **not done**): add shade `<relocations>` for the SPI's JSON classes in
-  `keycloak-authenticator/pom.xml` and bake `KC_HEALTH_ENABLED` into the
-  image's `kc.sh build` in `docker/Dockerfile.keycloak`.
+- **Keycloak `:9000` health endpoint.** `KC_HEALTH_ENABLED=true` is baked into
+  the image's `kc.sh build` in `docker/Dockerfile.keycloak` (a build-time
+  option in Keycloak 26.8 — setting it only at runtime would make `kc.sh
+  start` re-augment at boot). This used to crash `SmallRyeHealthProcessor` on
+  the posture-check SPI fat jar's shaded `jakarta.json` copy; the jar now
+  relocates those classes under `xyz.fisicaro.freecloud.shaded.*` (see the
+  shade `<relocations>` in `keycloak-authenticator/pom.xml`). The compose
+  healthcheck still probes the main `:8080` port (`GET /realms/master` over
+  bash `/dev/tcp`, which the Keycloak image ships — unlike curl/wget);
+  switching it to `:9000/health/ready` is future work.
 
 ## Scale note
 

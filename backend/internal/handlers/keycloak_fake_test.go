@@ -64,7 +64,7 @@ type fakeKeycloak struct {
 	getUserByIDFn               func(ctx context.Context, userID string) (*gocloak.User, error)
 	// B1 (setup wizard): provisioning-state helpers.
 	hasAdminUserFn    func(ctx context.Context) (bool, error)
-	createAdminUserFn func(ctx context.Context, email, password string) (string, error)
+	createAdminUserFn func(ctx context.Context, email, password, firstName, lastName string) (string, error)
 	// D2: SMTP
 	updateRealmSMTPFn func(ctx context.Context, cfg keycloak.SMTPConfig) error
 	// D3: Identity providers
@@ -411,9 +411,9 @@ func (f *fakeKeycloak) HasAdminUser(ctx context.Context) (bool, error) {
 	return false, nil
 }
 
-func (f *fakeKeycloak) CreateAdminUser(ctx context.Context, email, password string) (string, error) {
+func (f *fakeKeycloak) CreateAdminUser(ctx context.Context, email, password, firstName, lastName string) (string, error) {
 	if f.createAdminUserFn != nil {
-		return f.createAdminUserFn(ctx, email, password)
+		return f.createAdminUserFn(ctx, email, password, firstName, lastName)
 	}
 	return "fake-admin-id", nil
 }
