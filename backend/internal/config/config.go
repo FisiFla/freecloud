@@ -284,6 +284,36 @@ func Load() *Config {
 	}
 	c.secretErrors = secrets.errs
 
+	// DATABASE_PASSWORD_FILE delivers the Postgres password as a mounted
+	// secret (prod compose) so DATABASE_URL itself carries no password
+	// (Wave 2 #14). Only the _FILE form is honored — there is no
+	// DATABASE_PASSWORD plain-var injection. A failure (unreadable or
+	// empty file, unusable DSN) mirrors secrets.go semantics exactly: the
+	// value degrades to EMPTY (never a password from a different source)
+	// and the error is recorded, so Validate() refuses to start and the
+	// migrate one-shot exits with "DATABASE_URL could not be resolved"
+	// instead of a confusing auth failure at connect time.
+	if pwFile := os.Getenv("DATABASE_PASSWORD_FILE"); pwFile != "" {
+		pwData, readErr := os.ReadFile(pwFile)
+		pw := strings.TrimRight(string(pwData), "\n\r")
+		switch {
+		case readErr != nil:
+			c.secretErrors = append(c.secretErrors, fmt.Sprintf("reading DATABASE_PASSWORD_FILE (%s): %v", pwFile, readErr))
+			c.DatabaseURL = ""
+		case pw == "":
+			c.secretErrors = append(c.secretErrors, fmt.Sprintf("DATABASE_PASSWORD_FILE (%s) is empty", pwFile))
+			c.DatabaseURL = ""
+		default:
+			injected, injErr := injectDatabasePassword(c.DatabaseURL, pw)
+			if injErr != nil {
+				c.secretErrors = append(c.secretErrors, injErr.Error())
+				c.DatabaseURL = ""
+			} else {
+				c.DatabaseURL = injected
+			}
+		}
+	}
+
 	// Durations: an unparsable value is recorded and rejected by Validate()
 	// rather than silently replaced by a default (issue #130).
 	c.ReconcileInterval = c.duration("RECONCILE_INTERVAL", getEnv("RECONCILE_INTERVAL", "15m"))
@@ -341,6 +371,30 @@ func parseDuration(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid duration %q: must not be negative", s)
 	}
 	return d, nil
+}
+
+// injectDatabasePassword returns dsn with its password component set to
+// password (URL-escaped), so file-delivered values containing reserved
+// characters (@ : / ? # %) stay valid inside the DSN.
+//
+// Documented rule: the file password ALWAYS REPLACES a password already
+// embedded in the DSN. Setting DATABASE_PASSWORD_FILE declares the file
+// the password source; silently keeping the embedded value instead would
+// be the source confusion secrets.go exists to prevent.
+//
+// Only the URI DSN form (postgres://user@host/db?...) is supported: a
+// keyword/value DSN or a DSN without a user fails closed with an error,
+// because there is no user to attach the password to.
+func injectDatabasePassword(dsn, password string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("DATABASE_PASSWORD_FILE is set but DATABASE_URL is not a valid URI: %v", err)
+	}
+	if u.User == nil {
+		return "", fmt.Errorf("DATABASE_PASSWORD_FILE is set but DATABASE_URL has no user to attach the password to (want postgres://user@host/db?...)")
+	}
+	u.User = url.UserPassword(u.User.Username(), password)
+	return u.String(), nil
 }
 
 // splitCSV splits a comma-separated environment value into its non-empty,

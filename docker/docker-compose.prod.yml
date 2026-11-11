@@ -17,11 +17,17 @@
 # They are mounted into the containers as Docker secrets (see the `secrets:`
 # block at the bottom of this file) and read through the <VAR>_FILE convention
 # (the backend supports it natively — backend/internal/config/secrets.go), so
-# the values never appear in `docker inspect` or /proc/<pid>/environ.
+# the values never appear in `docker inspect` or /proc/<pid>/environ. The
+# operator-provided FLEET_API_TOKEN travels the same way: set it in
+# .secrets/secrets.env (hand-added key) and generate.sh mirrors it to
+# .secrets/files/fleet_api_token — it does NOT go in .env.prod.
 #
 # What the operator MUST set in .env.prod:
 #   DASHBOARD_DOMAIN, API_DOMAIN, KC_DOMAIN (+ their https:// URL variants)
-#   FLEET_URL, FLEET_API_TOKEN
+#   FLEET_URL
+# What the operator MUST set in .secrets/secrets.env (hand-added key):
+#   FLEET_API_TOKEN (from the FleetDM instance; required — the backend
+#   refuses to start without it)
 # Optionally: SMTP_* for email notifications, POSTURE_CHECK_ENABLED.
 #
 # Caddy auto-provisions TLS. Postgres serves TLS on the internal network.
@@ -33,15 +39,17 @@
 # (the `build:` blocks below are kept for that path). Rollback = set
 # FREECLOUD_VERSION back to the previous release and re-run prod-pull/prod-up.
 #
-# Note on POSTGRES_PASSWORD / KC_ADMIN_PASSWORD interpolation:
-#   The Postgres password has to appear in the DATABASE_URL string that compose
-#   resolves at parse time, so it is interpolated from the host environment.
-#   `make prod-up` sources .secrets/secrets.env before invoking compose so it is
-#   in the shell environment when compose reads the file. The interpolation uses
-#   `:?` so compose fails fast with a clear message when it is missing, instead
-#   of silently producing a password-less DSN. Running
-#   `docker compose ... config -q` directly (without sourcing) will therefore
-#   fail with that message — that is expected.
+# Note on the Postgres password in DATABASE_URL:
+#   DATABASE_URL here carries NO password: the backend and migrate services
+#   get DATABASE_PASSWORD_FILE (the postgres_password Docker secret, the same
+#   file the postgres service reads via POSTGRES_PASSWORD_FILE) and the
+#   backend injects the file's password into the DSN at config load
+#   (backend/internal/config/config.go). Nothing is interpolated from the
+#   host environment, so no password ever appears in `docker inspect`.
+#   `make prod-up` still sources .secrets/secrets.env before invoking
+#   compose (FREECLOUD_VERSION and friends), but a missing POSTGRES_PASSWORD
+#   now fails at backend Validate ("secret could not be resolved") / the
+#   migrate one-shot ("DATABASE_URL could not be resolved") instead.
 
 # ── Log rotation (every service) ────────────────────────────────────────────
 # Without this, json-file logs grow unbounded on the host disk. 10m × 5 caps
@@ -212,10 +220,16 @@ services:
     deploy:
       resources:
         limits: { memory: 512m }
+    # Same Go binary as backend, so the same _FILE secret delivery works:
+    # DATABASE_URL carries no password; the password is injected from the
+    # postgres_password Docker secret at config load. An unreadable file
+    # fails fast with "DATABASE_URL could not be resolved" instead of a
+    # confusing "password authentication failed" at connect time.
+    secrets:
+      - postgres_password
     environment:
-      # Fail fast: an empty password produces a confusing "password
-      # authentication failed" at connect time instead of a clear message.
-      DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set — run make prod-secrets-init and source .secrets/secrets.env}@postgres:5432/freecloud?sslmode=require
+      DATABASE_URL: postgres://freecloud@postgres:5432/freecloud?sslmode=require
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
     depends_on:
       postgres:
         condition: service_healthy
@@ -239,9 +253,11 @@ services:
       - scim_bearer_token
       - setup_token
       - access_eval_token
+      - fleet_api_token
       - fleet_webhook_secret
       - provisioning_master_key
       - kc_admin_password
+      - postgres_password
     environment:
       APP_ENV: production
       PORT: "8080"
@@ -251,7 +267,10 @@ services:
       # Without this every request through the proxy shares ONE rate-limit
       # bucket and a single client can rate-limit every tenant (issue #129).
       TRUSTED_PROXY_CIDRS: ${FREECLOUD_SUBNET:-172.30.0.0/24}
-      DATABASE_URL: postgres://freecloud:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set — run make prod-secrets-init and source .secrets/secrets.env}@postgres:5432/freecloud?sslmode=require
+      # No password in the DSN: injected from DATABASE_PASSWORD_FILE (the
+      # postgres_password Docker secret) at config load — see the header.
+      DATABASE_URL: postgres://freecloud@postgres:5432/freecloud?sslmode=require
+      DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       REDIS_URL: redis://redis:6379/0
       # Split-horizon (same pattern as docker-compose.localhost.yml):
       # server-side JWKS/Admin/bootstrap calls go over the internal network,
@@ -268,7 +287,6 @@ services:
       # KEYCLOAK_CLIENT_SECRET: self-managed by Epic A bootstrap.
       KEYCLOAK_AUDIENCE: ${KEYCLOAK_AUDIENCE:-freecloud-dashboard}
       FLEET_URL: ${FLEET_URL}
-      FLEET_API_TOKEN: ${FLEET_API_TOKEN}
       CORS_ORIGIN: ${DASHBOARD_PUBLIC_URL}
       KC_BOOTSTRAP_ADMIN: admin
       # The backend resolves secrets through <VAR>_FILE → <VAR>_VAULT_PATH →
@@ -276,6 +294,7 @@ services:
       SCIM_BEARER_TOKEN_FILE: /run/secrets/scim_bearer_token
       SETUP_TOKEN_FILE: /run/secrets/setup_token
       ACCESS_EVAL_TOKEN_FILE: /run/secrets/access_eval_token
+      FLEET_API_TOKEN_FILE: /run/secrets/fleet_api_token
       FLEET_WEBHOOK_SECRET_FILE: /run/secrets/fleet_webhook_secret
       KC_BOOTSTRAP_PASSWORD_FILE: /run/secrets/kc_admin_password
       # PROVISIONING_MASTER_KEY is delivered as a mounted secret only. The
@@ -433,6 +452,8 @@ secrets:
     file: ../.secrets/files/scim_bearer_token
   access_eval_token:
     file: ../.secrets/files/access_eval_token
+  fleet_api_token:
+    file: ../.secrets/files/fleet_api_token
   fleet_webhook_secret:
     file: ../.secrets/files/fleet_webhook_secret
   provisioning_master_key:

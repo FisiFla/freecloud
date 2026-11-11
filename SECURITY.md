@@ -29,9 +29,13 @@ reports within a few days.
 - **Secrets are delivered as files.** The production stack mounts the
   auto-generated secrets (`POSTGRES_PASSWORD`, `KC_ADMIN_PASSWORD`,
   `AUTH_SECRET`, `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`,
-  `FLEET_WEBHOOK_SECRET`, `PROVISIONING_MASTER_KEY`) as Docker secrets and
-  reads them through the `<VAR>_FILE` convention, so the values are not
-  visible in `docker inspect` or `/proc/<pid>/environ`. The backend also
+  `FLEET_WEBHOOK_SECRET`, `PROVISIONING_MASTER_KEY`) plus the
+  operator-provided `FLEET_API_TOKEN` (hand-added to `.secrets/secrets.env`,
+  mirrored one-per-file by the generator) as Docker secrets and reads them
+  through the `<VAR>_FILE` convention, so the values are not visible in
+  `docker inspect` or `/proc/<pid>/environ`. The database password travels
+  the same way: `DATABASE_URL` carries no password and the backend/migrate
+  inject it from `DATABASE_PASSWORD_FILE` at config load. The backend also
   supports `<VAR>_VAULT_PATH` (HashiCorp Vault) — see
   [docs/SECRETS.md](docs/SECRETS.md).
 - **API authentication.** Authenticated `/api/v1/*` endpoints require a

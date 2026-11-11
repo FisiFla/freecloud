@@ -3,6 +3,9 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -465,6 +468,121 @@ func TestValidateProductionAcceptsRandomSecrets(t *testing.T) {
 	cfg := Load()
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("expected no error for random prod secrets, got %v", err)
+	}
+}
+
+// DATABASE_PASSWORD_FILE delivers the Postgres password as a mounted file
+// (prod compose) so DATABASE_URL itself carries no password (Wave 2 #14).
+// The injected password is URL-escaped, so values with reserved characters
+// stay valid inside the DSN.
+func TestLoadInjectsDatabasePasswordFromFile(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://freecloud@db.internal:5432/freecloud?sslmode=require")
+	const password = `p@ss:w/rd?x#y%z`
+	pwFile := filepath.Join(t.TempDir(), "postgres_password")
+	if err := os.WriteFile(pwFile, []byte(password+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DATABASE_PASSWORD_FILE", pwFile)
+
+	cfg := Load()
+	if len(cfg.SecretErrors()) != 0 {
+		t.Fatalf("expected no secret errors, got %v", cfg.SecretErrors())
+	}
+	u, err := url.Parse(cfg.DatabaseURL)
+	if err != nil {
+		t.Fatalf("injected DATABASE_URL does not parse: %v (%q)", err, cfg.DatabaseURL)
+	}
+	got, hasPw := u.User.Password()
+	if !hasPw || got != password {
+		t.Errorf("expected injected password %q, got %q (hasPassword=%v) in %q", password, got, hasPw, cfg.DatabaseURL)
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected injected DSN to validate, got %v", err)
+	}
+}
+
+// Documented rule: the file password ALWAYS REPLACES a password already
+// embedded in the DSN — setting DATABASE_PASSWORD_FILE declares the file
+// the password source, and silently keeping the embedded value would be
+// the source confusion secrets.go exists to prevent.
+func TestLoadDatabasePasswordFileReplacesEmbeddedPassword(t *testing.T) {
+	setSecureProdEnv(t)
+	t.Setenv("DATABASE_URL", "postgres://freecloud:stale-embedded@db.internal:5432/freecloud?sslmode=require")
+	pwFile := filepath.Join(t.TempDir(), "postgres_password")
+	if err := os.WriteFile(pwFile, []byte("file-password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DATABASE_PASSWORD_FILE", pwFile)
+
+	cfg := Load()
+	u, err := url.Parse(cfg.DatabaseURL)
+	if err != nil {
+		t.Fatalf("injected DATABASE_URL does not parse: %v", err)
+	}
+	got, _ := u.User.Password()
+	if got != "file-password" {
+		t.Errorf("expected file password to replace the embedded one, got %q in %q", got, cfg.DatabaseURL)
+	}
+}
+
+// Only the _FILE form is honored: a plain DATABASE_PASSWORD variable is
+// NOT injected (there is no new plaintext password path).
+func TestLoadIgnoresPlainDatabasePasswordEnv(t *testing.T) {
+	setSecureProdEnv(t)
+	const dsn = "postgres://freecloud@db.internal:5432/freecloud?sslmode=require"
+	t.Setenv("DATABASE_URL", dsn)
+	t.Setenv("DATABASE_PASSWORD", "should-be-ignored")
+	t.Setenv("DATABASE_PASSWORD_FILE", "")
+
+	cfg := Load()
+	if cfg.DatabaseURL != dsn {
+		t.Errorf("plain DATABASE_PASSWORD must not be injected, got %q", cfg.DatabaseURL)
+	}
+}
+
+// Fail-closed injection: an unreadable file, an empty file, or a DSN the
+// password cannot be attached to degrades DATABASE_URL to EMPTY (mirroring
+// secrets.go: never a password from a different source) and records an
+// error, so Validate() refuses to start and the migrate one-shot exits
+// with "DATABASE_URL could not be resolved" instead of a confusing auth
+// failure at connect time.
+func TestLoadDatabasePasswordFileFailsClosed(t *testing.T) {
+	setSecureProdEnv(t)
+	pwFile := filepath.Join(t.TempDir(), "postgres_password")
+	if err := os.WriteFile(pwFile, []byte("file-password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	emptyFile := filepath.Join(t.TempDir(), "empty_password")
+	if err := os.WriteFile(emptyFile, []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		dsn    string
+		pwFile string
+	}{
+		{"unreadable file", "postgres://freecloud@db.internal:5432/freecloud?sslmode=require", filepath.Join(t.TempDir(), "does-not-exist")},
+		{"empty file", "postgres://freecloud@db.internal:5432/freecloud?sslmode=require", emptyFile},
+		{"DSN without user", "postgres://db.internal:5432/freecloud?sslmode=require", pwFile},
+		{"keyword-value DSN", "host=db.internal user=freecloud dbname=freecloud sslmode=require", pwFile},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			setSecureProdEnv(t)
+			t.Setenv("DATABASE_URL", c.dsn)
+			t.Setenv("DATABASE_PASSWORD_FILE", c.pwFile)
+			cfg := Load()
+			if cfg.DatabaseURL != "" {
+				t.Errorf("expected DATABASE_URL to degrade to empty, got %q", cfg.DatabaseURL)
+			}
+			if len(cfg.SecretErrors()) == 0 {
+				t.Error("expected a recorded secret error, got none")
+			}
+			if err := cfg.Validate(); err == nil {
+				t.Error("expected Validate() to reject the failed injection, got nil")
+			}
+		})
 	}
 }
 

@@ -141,15 +141,24 @@ set_env KC_DOMAIN auth.localhost
 set_env DASHBOARD_PUBLIC_URL https://app.localhost
 set_env KC_PUBLIC_URL https://auth.localhost
 set_env FLEET_URL https://fleet.invalid
-set_env FLEET_API_TOKEN smoke-dummy
+# No FLEET_API_TOKEN here: the prod compose reads it from the fleet_api_token
+# Docker secret (mirrored from .secrets/secrets.env) — see below.
 set_env POSTURE_CHECK_ENABLED true
 # SMTP_* stay unset/commented, exactly as in the example.
 log "wrote .env.prod (app.localhost / api.localhost / auth.localhost, FLEET_URL=https://fleet.invalid)"
 
 # ── Real operator path: secrets, then source-build ───────────────────────────
 make prod-secrets-init
-# Source the generated secrets the same way make prod-up does, so compose can
-# interpolate POSTGRES_PASSWORD for every invocation below (including build).
+# FLEET_API_TOKEN is operator-managed in secrets.env (the generator mirrors it
+# to the fleet_api_token Docker secret file). The smoke stack uses a dummy —
+# Fleet is never reached (FLEET_URL=https://fleet.invalid) — and re-runs the
+# generator so the mirror file is refreshed.
+if ! grep -q "^FLEET_API_TOKEN=" .secrets/secrets.env; then
+  printf '%s\n' "FLEET_API_TOKEN=smoke-dummy-fleet-token" >>.secrets/secrets.env
+fi
+make prod-secrets-init
+# Source the secrets the same way make prod-up does, so every compose
+# invocation below (including build) runs with the operator-path environment.
 set -a
 # shellcheck disable=SC1091
 . .secrets/secrets.env

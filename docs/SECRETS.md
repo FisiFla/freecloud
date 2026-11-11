@@ -37,14 +37,18 @@ per secret). The production compose mounts the per-key files as Docker secrets
 | `POSTGRES_PASSWORD` | keycloak | `FREECLOUD_KEYCLOAK_DB_PASSWORD_FILE` → read by `docker/keycloak-entrypoint.sh` |
 | `ACCESS_EVAL_TOKEN` | keycloak | `FREECLOUD_ACCESS_EVAL_TOKEN_FILE` → read by `docker/keycloak-entrypoint.sh` |
 | `AUTH_SECRET` | frontend | mounted file, read by the container entrypoint |
-| `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`, `FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD` | backend | `<VAR>_FILE` (resolved natively by `config.resolveSecret`) |
+| `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`, `FLEET_API_TOKEN`, `FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD` | backend | `<VAR>_FILE` (resolved natively by `config.resolveSecret`) |
+| `POSTGRES_PASSWORD` | backend, migrate | `DATABASE_PASSWORD_FILE` → injected (URL-escaped) into the password-less `DATABASE_URL` at config load |
 | `PROVISIONING_MASTER_KEY` | backend | `<VAR>_FILE` **and** the plain env var — `backend/internal/handlers/provisioning.go` still reads the plain variable directly |
 
 The values are therefore not visible in `docker inspect` or
-`/proc/<pid>/environ` — with the single exception of the database password,
-which has to appear inside the `DATABASE_URL` that Compose interpolates, and
-of the operator-provided variables in `.env.prod` (`FLEET_API_TOKEN`,
-`AUTH_KEYCLOAK_SECRET`, `SMTP_PASSWORD`).
+`/proc/<pid>/environ` — with the single exception of the remaining
+operator-provided variables in `.env.prod` (`AUTH_KEYCLOAK_SECRET`,
+`SMTP_PASSWORD`, `WEBHOOK_SECRET`, `SIEM_HTTP_TOKEN`). `FLEET_API_TOKEN`
+is operator-provided too, but it lives in `.secrets/secrets.env`
+(hand-added key, mirrored to `.secrets/files/fleet_api_token`), not in
+`.env.prod`; the database password travels via `DATABASE_PASSWORD_FILE`,
+so `DATABASE_URL` itself carries no password.
 
 `.secrets/` is created with mode `0700`; the per-key files inside are
 world-readable so that containers running as a non-root uid can read them,
