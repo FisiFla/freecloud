@@ -80,9 +80,11 @@ func TestE2E_Turnkey_SetupLockedOnceProvisioned(t *testing.T) {
 
 	// Attempt to create a first admin — must be rejected with 409.
 	setupBody := map[string]string{
-		"adminEmail":    "turnkey-e2e@example.com",
-		"adminPassword": "TurnkeyE2E!9",
-		"orgName":       "E2E Org",
+		"adminEmail":     "turnkey-e2e@example.com",
+		"adminPassword":  "TurnkeyE2E!9",
+		"orgName":        "E2E Org",
+		"adminFirstName": "Turnkey",
+		"adminLastName":  "E2E",
 	}
 	code, body := do(t, http.MethodPost, "/api/v1/setup", nil, setupBody)
 	if code != http.StatusConflict {

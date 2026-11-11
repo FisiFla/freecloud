@@ -114,8 +114,10 @@ func (f *fakeKC) GetUserByID(_ context.Context, userID string) (*gocloak.User, e
 }
 
 // B1 setup wizard (not used by reconciler — satisfy interface)
-func (f *fakeKC) HasAdminUser(_ context.Context) (bool, error)                   { return false, nil }
-func (f *fakeKC) CreateAdminUser(_ context.Context, _, _ string) (string, error) { return "", nil }
+func (f *fakeKC) HasAdminUser(_ context.Context) (bool, error) { return false, nil }
+func (f *fakeKC) CreateAdminUser(_ context.Context, _, _, _, _ string) (string, error) {
+	return "", nil
+}
 
 // D2: SMTP configuration (not used by reconciler — satisfy interface)
 func (f *fakeKC) UpdateRealmSMTP(_ context.Context, _ keycloakpkg.SMTPConfig) error { return nil }

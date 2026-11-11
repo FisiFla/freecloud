@@ -41,7 +41,7 @@ func (h *Handler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // Setup handles POST /api/v1/setup.
-// Body: {adminEmail, adminPassword, orgName, setupToken}
+// Body: {adminEmail, adminPassword, adminFirstName, adminLastName, orgName, setupToken}
 // Fail-closed: returns 409 once provisioned.
 //
 // H3: first-run provisioning is serialized by a distributed pg advisory lock
@@ -55,15 +55,22 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	var body struct {
-		AdminEmail    string `json:"adminEmail"`
-		AdminPassword string `json:"adminPassword"`
-		OrgName       string `json:"orgName"`
-		SetupToken    string `json:"setupToken"`
+		AdminEmail     string `json:"adminEmail"`
+		AdminPassword  string `json:"adminPassword"`
+		AdminFirstName string `json:"adminFirstName"`
+		AdminLastName  string `json:"adminLastName"`
+		OrgName        string `json:"orgName"`
+		SetupToken     string `json:"setupToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid JSON")
 		return
 	}
+
+	// Normalize before validation so a whitespace-only name is rejected and
+	// Keycloak receives the trimmed value (same convention as onboarding.go).
+	body.AdminFirstName = strings.TrimSpace(body.AdminFirstName)
+	body.AdminLastName = strings.TrimSpace(body.AdminLastName)
 
 	var errs []ValidationError
 	if !isValidEmail(body.AdminEmail) {
@@ -72,6 +79,20 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	if !isStrongEnough(body.AdminPassword) {
 		errs = append(errs, ValidationError{Field: "adminPassword",
 			Message: fmt.Sprintf("password must be at least %d characters", minAdminPasswordLength)})
+	}
+	// First/last name are required: KC 26's declarative user profile demands
+	// both, and an admin created without them stops at the "Update Account
+	// Information" interstitial on first login. Length cap mirrors the ≤100
+	// convention used for name fields across the handlers package.
+	if body.AdminFirstName == "" {
+		errs = append(errs, ValidationError{Field: "adminFirstName", Message: "adminFirstName is required"})
+	} else if len(body.AdminFirstName) > 100 {
+		errs = append(errs, ValidationError{Field: "adminFirstName", Message: "adminFirstName must be ≤ 100 characters"})
+	}
+	if body.AdminLastName == "" {
+		errs = append(errs, ValidationError{Field: "adminLastName", Message: "adminLastName is required"})
+	} else if len(body.AdminLastName) > 100 {
+		errs = append(errs, ValidationError{Field: "adminLastName", Message: "adminLastName must be ≤ 100 characters"})
 	}
 	if strings.TrimSpace(body.OrgName) == "" {
 		errs = append(errs, ValidationError{Field: "orgName", Message: "organization name is required"})
@@ -116,7 +137,7 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.keycloak.CreateAdminUser(ctx, body.AdminEmail, body.AdminPassword)
+	_, err = h.keycloak.CreateAdminUser(ctx, body.AdminEmail, body.AdminPassword, body.AdminFirstName, body.AdminLastName)
 	if err != nil {
 		h.logger.Error("setup: create admin user failed", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to create admin user")

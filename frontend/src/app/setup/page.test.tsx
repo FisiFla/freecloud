@@ -9,6 +9,8 @@ import SetupPage from "./page";
 
 function fillForm() {
   fireEvent.change(screen.getByLabelText("Organization name"), { target: { value: "Acme" } });
+  fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Ada" } });
+  fireEvent.change(screen.getByLabelText("Last name"), { target: { value: "Lovelace" } });
   fireEvent.change(screen.getByLabelText("Admin email"), { target: { value: "admin@example.com" } });
   fireEvent.change(screen.getByLabelText("Password"), { target: { value: "securepass12" } });
   fireEvent.change(screen.getByLabelText("Confirm password"), { target: { value: "securepass12" } });
@@ -43,6 +45,29 @@ describe("Setup page setup-token field", () => {
     await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/signin"));
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(body.setupToken).toBe("tok-123");
+  });
+
+  it("renders required first/last name fields with stable ids for the browser e2e", () => {
+    render(<SetupPage />);
+    const firstName = screen.getByLabelText("First name");
+    const lastName = screen.getByLabelText("Last name");
+    expect(firstName).toHaveAttribute("id", "adminFirstName");
+    expect(lastName).toHaveAttribute("id", "adminLastName");
+    expect(firstName).toBeRequired();
+    expect(lastName).toBeRequired();
+  });
+
+  it("includes adminFirstName/adminLastName in the POST body", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ status: 201, ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<SetupPage />);
+    fillForm();
+    fireEvent.click(screen.getByRole("button", { name: /set up freecloud/i }));
+
+    await waitFor(() => expect(pushMock).toHaveBeenCalledWith("/signin"));
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.adminFirstName).toBe("Ada");
+    expect(body.adminLastName).toBe("Lovelace");
   });
 
   it("maps a 403 to a setup-token field error", async () => {

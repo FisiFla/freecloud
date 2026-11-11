@@ -12,6 +12,8 @@ interface FieldError {
 export default function SetupPage() {
   const router = useRouter();
   const [adminEmail, setAdminEmail] = useState("");
+  const [adminFirstName, setAdminFirstName] = useState("");
+  const [adminLastName, setAdminLastName] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [orgName, setOrgName] = useState("");
@@ -42,7 +44,7 @@ export default function SetupPage() {
       const res = await fetch(`/api/v1/setup`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adminEmail, adminPassword, orgName, setupToken }),
+        body: JSON.stringify({ adminEmail, adminPassword, adminFirstName, adminLastName, orgName, setupToken }),
       });
 
       if (res.status === 403) {
@@ -129,6 +131,42 @@ export default function SetupPage() {
             />
             {getFieldError("orgName") && (
               <p className="mt-1 text-sm text-red-600 dark:text-red-400">{getFieldError("orgName")}</p>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor="adminFirstName" className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
+              First name
+            </label>
+            <input
+              id="adminFirstName"
+              type="text"
+              value={adminFirstName}
+              onChange={(e) => setAdminFirstName(e.target.value)}
+              placeholder="Jane"
+              className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100"
+              required
+            />
+            {getFieldError("adminFirstName") && (
+              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{getFieldError("adminFirstName")}</p>
+            )}
+          </div>
+
+          <div>
+            <label htmlFor="adminLastName" className="block text-sm font-medium text-slate-700 mb-1 dark:text-slate-300">
+              Last name
+            </label>
+            <input
+              id="adminLastName"
+              type="text"
+              value={adminLastName}
+              onChange={(e) => setAdminLastName(e.target.value)}
+              placeholder="Smith"
+              className="w-full px-3 py-2 border border-slate-300 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:bg-slate-800 dark:border-slate-600 dark:text-slate-100"
+              required
+            />
+            {getFieldError("adminLastName") && (
+              <p className="mt-1 text-sm text-red-600 dark:text-red-400">{getFieldError("adminLastName")}</p>
             )}
           </div>
 

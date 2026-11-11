@@ -35,8 +35,8 @@ and then `server started`. The whole sequence usually takes under 90 s on first 
 Open [http://localhost:3000](http://localhost:3000).
 
 If this is a fresh database you will be redirected to `/setup` automatically.
-Fill in your admin email, a strong password, and an organisation name, then click
-**Create admin account**. That is the only manual step.
+Fill in your first and last name, admin email, a strong password, and an
+organisation name, then click **Create admin account**. That is the only manual step.
 
 If you are returning to an existing database (already provisioned), the wizard
 is skipped and you land on the login page.
