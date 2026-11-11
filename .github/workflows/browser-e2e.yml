@@ -49,6 +49,25 @@ jobs:
           done
           curl -sf http://localhost:3000/api/health >/dev/null || (echo "Frontend not ready after 300s." && exit 1)
 
+      - name: Wait for backend setup status
+        # Frontend health is not enough: the backend starts serving only
+        # after Keycloak bootstrap (realm creation) completes. Before
+        # that, / cannot learn the setup state and falls through to
+        # /signin instead of /setup (observed 2026-11-11 once the slow
+        # apt step that used to mask this race was removed). Poll the
+        # BFF-proxied setup status until the backend answers.
+        run: |
+          echo "Waiting for http://localhost:3000/api/v1/setup/status..."
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000/api/v1/setup/status >/dev/null 2>&1; then
+              echo "Backend ready."
+              break
+            fi
+            echo "  attempt $i/60..."
+            sleep 5
+          done
+          curl -sf http://localhost:3000/api/v1/setup/status || (echo "Backend setup status not ready after 300s." && exit 1)
+
       - name: Install frontend deps + Chromium
         # No --with-deps: the GitHub ubuntu image already ships Chromium's
         # shared libraries (apt only wanted 9 font packages), and the
