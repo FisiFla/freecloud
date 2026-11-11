@@ -41,9 +41,32 @@ jobs:
           mvn -q package
         # mvn package = compile + test + shade. Fails the job if Java unit tests fail.
 
-      - name: Verify JAR exists
+      - name: Verify JAR exists and JSON is relocated
+        # Regression guard: the fat jar must carry NO un-relocated
+        # jakarta.json / parsson classes — those clash with Keycloak's own
+        # copy and crash SmallRyeHealthProcessor when KC_HEALTH_ENABLED is
+        # on. See keycloak-authenticator/pom.xml shade <relocations>.
         run: |
           ls -lh keycloak-authenticator/target/keycloak-posture-authenticator-1.0.0.jar
+          python3 - <<'EOF'
+          import sys, zipfile
+          names = zipfile.ZipFile(
+              "keycloak-authenticator/target/keycloak-posture-authenticator-1.0.0.jar"
+          ).namelist()
+          bad = [n for n in names
+                 if (n.startswith("jakarta/json/") or n.startswith("org/eclipse/parsson/"))
+                 and n.endswith(".class")]
+          if bad:
+              print(f"FAIL: {len(bad)} un-relocated shaded classes, e.g. {bad[0]}")
+              sys.exit(1)
+          for want in ("xyz/fisicaro/freecloud/shaded/jakarta/json/Json.class",
+                       "xyz/fisicaro/freecloud/shaded/org/eclipse/parsson/JsonProviderImpl.class",
+                       "META-INF/services/xyz.fisicaro.freecloud.shaded.jakarta.json.spi.JsonProvider",
+                       "META-INF/services/org.keycloak.authentication.AuthenticatorFactory",
+                       "theme-resources/templates/access-blocked.ftl"):
+              assert want in names, f"missing {want}"
+          print("shade relocations OK")
+          EOF
 
   e2e:
     runs-on: ubuntu-latest
