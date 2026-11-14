@@ -1,0 +1,60 @@
+name: Nightly drills
+
+# Slow scheduled drills: the backup-bundle restore proof and the Keycloak
+# 25 -> 26 upgrade rehearsal. schedule + workflow_dispatch ONLY — never
+# pull_request: PR feedback stays fast; these jobs take tens of minutes each.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 04:00 UTC — e2e.yml owns 02:00, browser-e2e.yml owns 03:00.
+    - cron: '0 4 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  backup-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COMPOSE_PROJECT_NAME: fcnightly
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Boot prod stack, bundle it, verify the restore
+        env:
+          # Keep the stack up so the failure step below can dump its logs
+          # (mirrors browser-e2e.yml's dump-then-teardown shape); the
+          # always() step tears it down either way.
+          NIGHTLY_KEEP: '1'
+        run: bash scripts/nightly-backup-verify.sh
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: |
+          docker compose -p "$COMPOSE_PROJECT_NAME" -f docker/docker-compose.prod.yml logs --tail=150 || true
+
+      - name: Tear down nightly stack
+        if: always()
+        run: |
+          docker compose -p "$COMPOSE_PROJECT_NAME" -f docker/docker-compose.prod.yml down -v
+          docker rm -f "$COMPOSE_PROJECT_NAME-scratch" || true
+
+  kc-upgrade-rehearsal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # fetch-depth: 0 — rehearse-kc-upgrade.sh builds the pre-upgrade
+      # Keycloak 25 image from a scratch git worktree at KC25_REF (default
+      # ac2ebbe^); a shallow clone cannot resolve that ref.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Rehearse Keycloak 25 -> 26 upgrade on a seeded DB
+        # KEEP intentionally unset: the script removes its containers,
+        # network, volume and worktree on exit.
+        run: bash scripts/rehearse-kc-upgrade.sh
