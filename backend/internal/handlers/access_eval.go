@@ -169,12 +169,14 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 1. Verify the user exists and is not disabled.
+	// 1. Verify the user exists and is not disabled. The role is fetched for
+	// the bootstrap-window check below; NULL roles read as "" (non-admin).
 	var foundUID string
+	var userRole string
 	err := h.db.QueryRow(ctx,
-		`SELECT keycloak_user_id FROM users WHERE keycloak_user_id = $1 AND disabled = false`,
+		`SELECT keycloak_user_id, COALESCE(role, '') FROM users WHERE keycloak_user_id = $1 AND disabled = false`,
 		req.UserID,
-	).Scan(&foundUID)
+	).Scan(&foundUID, &userRole)
 	if err != nil {
 		h.logger.Warn("access eval: user not found or disabled",
 			zap.String("user_id", req.UserID),
@@ -243,16 +245,13 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if len(deviceIDs) == 0 {
-		h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"no enrolled device found for user"})
-		respondJSON(w, http.StatusOK, AccessEvalResponse{
-			Allow:   false,
-			Reasons: []string{"no enrolled device found for user"},
-		})
-		return
-	}
-
-	// 3. Load per-app policy (if appID provided).
+	// 3. Load per-app policy (if appID provided). This runs BEFORE the
+	// no-device gate so the bootstrap window below can still bind app policy
+	// conditions (time/network/geo): the window waives ONLY the device
+	// requirement, not app conditions. Side effect: when an appId is present
+	// and the user has no devices, a policy-lookup DB error now reports "app
+	// policy lookup failed" instead of "no enrolled device found for user"
+	// (still a deny).
 	policy := appPolicy{}
 	if req.AppID != "" {
 		var reqEnrolled, reqDisk, reqVulns bool
@@ -298,6 +297,59 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		}
 		// ErrNoRows → zero-value policy (no requirements), matching the policy
 		// API's documented "no policy row means no posture gate" behavior.
+	}
+
+	if len(deviceIDs) == 0 {
+		// Bootstrap window (owner-approved 2026-11-14): with posture ON, the
+		// setup-created first admin cannot log in to enroll the first device
+		// (bootstrap paradox). While ZERO device mappings exist system-wide,
+		// an admin-role user with no enrolled device is allowed; the window
+		// closes permanently once the first device mapping exists.
+		//
+		// The window applies only to unattributed requests (req.DeviceID ==
+		// ""): the explicit-device path above keeps denying unmapped ids
+		// (anti-spoof). Any probe error fails closed with the historical
+		// deny below.
+		if req.DeviceID == "" && userRole == "admin" {
+			var noMappings bool
+			if err := h.db.QueryRow(ctx,
+				`SELECT NOT EXISTS (SELECT 1 FROM users_devices_mapping)`,
+			).Scan(&noMappings); err != nil {
+				h.logger.Error("access eval: bootstrap window probe failed",
+					zap.String("user_id", req.UserID),
+					zap.Error(err),
+				)
+			} else if noMappings {
+				condReasons := evalConditions(policy, clientIP, time.Now().UTC(), h.geoIP)
+				if len(condReasons) > 0 {
+					h.auditAccessDecision(ctx, req.UserID, req.AppID, false, condReasons)
+					respondJSON(w, http.StatusOK, AccessEvalResponse{
+						Allow:   false,
+						Reasons: condReasons,
+					})
+					return
+				}
+				h.logger.Warn("access eval: bootstrap window allow (no devices enrolled system-wide)",
+					zap.String("user_id", req.UserID),
+					zap.String("app_id", req.AppID),
+				)
+				// The audit entry carries the window note while Allow stays
+				// true; the response keeps Reasons empty like the normal
+				// allow path (the SPI ignores reasons when allow=true).
+				h.auditAccessDecision(ctx, req.UserID, req.AppID, true,
+					[]string{"bootstrap window: admin allowed before first device enrollment"})
+				respondJSON(w, http.StatusOK, AccessEvalResponse{
+					Allow: true,
+				})
+				return
+			}
+		}
+		h.auditAccessDecision(ctx, req.UserID, req.AppID, false, []string{"no enrolled device found for user"})
+		respondJSON(w, http.StatusOK, AccessEvalResponse{
+			Allow:   false,
+			Reasons: []string{"no enrolled device found for user"},
+		})
+		return
 	}
 
 	// 4. Evaluate posture.
