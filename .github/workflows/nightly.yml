@@ -1,7 +1,8 @@
 name: Nightly drills
 
-# Slow scheduled drills: the backup-bundle restore proof and the Keycloak
-# 25 -> 26 upgrade rehearsal. schedule + workflow_dispatch ONLY — never
+# Slow scheduled drills: the backup-bundle restore proof, the full
+# wipe -> restore -> login drill, and the Keycloak 25 -> 26 upgrade
+# rehearsal. schedule + workflow_dispatch ONLY — never
 # pull_request: PR feedback stays fast; these jobs take tens of minutes each.
 
 on:
@@ -41,6 +42,42 @@ jobs:
         run: |
           docker compose -p "$COMPOSE_PROJECT_NAME" -f docker/docker-compose.prod.yml down -v
           docker rm -f "$COMPOSE_PROJECT_NAME-scratch" || true
+
+  restore-drill:
+    runs-on: ubuntu-latest
+    # ~10-15 min locally; CI cold image builds need the headroom.
+    timeout-minutes: 45
+    env:
+      # Distinct from backup-verify's fcnightly so failure logs/teardown
+      # never collide (jobs run on separate runners anyway).
+      COMPOSE_PROJECT_NAME: fcnightlyrestore
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Wipe the stack, restore from bundle, prove admin login
+        env:
+          # Keep the stack up so the failure step below can dump its logs
+          # (mirrors backup-verify's dump-then-teardown shape); the
+          # always() step tears it down either way.
+          RESTORE_DRILL_KEEP: '1'
+        # Binds host 80/443 through Caddy like prod-smoke — fine on a
+        # dedicated runner.
+        run: bash scripts/restore-drill.sh
+
+      - name: Dump compose logs on failure
+        if: failure()
+        run: |
+          docker compose -p "$COMPOSE_PROJECT_NAME" -f docker/docker-compose.prod.yml logs --tail=150 || true
+
+      - name: Tear down restore-drill stack
+        if: always()
+        run: |
+          # No scratch-container rm: every docker run inside
+          # restore-drill.sh is --rm (self-cleaning one-shots) and its
+          # /tmp scratch dirs die with the runner — only the compose
+          # project needs the down -v.
+          docker compose -p "$COMPOSE_PROJECT_NAME" -f docker/docker-compose.prod.yml down -v
 
   kc-upgrade-rehearsal:
     runs-on: ubuntu-latest
