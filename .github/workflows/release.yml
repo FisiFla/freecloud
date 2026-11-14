@@ -96,3 +96,58 @@ jobs:
           # `gh attestation verify oci://<image>`.
           sbom: true
           provenance: mode=max
+
+  # Per-tag GitHub Release with generated notes. Creating a release needs
+  # contents: write, so this job — and only this job — gets it; the
+  # verify-gate job stays read-only (contents/checks: read) and the images
+  # job keeps the workflow-level packages: write for pushing images but
+  # does not get contents: write. This job in turn does not get
+  # packages: write — the images are already pushed by the images job.
+  # No checkout needed: every step below is a gh CLI call using GH_TOKEN
+  # with GH_REPO for repo context (gh is preinstalled on runners, so no
+  # new `uses:` entries either).
+  github-release:
+    needs: images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Create GitHub Release for ${{ github.ref_name }} (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${{ github.ref_name }}"
+          # Idempotent on workflow re-runs: an existing release (possibly
+          # with operator-edited notes) is left untouched, never overwritten.
+          if url="$(gh release view "$tag" --json url --jq .url 2>/dev/null)"; then
+            echo "Release for $tag already exists: $url — leaving it untouched."
+            exit 0
+          fi
+          # metadata-action publishes semver {{version}}, i.e. the tag without
+          # the leading 'v' (tag v1.7.0 -> image tag 1.7.0).
+          version="${tag#v}"
+          # GHCR image paths must be lowercase (github.repository preserves
+          # the owner's display case, e.g. FisiFla), so lowercase it for the
+          # image references below; the API calls keep GH_REPO as-is.
+          repo_lc="${GH_REPO,,}"
+          notes_file="$(mktemp)"
+          # --generate-notes cannot be combined with --notes, so generate the
+          # notes first (the API diffs against the previous tag automatically),
+          # then append the Images section. Release title stays the gh default
+          # (the tag name) for determinism.
+          gh api "repos/${GH_REPO}/releases/generate-notes" -f tag_name="$tag" --jq .body > "$notes_file"
+          {
+            echo ""
+            echo "## Images"
+            echo ""
+            echo "Published images for this release (each carries an SBOM + SLSA provenance attestation):"
+            echo ""
+            echo "- \`ghcr.io/${repo_lc}/backend:${version}\`"
+            echo "- \`ghcr.io/${repo_lc}/frontend:${version}\`"
+            echo "- \`ghcr.io/${repo_lc}/keycloak:${version}\`"
+            echo ""
+            echo "Verify an image with \`gh attestation verify oci://ghcr.io/${repo_lc}/backend:${version}\`."
+          } >> "$notes_file"
+          gh release create "$tag" --verify-tag --notes-file "$notes_file"
