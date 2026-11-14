@@ -14,11 +14,15 @@ services:
       - ./postgres/init-keycloak-e2e-db.sql:/docker-entrypoint-initdb.d/init-keycloak-e2e-db.sql:ro
     ports:
       - "55433:5432"
+    # Grace period for first-boot initdb (slow-disk fsync ~29s observed in
+    # #315/#316): without it the retry budget can expire before postgres
+    # accepts connections, stranding the service_healthy dependents.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U freecloud -d freecloud_e2e"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 60s
 
   keycloak-e2e:
     # A2 (FCEX3-6): custom Keycloak image with the posture-check SPI jar baked in.
