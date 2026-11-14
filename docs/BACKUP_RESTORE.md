@@ -293,6 +293,54 @@ Cron alternative:
    and an existing user should be able to sign in (this exercises the restored
    Keycloak realm + secrets together).
 
+### Restore drill (`scripts/restore-drill.sh`)
+
+`scripts/restore-drill.sh` is the executable version of the runbook above: it
+boots a provisioned prod-shape stack via `scripts/prod-smoke.sh`, takes a
+bundle, wipes everything (containers, volumes, `.secrets/`, `.env.prod`),
+restores from the bundle alone, boots the restored stack, and proves the
+pre-wipe admin still exists (same Keycloak id, same org name, still
+provisioned) and attempts a real Keycloak browser-flow sign-in (authorize →
+login form → credentials → `code` redirect). Each of its five stages prints
+one `RESULT PASS|FAIL: <stage>` line; the exit code is non-zero on any
+failure.
+
+> Known status: stages 1–4 pass; stage 5's browser-flow sign-in currently
+> fails on a fresh stack — the restored Keycloak accepts the credentials but
+> the posture check denies the login with `user not found or disabled`,
+> because the setup-created first admin has no `users` row (only the seeded
+> e2e admin gets one; see `backend/cmd/server/main.go`) and no enrolled
+> device. Verified pre-existing on the pre-wipe stack, not a restore
+> regression. Until the first-admin login path is fixed, the drill proves
+> restore continuity up to (but excluding) the final sign-in click.
+
+```bash
+bash scripts/restore-drill.sh
+```
+
+Requirements: Docker with compose, `curl`, `python3`, free host ports 80/443,
+and a checkout whose `.env.prod` (if any) already points at `*.localhost`
+(the drill inherits prod-smoke's guard and refuses to touch anything else).
+Expect ~15 minutes, most of it image builds on the first run. All Docker work
+uses `COMPOSE_PROJECT_NAME` (default `fcrestoredrill`) and is torn down
+afterwards, pass or fail; the drill picks a free `/24` for `FREECLOUD_SUBNET`
+when you have not exported one, so it coexists with other stacks on the host.
+Stage 1 retries prod-smoke once when it fails before any migration completed
+(slow-disk first-boot race: the prod postgres healthcheck has no
+`start_period`, so `up -d` can abort while initdb is still running); a
+post-migration failure is never retried.
+
+```bash
+RESTORE_DRILL_KEEP=1 bash scripts/restore-drill.sh   # leave stack + scratch dirs for forensics
+COMPOSE_PROJECT_NAME=myproj bash scripts/restore-drill.sh
+```
+
+Honest limits: the drill proves the `*.localhost` smoke shape, not a real
+public-host restore; it covers the unencrypted bundle only
+(`BACKUP_PASSPHRASE` is forced empty); source and target are the same host.
+No CI job runs this drill yet — nightly wiring is a follow-up; until then a
+local run (quote the `RESULT` lines) is the evidence.
+
 ### Offsite copy (operator step)
 
 The bundle scripts deliberately do **not** upload anything — copying bundles
