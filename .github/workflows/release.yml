@@ -128,6 +128,10 @@ jobs:
           # metadata-action publishes semver {{version}}, i.e. the tag without
           # the leading 'v' (tag v1.7.0 -> image tag 1.7.0).
           version="${tag#v}"
+          # GHCR image paths must be lowercase (github.repository preserves
+          # the owner's display case, e.g. FisiFla), so lowercase it for the
+          # image references below; the API calls keep GH_REPO as-is.
+          repo_lc="${GH_REPO,,}"
           notes_file="$(mktemp)"
           # --generate-notes cannot be combined with --notes, so generate the
           # notes first (the API diffs against the previous tag automatically),
@@ -140,10 +144,10 @@ jobs:
             echo ""
             echo "Published images for this release (each carries an SBOM + SLSA provenance attestation):"
             echo ""
-            echo "- \`ghcr.io/${GH_REPO}/backend:${version}\`"
-            echo "- \`ghcr.io/${GH_REPO}/frontend:${version}\`"
-            echo "- \`ghcr.io/${GH_REPO}/keycloak:${version}\`"
+            echo "- \`ghcr.io/${repo_lc}/backend:${version}\`"
+            echo "- \`ghcr.io/${repo_lc}/frontend:${version}\`"
+            echo "- \`ghcr.io/${repo_lc}/keycloak:${version}\`"
             echo ""
-            echo "Verify an image with \`gh attestation verify oci://ghcr.io/${GH_REPO}/backend:${version}\`."
+            echo "Verify an image with \`gh attestation verify oci://ghcr.io/${repo_lc}/backend:${version}\`."
           } >> "$notes_file"
           gh release create "$tag" --verify-tag --notes-file "$notes_file"
