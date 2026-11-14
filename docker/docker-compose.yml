@@ -10,11 +10,15 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres/init-keycloak-db.sql:/docker-entrypoint-initdb.d/init-keycloak-db.sql
+    # Grace period for first-boot initdb (slow-disk fsync ~29s observed in
+    # #315/#316): without it the retry budget can expire before postgres
+    # accepts connections, stranding the service_healthy dependents.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U freecloud"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 60s
 
   keycloak:
     # A2: custom Keycloak image with the posture-check SPI jar.

@@ -137,11 +137,53 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.keycloak.CreateAdminUser(ctx, body.AdminEmail, body.AdminPassword, body.AdminFirstName, body.AdminLastName)
+	userID, err := h.keycloak.CreateAdminUser(ctx, body.AdminEmail, body.AdminPassword, body.AdminFirstName, body.AdminLastName)
 	if err != nil {
 		h.logger.Error("setup: create admin user failed", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to create admin user")
 		return
+	}
+	if userID == "" {
+		// Defensive: without an ID there is nothing to persist (or roll
+		// back). Mirrors the missing-ID guard in onboarding.go.
+		h.logger.Error("setup: keycloak admin creation returned missing user ID")
+		respondError(w, http.StatusInternalServerError, "keycloak admin creation returned missing user ID")
+		return
+	}
+
+	// The first admin needs a matching `users` row to pass access-eval's
+	// local-user lookup — otherwise it can authenticate but every
+	// posture/access decision denies with "user not found or disabled".
+	// Same upsert semantics as the seeded e2e admin in main.go
+	// (ON CONFLICT (keycloak_user_id) DO NOTHING); org_id is passed
+	// explicitly even though Migration043 defaults it, matching
+	// onboarding.go's persistOnboard. Runs before the cosmetic org-name
+	// update below so a failed setup leaves no half-applied state behind.
+	if h.db != nil {
+		if _, err := h.db.Exec(ctx,
+			`INSERT INTO users (keycloak_user_id, email, first_name, last_name, role, org_id)
+			 VALUES ($1, $2, $3, $4, 'admin', $5)
+			 ON CONFLICT (keycloak_user_id) DO NOTHING`,
+			userID, body.AdminEmail, body.AdminFirstName, body.AdminLastName, middleware.DefaultOrgID,
+		); err != nil {
+			// Compensation (onboarding.go precedent): the Keycloak admin
+			// already exists at this point, so a bare 500 would brick
+			// provisioning — HasAdminUser reports provisioned and every
+			// retry gets 409 — while a best-effort 201 would leave a
+			// silently-broken admin. Delete the orphaned KC user so a
+			// retry provisions cleanly. Fresh context so cleanup still
+			// runs if the client disconnected.
+			h.logger.Error("setup: failed to persist admin users row; rolling back Keycloak admin",
+				zap.String("kc_user_id", userID), zap.Error(err))
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if delErr := h.keycloak.DeleteUser(cleanupCtx, userID); delErr != nil {
+				h.logger.Error("setup: failed to roll back orphaned Keycloak admin",
+					zap.String("kc_user_id", userID), zap.Error(delErr))
+			}
+			respondError(w, http.StatusInternalServerError, "failed to persist admin user")
+			return
+		}
 	}
 
 	// Persist the operator-supplied org name onto the seeded Default

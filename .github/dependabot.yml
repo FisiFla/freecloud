@@ -20,10 +20,26 @@ updates:
     directory: /frontend
     schedule:
       interval: weekly
-  # The Dockerfiles under docker/ (Keycloak SPI image, Postgres TLS image, the
-  # two mocks) and the compose files are not covered by the entries above.
+  # Dependabot's docker ecosystem only scans the given directory, so the
+  # /docker entry below covers docker/Dockerfile.keycloak (Keycloak SPI
+  # image) only; the Dockerfiles in docker/ subdirectories get their own
+  # entries after it. The compose files under docker/ are not covered by
+  # any entry — their pinned digests are refreshed manually (see "Pinned
+  # image digests" in docs/DEPLOYMENT.md).
   - package-ecosystem: docker
     directory: /docker
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /docker/fleetdm-mock
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /docker/postgres
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /docker/scim-mock-e2e
     schedule:
       interval: weekly
   # The Keycloak authenticator SPI is a Maven module.
