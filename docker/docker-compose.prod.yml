@@ -104,11 +104,16 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres/init-keycloak-db.sql:/docker-entrypoint-initdb.d/init-keycloak-db.sql:ro
+    # First boot runs initdb, whose fsync phase took ~29s on slow disks in the
+    # #315/#316 drill lanes. Without a grace period the retry budget expires
+    # before postgres accepts connections and every service_healthy dependent
+    # (keycloak, migrate, backend) aborts with "dependency failed to start".
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-freecloud}"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 60s
     depends_on:
       secrets-init:
         condition: service_completed_successfully

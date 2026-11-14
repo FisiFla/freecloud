@@ -3,12 +3,16 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/zap"
+
+	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 func TestSetupStatusUnprovisioned(t *testing.T) {
@@ -70,7 +74,18 @@ func TestSetupStatusProvisioned(t *testing.T) {
 func TestSetupCreatesFirstAdmin(t *testing.T) {
 	var gotFirst, gotLast string
 	called := false
-	h := NewHandler(&fakeDB{}, &fakeKeycloak{
+	type execCall struct {
+		sql  string
+		args []any
+	}
+	var execs []execCall
+	db := &fakeDB{
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			execs = append(execs, execCall{sql: sql, args: args})
+			return pgconn.CommandTag{}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{
 		hasAdminUserFn: func(_ context.Context) (bool, error) { return false, nil },
 		createAdminUserFn: func(_ context.Context, email, password, firstName, lastName string) (string, error) {
 			called = true
@@ -94,6 +109,112 @@ func TestSetupCreatesFirstAdmin(t *testing.T) {
 	}
 	if gotFirst != "Ada" || gotLast != "Lovelace" {
 		t.Fatalf("expected CreateAdminUser to receive first/last name (Ada, Lovelace), got (%q, %q)", gotFirst, gotLast)
+	}
+	// The first admin needs a local users row or access-eval step 1 denies
+	// every posture/access decision with "user not found or disabled".
+	var usersInsert *execCall
+	for i := range execs {
+		if strings.Contains(execs[i].sql, "INSERT INTO users") {
+			usersInsert = &execs[i]
+			break
+		}
+	}
+	if usersInsert == nil {
+		t.Fatalf("expected an INSERT INTO users exec, got %d execs", len(execs))
+	}
+	// VALUES ($1,$2,$3,$4,'admin',$5): keycloak_user_id, email, first, last, org_id.
+	if len(usersInsert.args) != 5 {
+		t.Fatalf("expected 5 args to users INSERT, got %d (%v)", len(usersInsert.args), usersInsert.args)
+	}
+	if usersInsert.args[0] != "new-admin-id" {
+		t.Errorf("arg keycloak_user_id = %v, want new-admin-id", usersInsert.args[0])
+	}
+	if usersInsert.args[1] != "admin@example.com" {
+		t.Errorf("arg email = %v, want admin@example.com", usersInsert.args[1])
+	}
+	if usersInsert.args[2] != "Ada" || usersInsert.args[3] != "Lovelace" {
+		t.Errorf("arg first/last name = %v/%v, want Ada/Lovelace", usersInsert.args[2], usersInsert.args[3])
+	}
+	if usersInsert.args[4] != middleware.DefaultOrgID {
+		t.Errorf("arg org_id = %v, want %s", usersInsert.args[4], middleware.DefaultOrgID)
+	}
+	if !strings.Contains(usersInsert.sql, "'admin'") {
+		t.Errorf("users INSERT must set role 'admin', got SQL: %s", usersInsert.sql)
+	}
+}
+
+func TestSetupUsersInsertFailureRollsBackKeycloakUser(t *testing.T) {
+	// If the local users INSERT fails, Setup must delete the just-created
+	// Keycloak admin and return 500 (onboarding.go compensation precedent):
+	// a bare 500 would brick provisioning (retry sees HasAdminUser → 409),
+	// and a best-effort 201 would leave a silently-broken admin.
+	const kcID = "22222222-2222-2222-2222-222222222222"
+	db := &fakeDB{
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			if strings.Contains(sql, "INSERT INTO users") {
+				return pgconn.CommandTag{}, errors.New("db down")
+			}
+			return pgconn.CommandTag{}, nil
+		},
+	}
+	var deleted []string
+	kc := &fakeKeycloak{
+		hasAdminUserFn: func(_ context.Context) (bool, error) { return false, nil },
+		createAdminUserFn: func(_ context.Context, email, password, firstName, lastName string) (string, error) {
+			return kcID, nil
+		},
+		deleteUserFn: func(_ context.Context, userID string) error {
+			deleted = append(deleted, userID)
+			return nil
+		},
+	}
+	h := NewHandler(db, kc, &fakeFleet{}, zap.NewNop())
+	r := newTestRouter(h)
+
+	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp","adminFirstName":"Ada","adminLastName":"Lovelace"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	if len(deleted) != 1 || deleted[0] != kcID {
+		t.Fatalf("expected the orphaned Keycloak admin %s to be rolled back, got %v", kcID, deleted)
+	}
+}
+
+func TestSetupRejectsEmptyKeycloakUserID(t *testing.T) {
+	// Defensive guard mirroring onboarding.go: a Keycloak create that reports
+	// success without a user ID must fail loudly before any DB write, since
+	// there is no ID to persist (or roll back).
+	execs := 0
+	db := &fakeDB{
+		execFn: func(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+			execs++
+			return pgconn.CommandTag{}, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{
+		hasAdminUserFn: func(_ context.Context) (bool, error) { return false, nil },
+		createAdminUserFn: func(_ context.Context, email, password, firstName, lastName string) (string, error) {
+			return "", nil
+		},
+	}, &fakeFleet{}, zap.NewNop())
+	r := newTestRouter(h)
+
+	body := `{"adminEmail":"admin@example.com","adminPassword":"securepass12","orgName":"Acme Corp","adminFirstName":"Ada","adminLastName":"Lovelace"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d (body: %s)", rec.Code, rec.Body.String())
+	}
+	if execs != 0 {
+		t.Fatalf("expected no DB writes without a Keycloak user ID, got %d execs", execs)
 	}
 }
 
