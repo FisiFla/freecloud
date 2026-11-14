@@ -25,7 +25,7 @@ cp .env.prod.example .env.prod
 | `DASHBOARD_PUBLIC_URL` / `KC_PUBLIC_URL` | The `https://` URLs for the dashboard and Keycloak (no API URL: the browser uses the same-origin BFF) |
 | `FLEET_URL` | Real FleetDM API endpoint |
 | `FLEET_API_TOKEN` (in `.secrets/secrets.env`, **not** `.env.prod`) | Token from the FleetDM instance. Hand-added key: the generator mirrors it to `.secrets/files/fleet_api_token` and the backend reads it via `FLEET_API_TOKEN_FILE`. Required — the backend refuses to start without it. |
-| `POSTURE_CHECK_ENABLED` | Device-posture enforcement at login. **Defaults to `true`** in the production stack — a stack that forgets the variable must not silently run without posture checks. Set it to `false` only deliberately. |
+| `POSTURE_CHECK_ENABLED` | Device-posture enforcement at login. **Defaults to `true`** in the production stack — a stack that forgets the variable must not silently run without posture checks. Set it to `false` only deliberately. Bootstrap window: while zero device mappings exist system-wide, an admin-role user with no enrolled device can still log in (app policy conditions still bind); the window closes at the first enrollment, so the first admin should enroll their own device promptly. |
 
 ### Auto-generated secrets (do not set manually)
 

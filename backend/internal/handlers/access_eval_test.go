@@ -144,10 +144,23 @@ func TestAccessEvalNoDevices(t *testing.T) {
 			if isCanonicalQuery(sql) {
 				return fakeCanonicalRow(args)
 			}
-			// user exists
+			// Bootstrap window probe: a mapping exists system-wide, so the
+			// window is closed for this non-admin user.
+			if strings.Contains(sql, "NOT EXISTS") {
+				return fakeRow{scanFn: func(dest ...any) error {
+					*(dest[0].(*bool)) = false
+					return nil
+				}}
+			}
+			// user exists (non-admin employee)
 			return fakeRow{scanFn: func(dest ...any) error {
 				if s, ok := dest[0].(*string); ok {
 					*s = userID
+				}
+				if len(dest) > 1 {
+					if r, ok := dest[1].(*string); ok {
+						*r = "employee"
+					}
 				}
 				return nil
 			}}
@@ -601,5 +614,230 @@ func TestAccessEvalDenyDiskEncryption(t *testing.T) {
 	}
 	if len(resp.Reasons) == 0 {
 		t.Error("expected deny reason for disk encryption failure")
+	}
+}
+
+// ---- Bootstrap window tests ----
+//
+// While ZERO device mappings exist system-wide, an admin-role user with no
+// enrolled device is allowed (first-admin bootstrap). The window closes
+// permanently once the first device mapping exists. Steady state stays
+// fail-closed for everyone.
+
+// bootstrapWindowDB builds a fakeDB for window tests: the user exists with
+// the given role, the user has no enrolled devices, and the system-wide
+// mapping probe answers mappingsExist (or windowErr on failure).
+func bootstrapWindowDB(userID, role string, mappingsExist bool, windowErr error) *fakeDB {
+	return &fakeDB{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			if isCanonicalQuery(sql) {
+				return fakeCanonicalRow(args)
+			}
+			// System-wide mapping probe. Checked before the per-user
+			// mapping branch: both queries mention users_devices_mapping.
+			if strings.Contains(sql, "NOT EXISTS") {
+				return fakeRow{scanFn: func(dest ...any) error {
+					if windowErr != nil {
+						return windowErr
+					}
+					*(dest[0].(*bool)) = !mappingsExist
+					return nil
+				}}
+			}
+			if strings.Contains(sql, "FROM users_devices_mapping") {
+				return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+			}
+			// User lookup: id + role. The len(dest) guard keeps the fake
+			// working against both the 1-column and 2-column SELECT.
+			return fakeRow{scanFn: func(dest ...any) error {
+				if s, ok := dest[0].(*string); ok {
+					*s = userID
+				}
+				if len(dest) > 1 {
+					if r, ok := dest[1].(*string); ok {
+						*r = role
+					}
+				}
+				return nil
+			}}
+		},
+		queryFn: func(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+			// The user has no enrolled devices.
+			return &fakeQueryRows{}, nil
+		},
+	}
+}
+
+func TestAccessEvalBootstrapWindowAdminNoDevicesAllows(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	db := bootstrapWindowDB(userID, "admin", false, nil)
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			t.Fatalf("Fleet must not be called: no devices exist to posture-check")
+			return nil, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if !resp.Allow {
+		t.Fatalf("expected allow=true for admin with zero system mappings, got reasons: %v", resp.Reasons)
+	}
+	if len(resp.Reasons) != 0 {
+		t.Errorf("window allow must keep response reasons empty like the normal allow path, got: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalBootstrapWindowClosedAfterFirstEnrollment(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	// Another user's mapping exists: the window is closed even for admins.
+	db := bootstrapWindowDB(userID, "admin", true, nil)
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false once a device mapping exists system-wide")
+	}
+	if len(resp.Reasons) != 1 || resp.Reasons[0] != "no enrolled device found for user" {
+		t.Errorf("expected unchanged no-device deny reason, got: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalBootstrapWindowNonAdminDenied(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	db := bootstrapWindowDB(userID, "employee", false, nil)
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false: the window is admins-only")
+	}
+	if len(resp.Reasons) != 1 || resp.Reasons[0] != "no enrolled device found for user" {
+		t.Errorf("expected unchanged no-device deny reason, got: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalBootstrapWindowCheckErrorDenies(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	db := bootstrapWindowDB(userID, "admin", false, errors.New("mapping probe unavailable"))
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false when the window probe fails (fail closed)")
+	}
+	if len(resp.Reasons) != 1 || resp.Reasons[0] != "no enrolled device found for user" {
+		t.Errorf("expected unchanged no-device deny reason, got: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalBootstrapWindowExplicitDeviceStillDenied(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	// Even an admin inside an open window is denied when they present an
+	// explicit device id that is not mapped to them (anti-spoof path).
+	db := bootstrapWindowDB(userID, "admin", false, nil)
+	fl := &fakeFleet{
+		getHostSecurityStateFn: func(ctx context.Context, hostID string) (*fleet.SecurityState, error) {
+			t.Fatalf("Fleet must not be called for an unmapped explicit device ID")
+			return nil, nil
+		},
+	}
+	h := NewHandler(db, &fakeKeycloak{}, fl, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, DeviceID: "dev-spoofed"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false for unmapped explicit device inside the window")
+	}
+	if len(resp.Reasons) != 1 || resp.Reasons[0] != "device is not enrolled for user" {
+		t.Fatalf("unexpected reasons: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalBootstrapWindowAppConditionsStillBind(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const appID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	// The window waives ONLY the device requirement: a connected-app policy
+	// with network restrictions still binds during the window.
+	db := bootstrapWindowDB(userID, "admin", false, nil)
+	inner := db.queryRowFn
+	db.queryRowFn = func(ctx context.Context, sql string, args ...any) pgx.Row {
+		if strings.Contains(sql, "FROM app_access_policies") {
+			return fakeRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*bool)) = false
+				*(dest[1].(*bool)) = false
+				*(dest[2].(*bool)) = false
+				*(dest[3].(**int)) = nil
+				*(dest[4].(**string)) = nil
+				*(dest[5].(**string)) = nil
+				*(dest[6].(*[]string)) = []string{"10.99.0.0/16"}
+				*(dest[7].(*[]string)) = nil
+				return nil
+			}}
+		}
+		return inner(ctx, sql, args...)
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, AppID: appID, ClientIP: "192.0.2.1"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if resp.Allow {
+		t.Error("expected allow=false: app network conditions still bind inside the window")
+	}
+	found := false
+	for _, r := range resp.Reasons {
+		if strings.Contains(r, "network allowlist") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected network-allowlist deny reason, got: %v", resp.Reasons)
+	}
+}
+
+func TestAccessEvalBootstrapWindowNoPolicyRowAllows(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const appID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	// No policy row means no requirements: an admin dashboard login with no
+	// app conditions is allowed inside the window.
+	db := bootstrapWindowDB(userID, "admin", false, nil)
+	inner := db.queryRowFn
+	db.queryRowFn = func(ctx context.Context, sql string, args ...any) pgx.Row {
+		if strings.Contains(sql, "FROM app_access_policies") {
+			return fakeRow{scanFn: func(dest ...any) error { return pgx.ErrNoRows }}
+		}
+		return inner(ctx, sql, args...)
+	}
+	h := NewHandler(db, &fakeKeycloak{}, &fakeFleet{}, zap.NewNop())
+	body, _ := json.Marshal(AccessEvalRequest{UserID: userID, AppID: appID})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/evaluate", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.EvaluateAccess(rec, req)
+
+	resp := evalResponse(t, rec)
+	if !resp.Allow {
+		t.Fatalf("expected allow=true for admin with no-policy app inside the window, got: %v", resp.Reasons)
 	}
 }
