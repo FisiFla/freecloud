@@ -84,8 +84,12 @@ reports within a few days.
   it on the chain head and on every row after the first keyed one, so a
   party with database write access cannot rewrite or re-chain entries
   without the server-side key. Rows written before keying are covered
-  by the plain hash chain only, and deleting rows from the tail of the
-  log is not detected.
+  by the plain hash chain only. Deleting rows from the tail of the log
+  cannot be detected from the database alone; the external anchor is the
+  SIEM stream (`SIEM_SYSLOG_ADDR` / `SIEM_HTTP_URL`), which ships every
+  row's `seq` and `row_hash` off-host, so a sink entry the database no
+  longer has proves the deletion. Configure a sink if that matters to
+  you.
 - **First-admin bootstrap.** The setup endpoint requires the generated
   `SETUP_TOKEN` in production and refuses once any admin exists (local
   database or Keycloak); errors while checking fail closed. With posture

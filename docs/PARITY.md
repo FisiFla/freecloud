@@ -150,4 +150,4 @@ and live GeoIP (operator-supplied GeoLite2 via `GEOIP_MMDB_PATH`, fail-closed).
 
 ## Versioning
 
-This matrix reflects **FreeCloud v1.7.0 (2026-07-02)**.
+This matrix reflects **FreeCloud v1.8.0 (2026-11-15)**.

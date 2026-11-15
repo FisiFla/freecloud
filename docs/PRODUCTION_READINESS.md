@@ -75,7 +75,7 @@ Lane split (non-overlapping files, parallel PRs):
 | 11 | Compose/Caddy hardening: healthchecks + `service_healthy` edges, log rotation, mem/cpu limits, Grafana bound to 127.0.0.1, Keycloak `/admin/*` + `/realms/master/*` blocked at Caddy by default | KC admin console is internet-reachable via the KC vhost today; sequenced after `/api/health` (Wave 1 frontend) |
 | 12 | Browser-level sign-in e2e on the localhost stack | The #286 bug class (real browser redirect loop) still has no automated browser test |
 | 13 | Release hygiene: SBOM/provenance attestations, per-tag GitHub Release with notes, Dependabot docker subdirs, nightly backup-verify + prev-tag upgrade + KC rehearsal jobs | Remainder landed in cycle 26: SBOM/provenance (#303), per-tag notes + Dependabot docker subdirs (#305), nightly backup-verify + KC rehearsal jobs (#315). Prev-tag upgrade/rollback drill still deferred: needs a second post-cycle-25 tag, since #303 changed the secret-delivery shape and flipping `FREECLOUD_VERSION` to 1.7.0 on current compose is not a valid rollback |
-| 14 | `_FILE` delivery for `FLEET_API_TOKEN` and the PG password inside `DATABASE_URL` | Last plaintext secrets visible in `docker inspect` on the prod backend |
+| 14 | `_FILE` delivery for `FLEET_API_TOKEN` and the PG password inside `DATABASE_URL` | Done: prod compose passes both through Docker secrets (`FLEET_API_TOKEN_FILE`, `DATABASE_PASSWORD_FILE`), nothing secret left in `docker inspect` on the prod backend |
 
 ## Operator-gated (cannot be closed from the dev box)
 
@@ -119,11 +119,12 @@ Status at cycle-25 close (`main @ff7df77`, 2026-11-10/11):
 - [x] Wave 1 merged, `main` Verify + E2E green.
 - [x] Wave 2 merged; prod-smoke job green (runs on every PR; marking it a
       *required* check is a GitHub settings step, operator-gated below).
-      Exceptions, deliberately deferred: placeholder-secret rejection in
-      prod `Validate` (#8 second half), SBOM/attestations + nightly jobs
-      (#13 remainder — the release verify-gate shipped), prod-compose
-      `_FILE` wiring + PG password out of `DATABASE_URL` (#14; the
-      `secrets.get` resolver already honours `_FILE` uniformly).
+      The exceptions deferred at the time have since landed:
+      placeholder-secret rejection in prod `Validate` (#8 second half),
+      SBOM/attestations + nightly jobs (#13 remainder), and prod-compose
+      `_FILE` delivery for `FLEET_API_TOKEN` and the Postgres password
+      (#14: `DATABASE_URL` carries no password, `DATABASE_PASSWORD_FILE`
+      injects it).
 - [x] Local simulator re-proven at the new `main`: fresh-stack setup
       requires the token (prod-smoke asserts 403→201 on every PR; dev
       stacks are token-inert by design), browser sign-in works (CI fresh

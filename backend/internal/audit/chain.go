@@ -9,7 +9,10 @@
 // cannot be recomputed without the server-side secret. VerifyChain then
 // requires the MAC on the chain head and on every row after the first keyed
 // one, so stripping MACs is detected too. Rows written before keying stay
-// covered by the hash chain only. Not covered: deleting rows from the tail.
+// covered by the hash chain only. Not covered from the database alone:
+// deleting rows from the tail (any earlier keyed row is a valid head). The
+// external anchor for that is the SIEM stream, which ships every row's seq
+// and row_hash off-host (internal/siem).
 package audit
 
 import (
