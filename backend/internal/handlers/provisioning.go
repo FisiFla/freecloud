@@ -873,6 +873,10 @@ func resolvedProvisioningMasterKeyPrevious() string {
 	return os.Getenv("PROVISIONING_MASTER_KEY_PREVIOUS")
 }
 
+// ProvisioningMasterKeyPrevious exposes the retired key (nil when no rotation
+// is in progress) so main can derive verification-only keys from it.
+func ProvisioningMasterKeyPrevious() ([]byte, error) { return provisioningMasterKeyPrevious() }
+
 // provisioningMasterKeyPrevious returns the previous key, or nil when no
 // rotation is in progress. It is only ever used for decryption.
 func provisioningMasterKeyPrevious() ([]byte, error) {

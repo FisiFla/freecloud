@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net/http"
 	"os"
@@ -411,6 +412,20 @@ func runServer() {
 	// PROVISIONING_MASTER_KEY_FILE passed startup validation against the file
 	// and then encrypted with a different (or missing) key (issue #127).
 	handlers.SetProvisioningMasterKey(cfg.ProvisioningMasterKey)
+
+	// Keyed audit chain: new audit rows carry an HMAC derived from the
+	// provisioning master key, so a database writer cannot forge the chain.
+	// Without a master key (development) the chain stays hash-only.
+	if master, err := base64.StdEncoding.DecodeString(cfg.ProvisioningMasterKey); err == nil && len(master) == 32 {
+		prev, prevErr := handlers.ProvisioningMasterKeyPrevious()
+		if prevErr != nil {
+			logger.Fatal("invalid PROVISIONING_MASTER_KEY_PREVIOUS", zap.Error(prevErr))
+		}
+		audit.SetChainKey(audit.DeriveChainKey(master), audit.DeriveChainKey(prev))
+		if err := audit.EnsureKeyedHead(lifecycleCtx, pool); err != nil {
+			logger.Fatal("failed to key the audit chain head", zap.Error(err))
+		}
+	}
 
 	// E3 — Recurring access-review schedule runner (leader-gated).
 	handler.StartReviewScheduleRunner(lifecycleCtx, 1*time.Minute, reviewScheduleLeader.IsLeader)

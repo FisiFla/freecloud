@@ -2,21 +2,25 @@
 // Each row's SHA-256 hash covers its canonical content plus the previous row's
 // hash, forming an append-only chain anchored at seq order.
 //
-// Threat-model limitation: the chain is UNKEYED (plain SHA-256 over public
-// inputs), so it detects corruption and tampering by anyone without database
-// write access — but someone WITH write access to the audit_logs table can
-// modify a row and recompute every later hash. A keyed chain (HMAC with a
-// server-side secret) would close that gap; it needs a migration plus secret
-// plumbing and is tracked as a follow-up.
+// The SHA-256 chain alone is unkeyed: someone with write access to audit_logs
+// could modify a row and recompute every later hash. When a chain key is set
+// (SetChainKey — production derives it from the provisioning master key),
+// every new row also stores row_mac = HMAC-SHA256(key, row_hash), which
+// cannot be recomputed without the server-side secret. VerifyChain then
+// requires the MAC on the chain head and on every row after the first keyed
+// one, so stripping MACs is detected too. Rows written before keying stay
+// covered by the hash chain only. Not covered: deleting rows from the tail.
 package audit
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -29,6 +33,64 @@ type DBPool interface {
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+type chainKeys struct{ current, previous []byte }
+
+var chainKey atomic.Pointer[chainKeys]
+
+// SetChainKey enables the keyed chain. current signs new rows; previous
+// (optional) is accepted on verification only, for rows signed before a key
+// rotation. A nil/empty current disables keying.
+func SetChainKey(current, previous []byte) {
+	if len(current) == 0 {
+		chainKey.Store(nil)
+		return
+	}
+	chainKey.Store(&chainKeys{current: current, previous: previous})
+}
+
+// DeriveChainKey derives the audit chain key from a master secret, so no
+// separate secret has to be provisioned. Returns nil for an empty master.
+func DeriveChainKey(master []byte) []byte {
+	if len(master) == 0 {
+		return nil
+	}
+	m := hmac.New(sha256.New, master)
+	m.Write([]byte("freecloud-audit-chain-v1"))
+	return m.Sum(nil)
+}
+
+func macHex(key []byte, rowHash string) string {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(rowHash))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+func (k *chainKeys) valid(rowHash, mac string) bool {
+	if hmac.Equal([]byte(mac), []byte(macHex(k.current, rowHash))) {
+		return true
+	}
+	return len(k.previous) > 0 && hmac.Equal([]byte(mac), []byte(macHex(k.previous, rowHash)))
+}
+
+// EnsureKeyedHead appends a marker entry when a chain key is set and the
+// current head row carries no MAC (first start after keying was introduced),
+// so that "the head is keyed" holds from then on and VerifyChain can treat
+// an unkeyed head as tampering.
+func EnsureKeyedHead(ctx context.Context, db DBPool) error {
+	if chainKey.Load() == nil {
+		return nil
+	}
+	var mac *string
+	err := db.QueryRow(ctx, `SELECT row_mac FROM audit_logs ORDER BY seq DESC LIMIT 1`).Scan(&mac)
+	if err == pgx.ErrNoRows || (err == nil && mac != nil && *mac != "") {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return WriteEntry(ctx, db, DefaultOrgID, "system", "audit.chain_keyed", "audit_chain", "", nil)
 }
 
 const auditChainLockID int64 = 0x4652434c4f5544 // "FRCLOUD" within signed int64 range.
@@ -105,11 +167,19 @@ func WriteEntry(ctx context.Context, db DBPool, orgID, actorID, action, targetTy
 
 	rowHash := computeHash(actorID, action, targetType, targetID, detailsText, prevHash)
 
-	_, err = tx.Exec(ctx,
-		`INSERT INTO audit_logs (org_id, actor_id, action, target_type, target_id, details, row_hash, prev_hash)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		orgID, actorID, action, targetType, targetID, detailsBytes, rowHash, prevHash,
-	)
+	if k := chainKey.Load(); k != nil {
+		_, err = tx.Exec(ctx,
+			`INSERT INTO audit_logs (org_id, actor_id, action, target_type, target_id, details, row_hash, prev_hash, row_mac)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+			orgID, actorID, action, targetType, targetID, detailsBytes, rowHash, prevHash, macHex(k.current, rowHash),
+		)
+	} else {
+		_, err = tx.Exec(ctx,
+			`INSERT INTO audit_logs (org_id, actor_id, action, target_type, target_id, details, row_hash, prev_hash)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			orgID, actorID, action, targetType, targetID, detailsBytes, rowHash, prevHash,
+		)
+	}
 	if err != nil {
 		return err
 	}
@@ -174,6 +244,9 @@ type VerifyResult struct {
 	FirstBreakSeq int64 `json:"firstBreakSeq,omitempty"`
 	// Error holds a human-readable description of the first break.
 	Error string `json:"error,omitempty"`
+	// KeyedRows is the number of rows whose HMAC was verified (0 when no
+	// chain key is configured).
+	KeyedRows int `json:"keyedRows"`
 }
 
 // VerifyChain walks all rows in seq order and returns the result of the
@@ -183,13 +256,18 @@ func VerifyChain(ctx context.Context, db DBPool) (VerifyResult, error) {
 	if err != nil {
 		return VerifyResult{}, err
 	}
+	keys := chainKey.Load()
+	macCol := "''"
+	if keys != nil {
+		macCol = "COALESCE(row_mac, '')"
+	}
 
 	rows, err := db.Query(ctx,
 		`SELECT seq, id, actor_id, action,
 		        COALESCE(target_type, ''), COALESCE(target_id, ''),
 		        COALESCE(details::text, '{}'),
 		        COALESCE(row_hash, ''), COALESCE(prev_hash, ''),
-		        created_at
+		        created_at, `+macCol+`
 		 FROM audit_logs
 		 ORDER BY seq ASC`,
 	)
@@ -200,13 +278,16 @@ func VerifyChain(ctx context.Context, db DBPool) (VerifyResult, error) {
 
 	var result VerifyResult
 	prevHash := ""
+	var lastSeq int64
+	lastMac := ""
 
 	for rows.Next() {
 		var e ChainEntry
+		var mac string
 		if err := rows.Scan(
 			&e.Seq, &e.ID, &e.ActorID, &e.Action,
 			&e.TargetType, &e.TargetID, &e.Details,
-			&e.RowHash, &e.PrevHash, &e.CreatedAt,
+			&e.RowHash, &e.PrevHash, &e.CreatedAt, &mac,
 		); err != nil {
 			return result, fmt.Errorf("scan row: %w", err)
 		}
@@ -240,10 +321,31 @@ func VerifyChain(ctx context.Context, db DBPool) (VerifyResult, error) {
 			return result, nil
 		}
 
+		if keys != nil {
+			switch {
+			case mac != "" && !keys.valid(e.RowHash, mac):
+				result.FirstBreakSeq = e.Seq
+				result.Error = fmt.Sprintf("seq %d: row_mac mismatch", e.Seq)
+				return result, nil
+			case mac == "" && result.KeyedRows > 0:
+				result.FirstBreakSeq = e.Seq
+				result.Error = fmt.Sprintf("seq %d: missing row_mac after keyed rows", e.Seq)
+				return result, nil
+			case mac != "":
+				result.KeyedRows++
+			}
+		}
+		lastSeq, lastMac = e.Seq, mac
+
 		prevHash = e.RowHash
 	}
 	if err := rows.Err(); err != nil {
 		return result, err
+	}
+	if keys != nil && result.RowsChecked > 0 && lastMac == "" {
+		result.FirstBreakSeq = lastSeq
+		result.Error = fmt.Sprintf("seq %d: chain head carries no row_mac although a chain key is configured", lastSeq)
+		return result, nil
 	}
 
 	result.OK = true

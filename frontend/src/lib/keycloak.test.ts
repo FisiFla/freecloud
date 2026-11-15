@@ -190,12 +190,41 @@ describe("refreshAccessToken request coalescing", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("refreshes again after the previous refresh settles", async () => {
-    const fetchSpy = vi.fn().mockResolvedValue(tokenResponse());
+  it("answers a spent refresh token from the first exchange during the grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchSpy = vi.fn().mockResolvedValue(tokenResponse());
+      global.fetch = fetchSpy as unknown as typeof fetch;
+
+      const first = await refreshAccessToken({ refreshToken: "spent-rt" });
+      // A request that still carries the spent token must not present it to
+      // Keycloak again (strict rotation would revoke the session).
+      const late = await refreshAccessToken({ refreshToken: "spent-rt" });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(late.accessToken).toBe(first.accessToken);
+      expect(late.refreshToken).toBe("fresh-rt");
+
+      // After the grace period the entry is gone.
+      vi.advanceTimersByTime(31_000);
+      await refreshAccessToken({ refreshToken: "spent-rt" });
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes again when Keycloak did not rotate the refresh token", async () => {
+    const fetchSpy = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ access_token: "fresh-at", expires_in: 300 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
     global.fetch = fetchSpy as unknown as typeof fetch;
 
-    await refreshAccessToken({ refreshToken: "rt" });
-    await refreshAccessToken({ refreshToken: "rt" });
+    await refreshAccessToken({ refreshToken: "static-rt" });
+    await refreshAccessToken({ refreshToken: "static-rt" });
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });

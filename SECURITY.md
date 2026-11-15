@@ -79,14 +79,22 @@ reports within a few days.
 - **Auditability.** Privileged actions (onboard, offboard, app create/assign,
   device enroll) are written to an append-only `audit_logs` table; onboarding
   binds the audit write into the same transaction as the user row. The
-  audit hash chain is UNKEYED (plain SHA-256 over the previous hash plus
-  the entry): it detects tampering only by parties WITHOUT database
-  write access — anyone who can rewrite the table can recompute the
-  chain.
-- **First-admin bootstrap window is global.** The setup endpoint stays
-  open until the first device enrollment in ANY org (the
-  `users_devices_mapping` table is probed system-wide), not per-org:
-  run first-run setup promptly on a fresh deployment.
+  audit hash chain is keyed in production: each new row also stores an
+  HMAC derived from `PROVISIONING_MASTER_KEY`, and verification requires
+  it on the chain head and on every row after the first keyed one, so a
+  party with database write access cannot rewrite or re-chain entries
+  without the server-side key. Rows written before keying are covered
+  by the plain hash chain only, and deleting rows from the tail of the
+  log is not detected.
+- **First-admin bootstrap.** The setup endpoint requires the generated
+  `SETUP_TOKEN` in production and refuses once any admin exists (local
+  database or Keycloak); errors while checking fail closed. With posture
+  enforcement on, an admin-role user with no enrolled device may sign in
+  only until the first device enrolls anywhere in the deployment (app
+  policy conditions still apply, and each such sign-in is audited). The
+  window does not reopen: a consumed enrollment token keeps it closed
+  even if device mappings are removed later. Enroll the first admin's
+  device promptly.
 - **Encrypted, verified backups.** `scripts/backup-bundle.sh` refuses to
   write an unencrypted bundle unless `--allow-plaintext` is passed
   explicitly; with `BACKUP_PASSPHRASE` set the bundle is encrypted

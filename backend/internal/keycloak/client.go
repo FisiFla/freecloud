@@ -704,9 +704,9 @@ var validNameIDFormats = map[string]bool{
 // buildSAMLAttributes returns the Keycloak client attribute map for a SAML client.
 // This is extracted as a pure function so it can be unit-tested without HTTP.
 //
-// RSA_SHA1 is rejected with a validation error (SHA-1 signatures are not
-// accepted); any other unknown value keeps the historical behaviour of
-// falling back to the safe default.
+// An empty option selects the default; any value outside the supported sets
+// (including RSA_SHA1 — SHA-1 signatures are not accepted) is a validation
+// error, never silently remapped.
 func buildSAMLAttributes(name, acsURL, entityID string, opts *SAMLOptions) (map[string]string, error) {
 	signingAlgo := "RSA_SHA256"
 	encryptAssertions := "false"
@@ -716,13 +716,19 @@ func buildSAMLAttributes(name, acsURL, entityID string, opts *SAMLOptions) (map[
 		if strings.EqualFold(opts.SigningAlgorithm, "RSA_SHA1") {
 			return nil, fmt.Errorf("unsupported SAML signing algorithm %q: SHA-1 signatures are not accepted (use RSA_SHA256 or RSA_SHA512)", opts.SigningAlgorithm)
 		}
-		if validSigningAlgorithms[opts.SigningAlgorithm] {
+		if opts.SigningAlgorithm != "" {
+			if !validSigningAlgorithms[opts.SigningAlgorithm] {
+				return nil, fmt.Errorf("unsupported SAML signing algorithm %q (use RSA_SHA256 or RSA_SHA512)", opts.SigningAlgorithm)
+			}
 			signingAlgo = opts.SigningAlgorithm
 		}
 		if opts.EncryptAssertions {
 			encryptAssertions = "true"
 		}
-		if validNameIDFormats[opts.NameIDFormat] {
+		if opts.NameIDFormat != "" {
+			if !validNameIDFormats[opts.NameIDFormat] {
+				return nil, fmt.Errorf("unsupported SAML NameID format %q (use persistent, transient, email or unspecified)", opts.NameIDFormat)
+			}
 			nameIDFormat = opts.NameIDFormat
 		}
 	}

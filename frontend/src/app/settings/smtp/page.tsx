@@ -81,6 +81,12 @@ export default function SMTPConfigPage() {
     }
   };
 
+  // The server refuses to let a stored password follow the relay to another
+  // host, so ask for it up front instead of failing the save.
+  const passwordRequired =
+    Boolean(config?.passwordConfigured) &&
+    host.trim().toLowerCase() !== (config?.host ?? "").trim().toLowerCase();
+
   const handleSendTest = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -177,18 +183,24 @@ export default function SMTPConfigPage() {
                   <label htmlFor="smtp-password" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                     Password
                   </label>
-                  {config?.passwordConfigured && password === "" && (
+                  {config?.passwordConfigured && password === "" && !passwordRequired && (
                     <p className="mt-0.5 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
                       <CheckCircle className="h-3.5 w-3.5" />
                       Password: configured
                     </p>
                   )}
+                  {passwordRequired && (
+                    <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                      The host changed. Enter the password for the new server; the stored one is not sent to a different host.
+                    </p>
+                  )}
                   <input
                     id="smtp-password"
                     type="password"
+                    required={passwordRequired}
                     value={password}
                     onChange={(e) => { setPassword(e.target.value); setSaveSuccess(false); }}
-                    placeholder="Leave blank to keep current password"
+                    placeholder={passwordRequired ? "Password for the new host" : "Leave blank to keep current password"}
                     className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                   />
                 </div>

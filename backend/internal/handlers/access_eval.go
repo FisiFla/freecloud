@@ -313,7 +313,11 @@ func (h *Handler) EvaluateAccess(w http.ResponseWriter, r *http.Request) {
 		if req.DeviceID == "" && userRole == "admin" {
 			var noMappings bool
 			if err := h.db.QueryRow(ctx,
-				`SELECT NOT EXISTS (SELECT 1 FROM users_devices_mapping)`,
+				// A consumed enrollment token is the durable record that a
+				// device has enrolled, so the window stays closed even if
+				// every mapping row is later removed.
+				`SELECT NOT EXISTS (SELECT 1 FROM users_devices_mapping)
+				    AND NOT EXISTS (SELECT 1 FROM enrollment_tokens WHERE used_at IS NOT NULL)`,
 			).Scan(&noMappings); err != nil {
 				h.logger.Error("access eval: bootstrap window probe failed",
 					zap.String("user_id", req.UserID),

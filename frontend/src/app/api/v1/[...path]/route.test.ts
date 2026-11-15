@@ -7,8 +7,11 @@ import { NextRequest } from "next/server";
 // request from lib/api.ts hits this same-origin Route Handler, which
 // resolves the token SERVER-SIDE via next-auth/jwt's getToken() (mocked
 // below) and attaches it itself — the browser never holds it.
-const { getTokenMock } = vi.hoisted(() => ({ getTokenMock: vi.fn() }));
-vi.mock("next-auth/jwt", () => ({ getToken: getTokenMock }));
+const { getTokenMock, encodeMock } = vi.hoisted(() => ({
+  getTokenMock: vi.fn(),
+  encodeMock: vi.fn(),
+}));
+vi.mock("next-auth/jwt", () => ({ getToken: getTokenMock, encode: encodeMock }));
 
 import { GET, POST, readBoundedBody } from "./route";
 
@@ -544,6 +547,70 @@ describe("BFF proxy route (app/api/v1/[...path])", () => {
 
     expect(res.status).toBe(200);
     expect(backendCalls).toEqual(["http://localhost:8080/api/v1/users"]);
+  });
+
+  it("writes the rotated refresh token back to the session cookie", async () => {
+    process.env.AUTH_SECRET = "test-secret";
+    encodeMock.mockReset();
+    encodeMock.mockResolvedValue("encoded-session");
+    getTokenMock.mockResolvedValue({
+      sub: "user-1",
+      accessToken: "stale-access-token",
+      refreshToken: "spent-refresh-token",
+      expiresAt: Math.floor(Date.now() / 1000) - 60,
+      error: "RefreshAccessTokenError",
+    });
+    global.fetch = vi.fn(async (url: string) => {
+      if (String(url).includes("/protocol/openid-connect/token")) {
+        return new Response(
+          JSON.stringify({
+            access_token: "fresh-access-token",
+            refresh_token: "rotated-refresh-token",
+            expires_in: 300,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const req = makeRequest("http://localhost/api/v1/users");
+      const res = await GET(req, { params: Promise.resolve({ path: ["users"] }) });
+
+      expect(res.status).toBe(200);
+      expect(encodeMock).toHaveBeenCalledTimes(1);
+      const persisted = encodeMock.mock.calls[0][0].token;
+      expect(persisted.refreshToken).toBe("rotated-refresh-token");
+      expect(persisted.accessToken).toBe("fresh-access-token");
+      expect(persisted.sub).toBe("user-1");
+      expect(persisted.error).toBeUndefined();
+      const cookie = res.cookies.get("authjs.session-token");
+      expect(cookie?.value).toBe("encoded-session");
+      expect(cookie?.httpOnly).toBe(true);
+    } finally {
+      delete process.env.AUTH_SECRET;
+    }
+  });
+
+  it("sets no session cookie when no refresh happened", async () => {
+    encodeMock.mockReset();
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+    const res = await GET(makeRequest("http://localhost/api/v1/users"), {
+      params: Promise.resolve({ path: ["users"] }),
+    });
+    expect(res.status).toBe(200);
+    expect(encodeMock).not.toHaveBeenCalled();
+    expect(res.headers.get("set-cookie")).toBeNull();
   });
 
   // --- #193: raw upstream error text must not reach the browser ---

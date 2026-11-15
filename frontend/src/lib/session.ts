@@ -19,15 +19,7 @@ import { refreshAccessToken, type RefreshableToken } from "./keycloak";
  */
 export const authUrl = requiredProdEnv("AUTH_URL", "");
 
-/**
- * Session lifetime in seconds (8 hours).
- *
- * Auth.js defaults to 30 days with no idle timeout (see
- * @auth/core/lib/init.js), which is far too long for an admin dashboard
- * holding a live Keycloak access token. The value bounds both the session
- * JWT's `exp` and the session cookie's lifetime.
- */
-export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
+export { SESSION_MAX_AGE_SECONDS } from "./session-cookie";
 
 /** The OIDC tokens Auth.js stores on the session JWT. */
 type TokenWithAccess = RefreshableToken;

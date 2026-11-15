@@ -66,23 +66,16 @@ func TestSAMLAttributesDefaults(t *testing.T) {
 	}
 }
 
-// TestSAMLAttributesUnknownValuesReset verifies that invalid option values
-// fall back to safe defaults rather than passing invalid strings to Keycloak.
-func TestSAMLAttributesUnknownValuesReset(t *testing.T) {
-	opts := &SAMLOptions{
-		SigningAlgorithm: "BOGUS_ALGO",
-		NameIDFormat:     "invalid-format",
-	}
-	attrs, err := buildSAMLAttributes("app", "", "", opts)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA256" {
-		t.Errorf("unknown algo should fall back to RSA_SHA256, got %q", got)
-	}
-	if got := attrs["saml_name_id_format"]; got != "persistent" {
-		t.Errorf("unknown nameIDFormat should fall back to persistent, got %q", got)
+// TestSAMLAttributesUnknownValuesRejected verifies that option values outside
+// the supported sets are a validation error, never silently remapped.
+func TestSAMLAttributesUnknownValuesRejected(t *testing.T) {
+	for _, opts := range []*SAMLOptions{
+		{SigningAlgorithm: "BOGUS_ALGO"},
+		{NameIDFormat: "invalid-format"},
+	} {
+		if _, err := buildSAMLAttributes("app", "", "", opts); err == nil {
+			t.Errorf("expected an error for %+v", *opts)
+		}
 	}
 }
 
