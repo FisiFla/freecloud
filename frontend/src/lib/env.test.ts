@@ -164,6 +164,18 @@ describe("env helpers", () => {
       },
     );
 
+    it("logs but does not throw in production for an http loopback issuer (quickstart stack)", async () => {
+      vi.stubEnv("NODE_ENV", "production");
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const { validateProdIssuer } = await loadEnv();
+        expect(() => validateProdIssuer("http://localhost:8081/realms/freecloud")).not.toThrow();
+        expect(errorSpy).toHaveBeenCalled();
+      } finally {
+        errorSpy.mockRestore();
+      }
+    });
+
     it("does not throw in development for an http localhost issuer", async () => {
       vi.stubEnv("NODE_ENV", "development");
       const { validateProdIssuer } = await loadEnv();

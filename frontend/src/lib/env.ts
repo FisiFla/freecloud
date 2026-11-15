@@ -117,7 +117,8 @@ export function isLoopbackHost(host: string): boolean {
 /**
  * validateProdIssuer enforces the Keycloak issuer contract at runtime in
  * production: the issuer must be an absolute https URL, so tokens never
- * transit cleartext. A loopback issuer (localhost, *.localhost, 127/8, ::1)
+ * transit cleartext (plain http is tolerated, loudly, only on loopback — the
+ * quickstart stack). A loopback issuer (localhost, *.localhost, 127/8, ::1)
  * only WARNS in production — deliberately not a hard failure — because the
  * prod-smoke stack runs the production build against https://auth.localhost
  * and is indistinguishable from a real deployment by NODE_ENV (the same
@@ -135,6 +136,17 @@ export function validateProdIssuer(issuer: string): void {
     }
     // eslint-disable-next-line no-console
     console.warn("[dev] AUTH_KEYCLOAK_ISSUER is not a valid absolute URL — fine locally, NEVER in production.");
+    return;
+  }
+  if (url.protocol !== "https:" && isProd && isLoopbackHost(url.hostname)) {
+    // The quickstart stack (docker-compose.localhost.yml) runs the production
+    // build against http://localhost: loopback traffic never leaves the host,
+    // so this is allowed, loudly. Any non-loopback http issuer still throws.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[security] AUTH_KEYCLOAK_ISSUER is plain http on loopback (${url.host}). ` +
+        "Acceptable only for the single-host quickstart stack; a real deployment must use the public https Keycloak origin.",
+    );
     return;
   }
   if (url.protocol !== "https:") {
