@@ -70,9 +70,9 @@ prod-pull: prod-secrets-init
 # builds any image that is missing locally (e.g. freecloud-postgres:local on
 # first deploy); to deploy from source instead, run `make prod-build` first.
 prod-up: prod-secrets-init
-	@if grep -Eq '^(SLACK_WEBHOOK_URL|LDAP_BIND_PASSWORD|GF_ADMIN_PASSWORD|DEVICE_COOKIE_SECRET)=.+' .env.prod; then \
+	@if grep -Eq '^(SLACK_WEBHOOK_URL|LDAP_BIND_PASSWORD|GF_ADMIN_PASSWORD|DEVICE_COOKIE_SECRET|FLEET_API_TOKEN)=.+' .env.prod; then \
 		echo "ERROR: .env.prod still sets a secret that is now read only from .secrets/secrets.env:" >&2; \
-		grep -Eo '^(SLACK_WEBHOOK_URL|LDAP_BIND_PASSWORD|GF_ADMIN_PASSWORD|DEVICE_COOKIE_SECRET)=' .env.prod >&2; \
+		grep -Eo '^(SLACK_WEBHOOK_URL|LDAP_BIND_PASSWORD|GF_ADMIN_PASSWORD|DEVICE_COOKIE_SECRET|FLEET_API_TOKEN)=' .env.prod >&2; \
 		echo "Move it to .secrets/secrets.env and delete the line (docs/DEPLOYMENT.md, Upgrades)." >&2; \
 		exit 1; \
 	fi

@@ -317,4 +317,16 @@ assert_status 200 "GET /signin"
 grep -qi '<html' "${BODY_FILE}" || fail "/signin did not return HTML; body starts: $(head -c 200 "${BODY_FILE}")"
 pass "GET https://app.localhost/signin -> 200 HTML"
 
+# The frontend image's own HEALTHCHECK must go green: it probes 127.0.0.1,
+# which only answers when the server binds every interface.
+FRONTEND_CID="$(compose_ov ps -q frontend)"
+HEALTH_DEADLINE=$((SECONDS + 150))
+while :; do
+  FRONTEND_HEALTH="$(docker inspect --format '{{.State.Health.Status}}' "${FRONTEND_CID}" 2>/dev/null || echo unknown)"
+  [ "${FRONTEND_HEALTH}" = "healthy" ] && break
+  [ "${SECONDS}" -lt "${HEALTH_DEADLINE}" ] || fail "frontend container health is '${FRONTEND_HEALTH}' (expected healthy)"
+  sleep 5
+done
+pass "frontend container HEALTHCHECK -> healthy"
+
 log "ALL ${PASS_N} ASSERTIONS PASSED"

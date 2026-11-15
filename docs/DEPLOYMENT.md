@@ -334,6 +334,30 @@ The Postgres image (`freecloud-postgres:local`) is built on the host from
 If the GHCR packages are private, run `docker login ghcr.io` on the host
 (with a token that can read packages) before `make prod-pull`.
 
+### Upgrading from v1.7.0
+
+v1.7.0 was deployed by building from source, on Keycloak 25, with secrets
+in an env file. Moving to v1.8.0 or later is therefore a checkout change
+as well as a version bump. Drilled end to end on 2026-11-15 (see
+[docs/PRODUCTION_READINESS.md](PRODUCTION_READINESS.md)):
+
+1. Back up both databases, `.secrets/` and `.env.prod`.
+2. Check out the new release tag in the deployment checkout.
+3. Add `FREECLOUD_VERSION=<new tag, no v>` to `.env.prod` and move
+   `FLEET_API_TOKEN` from `.env.prod` to `.secrets/secrets.env` (table
+   below).
+4. `make prod-pull`, then `make prod-up`. The migrate job applies the new
+   schema migrations and Keycloak migrates its database from 25 to 26 on
+   first start.
+5. The first sign-in of an admin created by the v1.7.0 setup wizard shows
+   Keycloak's one-time "update profile" page (that wizard stored no first
+   or last name). Fill it in once; sign-in then works normally.
+
+Rolling back to v1.7.0 always needs the backup: both the FreeCloud schema
+and the Keycloak database have moved forward. Stop the stack, check out
+`v1.7.0`, put back the saved `.secrets/` and `.env.prod`, restore both
+databases from the backup, then `make prod-up`.
+
 ### Upgrade notes: secrets moved to files
 
 Recent releases deliver every secret as a Docker secret file instead of a
@@ -345,9 +369,14 @@ left in `.env.prod` are silently no longer read:
 
 | Secret | Old location | New location (hand-added key) |
 |---|---|---|
+| `FLEET_API_TOKEN` | `.env.prod` | `.secrets/secrets.env` → backend `FLEET_API_TOKEN_FILE` |
 | `SLACK_WEBHOOK_URL` | `.env.prod` | `.secrets/secrets.env` → backend `SLACK_WEBHOOK_URL_FILE` |
 | `LDAP_BIND_PASSWORD` | `.env.prod` / shell env | `.secrets/secrets.env` → backend `LDAP_BIND_PASSWORD_FILE` |
 | `GF_ADMIN_PASSWORD` | `.env.prod` | `.secrets/secrets.env` → Grafana `GF_SECURITY_ADMIN_PASSWORD__FILE` |
+
+`FLEET_API_TOKEN` is the one that is required: left in `.env.prod`, the
+backend refuses to start with `FLEET_API_TOKEN must be set`. `make prod-up`
+stops early and names any of these still present in `.env.prod`.
 
 `DEVICE_COOKIE_SECRET` already lived in `.secrets/secrets.env`; it now
 reaches the backend via `DEVICE_COOKIE_SECRET_FILE` with no operator action
