@@ -140,7 +140,7 @@ export default function Sidebar() {
           </div>
         )}
         <div className="flex items-center justify-between">
-          <p className="text-xs text-slate-500 dark:text-slate-600">FreeCloud v1.7.0</p>
+          <p className="text-xs text-slate-500 dark:text-slate-600">FreeCloud v1.8.0</p>
           <div className="flex items-center gap-1">
             <DarkModeToggle />
             {session && (

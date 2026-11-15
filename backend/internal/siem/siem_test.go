@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -326,12 +327,17 @@ func TestHTTPSink_Send(t *testing.T) {
 	entry := AuditEntry{
 		Seq: 1, ID: "uuid-1", ActorID: "actor1", Action: "onboard",
 		TargetType: "user", TargetID: "u1", Details: "{}", CreatedAt: "2024-01-01T00:00:00Z",
+		RowHash: "abc123",
 	}
 	if err := sink.Send(context.Background(), entry); err != nil {
 		t.Fatalf("Send returned error: %v", err)
 	}
 	if len(gotBody) == 0 {
 		t.Error("expected non-empty body")
+	}
+	// The sink copy is the external anchor for the audit chain.
+	if !strings.Contains(string(gotBody), `"rowHash":"abc123"`) {
+		t.Errorf("body missing rowHash: %s", gotBody)
 	}
 }
 

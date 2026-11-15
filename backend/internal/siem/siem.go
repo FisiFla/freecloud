@@ -67,6 +67,11 @@ type AuditEntry struct {
 	TargetID   string `json:"targetId"`
 	Details    string `json:"details"`
 	CreatedAt  string `json:"createdAt"`
+	// RowHash is the row's audit-chain hash. The sink's copy is the external
+	// anchor for the chain: the database cannot show that rows were deleted
+	// from the tail, but a sink holding a seq/rowHash the database no longer
+	// has (or has with a different hash) proves it.
+	RowHash string `json:"rowHash"`
 }
 
 // Sink is the interface implemented by each SIEM output.
@@ -111,9 +116,9 @@ func (s *SyslogSink) IsNoop() bool { return false }
 
 // Send formats the entry as a structured syslog message.
 func (s *SyslogSink) Send(_ context.Context, entry AuditEntry) error {
-	msg := fmt.Sprintf("audit seq=%d id=%s actor=%s action=%s target_type=%s target_id=%s details=%s ts=%s",
+	msg := fmt.Sprintf("audit seq=%d id=%s actor=%s action=%s target_type=%s target_id=%s details=%s ts=%s row_hash=%s",
 		entry.Seq, entry.ID, entry.ActorID, entry.Action,
-		entry.TargetType, entry.TargetID, entry.Details, entry.CreatedAt,
+		entry.TargetType, entry.TargetID, entry.Details, entry.CreatedAt, entry.RowHash,
 	)
 	return s.writer.Info(msg)
 }
@@ -210,7 +215,7 @@ func (s *Streamer) poll(ctx context.Context) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT seq, id::TEXT, actor_id, action,
 		       COALESCE(target_type, ''), COALESCE(target_id, ''),
-		       details::TEXT, created_at
+		       details::TEXT, created_at, COALESCE(row_hash, '')
 		FROM audit_logs
 		WHERE seq > $1
 		ORDER BY seq ASC
@@ -228,7 +233,7 @@ func (s *Streamer) poll(ctx context.Context) {
 		var createdAt time.Time
 		if err := rows.Scan(
 			&e.Seq, &e.ID, &e.ActorID, &e.Action,
-			&e.TargetType, &e.TargetID, &e.Details, &createdAt,
+			&e.TargetType, &e.TargetID, &e.Details, &createdAt, &e.RowHash,
 		); err != nil {
 			s.logger.Warn("siem: failed to scan audit row", zap.Error(err))
 			continue

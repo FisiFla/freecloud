@@ -164,7 +164,7 @@ services:
 
   # ── Keycloak ──────────────────────────────────────────────────────────────
   keycloak:
-    image: ghcr.io/fisifla/freecloud/keycloak:${FREECLOUD_VERSION:-1.7.0}${FREECLOUD_KEYCLOAK_DIGEST:-}
+    image: ghcr.io/fisifla/freecloud/keycloak:${FREECLOUD_VERSION:-1.8.0}${FREECLOUD_KEYCLOAK_DIGEST:-}
     build:
       context: ..
       dockerfile: docker/Dockerfile.keycloak
@@ -316,7 +316,7 @@ services:
   # for it to complete successfully, so a rolling deploy never has a replica
   # racing another replica (or this job) to apply the same migration.
   migrate:
-    image: ghcr.io/fisifla/freecloud/backend:${FREECLOUD_VERSION:-1.7.0}${FREECLOUD_BACKEND_DIGEST:-}
+    image: ghcr.io/fisifla/freecloud/backend:${FREECLOUD_VERSION:-1.8.0}${FREECLOUD_BACKEND_DIGEST:-}
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -351,7 +351,7 @@ services:
 
   # ── Backend ───────────────────────────────────────────────────────────────
   backend:
-    image: ghcr.io/fisifla/freecloud/backend:${FREECLOUD_VERSION:-1.7.0}${FREECLOUD_BACKEND_DIGEST:-}
+    image: ghcr.io/fisifla/freecloud/backend:${FREECLOUD_VERSION:-1.8.0}${FREECLOUD_BACKEND_DIGEST:-}
     build:
       context: ../backend
       dockerfile: Dockerfile
@@ -516,14 +516,14 @@ services:
 
   # ── Frontend ──────────────────────────────────────────────────────────────
   frontend:
-    image: ghcr.io/fisifla/freecloud/frontend:${FREECLOUD_VERSION:-1.7.0}${FREECLOUD_FRONTEND_DIGEST:-}
+    image: ghcr.io/fisifla/freecloud/frontend:${FREECLOUD_VERSION:-1.8.0}${FREECLOUD_FRONTEND_DIGEST:-}
     build:
       context: ../frontend
       dockerfile: Dockerfile
       args:
         # Baked into source builds so /api/version can report what is running;
         # pulled release images carry the values from release.yml instead.
-        FREECLOUD_VERSION: ${FREECLOUD_VERSION:-1.7.0}
+        FREECLOUD_VERSION: ${FREECLOUD_VERSION:-1.8.0}
         GIT_SHA: ${GIT_SHA:-source}
     restart: unless-stopped
     logging: *default-logging

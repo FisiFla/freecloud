@@ -300,7 +300,7 @@ an untested backup is not a backup.
 
 The production stack runs the published release images (`backend`/`migrate`,
 `frontend`, `keycloak`) pinned by `FREECLOUD_VERSION` in `.env.prod` (the
-release tag without its leading `v`, e.g. `1.7.0` for git tag `v1.7.0`).
+release tag without its leading `v`, e.g. `1.8.0` for git tag `v1.8.0`).
 
 1. Back up first: `make prod-backup`.
 2. Set `FREECLOUD_VERSION=<new tag, no v>` in `.env.prod`.
@@ -488,7 +488,7 @@ tag later can fetch a rebuilt image. To freeze exactly what you deploy, set
 the optional digest-suffix variables in `.env.prod` alongside the version:
 
 ```bash
-FREECLOUD_VERSION=1.7.0
+FREECLOUD_VERSION=1.8.0
 FREECLOUD_BACKEND_DIGEST=@sha256:<digest of the backend image>
 FREECLOUD_FRONTEND_DIGEST=@sha256:<digest of the frontend image>
 FREECLOUD_KEYCLOAK_DIGEST=@sha256:<digest of the keycloak image>
@@ -498,11 +498,11 @@ Read each digest from the registry (no pull needed):
 
 ```bash
 docker buildx imagetools inspect \
-  ghcr.io/fisifla/freecloud/backend:1.7.0 --format '{{.Manifest.Digest}}'
+  ghcr.io/fisifla/freecloud/backend:1.8.0 --format '{{.Manifest.Digest}}'
 docker buildx imagetools inspect \
-  ghcr.io/fisifla/freecloud/frontend:1.7.0 --format '{{.Manifest.Digest}}'
+  ghcr.io/fisifla/freecloud/frontend:1.8.0 --format '{{.Manifest.Digest}}'
 docker buildx imagetools inspect \
-  ghcr.io/fisifla/freecloud/keycloak:1.7.0 --format '{{.Manifest.Digest}}'
+  ghcr.io/fisifla/freecloud/keycloak:1.8.0 --format '{{.Manifest.Digest}}'
 ```
 
 (If the GHCR packages are private, `docker login ghcr.io` first.) Then
