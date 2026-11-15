@@ -72,6 +72,7 @@ func startFakeSMTPServer(t *testing.T, received *strings.Builder) string {
 }
 
 func TestSendMail_DeliversTheMessage(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var received strings.Builder
 	addr := startFakeSMTPServer(t, &received)
 
@@ -96,6 +97,7 @@ func TestSendMail_RejectsCRLFInAddresses(t *testing.T) {
 }
 
 func TestSendMail_HonoursTheContextDeadline(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	// A listener that accepts the connection but never answers: without a
 	// deadline the send would block forever.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -145,6 +147,7 @@ func TestEmailNotifier_RejectsCRLFRecipient(t *testing.T) {
 }
 
 func TestEmailNotifier_PassesTheContextToTheSend(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	// The notifier used to discard the context (`_ context.Context`), so
 	// the caller's timeout never applied to the SMTP conversation.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

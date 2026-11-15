@@ -591,6 +591,7 @@ func hasString(list *[]string, want string) bool {
 func ensureDashboardClient(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) error {
 	clientID := cfg.DashboardClientID
 	origin, callback, haveCallback := dashboardCallbackURI(cfg)
+	postLogout := origin + "/signin"
 	if !haveCallback && cfg.DashboardPublicURL != "" {
 		logger.Warn("bootstrap: DashboardPublicURL is not an absolute http(s) origin; dashboard redirect URIs NOT stamped, browser sign-in will fail until it is fixed", zap.String("dashboardPublicURL", cfg.DashboardPublicURL))
 	}
@@ -600,24 +601,42 @@ func ensureDashboardClient(ctx context.Context, gc *gocloak.GoCloak, token strin
 	}
 	if len(clients) > 0 {
 		existing := clients[0]
-		if haveCallback && (!hasString(existing.RedirectURIs, callback) || !hasString(existing.WebOrigins, origin)) {
-			if !hasString(existing.RedirectURIs, callback) {
-				uris := append([]string{}, deref(existing.RedirectURIs)...)
-				uris = append(uris, callback)
-				existing.RedirectURIs = &uris
-			}
-			if !hasString(existing.WebOrigins, origin) {
-				origins := append([]string{}, deref(existing.WebOrigins)...)
-				origins = append(origins, origin)
-				existing.WebOrigins = &origins
-			}
-			if err := gc.UpdateClient(ctx, token, cfg.TargetRealm, *existing); err != nil {
-				return fmt.Errorf("bootstrap: backfill dashboard redirect URIs: %w", err)
-			}
-			logger.Info("bootstrap: backfilled freecloud-dashboard redirect URIs", zap.String("callback", callback))
+		if !haveCallback {
+			logger.Info("bootstrap: freecloud-dashboard client already exists")
 			return nil
 		}
-		logger.Info("bootstrap: freecloud-dashboard client already exists")
+		changed := false
+		if !hasString(existing.RedirectURIs, callback) {
+			uris := append([]string{}, deref(existing.RedirectURIs)...)
+			uris = append(uris, callback)
+			existing.RedirectURIs = &uris
+			changed = true
+		}
+		if !hasString(existing.WebOrigins, origin) {
+			origins := append([]string{}, deref(existing.WebOrigins)...)
+			origins = append(origins, origin)
+			existing.WebOrigins = &origins
+			changed = true
+		}
+		attrs := map[string]string{}
+		if existing.Attributes != nil {
+			for k, v := range *existing.Attributes {
+				attrs[k] = v
+			}
+		}
+		if merged, added := withPostLogoutRedirect(attrs[postLogoutRedirectAttr], postLogout); added {
+			attrs[postLogoutRedirectAttr] = merged
+			existing.Attributes = &attrs
+			changed = true
+		}
+		if !changed {
+			logger.Info("bootstrap: freecloud-dashboard client already exists")
+			return nil
+		}
+		if err := gc.UpdateClient(ctx, token, cfg.TargetRealm, *existing); err != nil {
+			return fmt.Errorf("bootstrap: backfill dashboard redirect URIs: %w", err)
+		}
+		logger.Info("bootstrap: backfilled freecloud-dashboard redirect URIs", zap.String("callback", callback), zap.String("postLogout", postLogout))
 		return nil
 	}
 
@@ -636,6 +655,7 @@ func ensureDashboardClient(ctx context.Context, gc *gocloak.GoCloak, token strin
 	if haveCallback {
 		client.RedirectURIs = &[]string{callback}
 		client.WebOrigins = &[]string{origin}
+		client.Attributes = &map[string]string{postLogoutRedirectAttr: postLogout}
 	}
 	_, err = gc.CreateClient(ctx, token, cfg.TargetRealm, client)
 	if err != nil {
@@ -645,6 +665,29 @@ func ensureDashboardClient(ctx context.Context, gc *gocloak.GoCloak, token strin
 	return nil
 }
 
+// postLogoutRedirectAttr is the Keycloak client attribute listing the URLs
+// the end-session endpoint may redirect to ("##"-separated). Without the
+// dashboard's /signin entry Keycloak rejects the federated-logout redirect
+// and the SSO session survives sign-out.
+const postLogoutRedirectAttr = "post.logout.redirect.uris"
+
+// withPostLogoutRedirect adds uri to a "##"-separated attribute value,
+// preserving operator-added entries. added is false when uri is already
+// allowed (listed, or "+" = same as the redirect URIs is NOT enough: the
+// OAuth callback is not /signin).
+func withPostLogoutRedirect(current, uri string) (merged string, added bool) {
+	var parts []string
+	for _, p := range strings.Split(current, "##") {
+		if p = strings.TrimSpace(p); p != "" {
+			if p == uri {
+				return current, false
+			}
+			parts = append(parts, p)
+		}
+	}
+	return strings.Join(append(parts, uri), "##"), true
+}
+
 func deref(s *[]string) []string {
 	if s == nil {
 		return nil
@@ -652,8 +695,10 @@ func deref(s *[]string) []string {
 	return *s
 }
 
-// ensureServiceAccountRoles grants manage-users and manage-clients realm-management
-// roles to the freecloud-service service account (idempotent).
+// ensureServiceAccountRoles grants the realm-management "realm-admin"
+// composite role to the freecloud-service service account (idempotent).
+// Consequence: a leaked service credential is full realm administration —
+// guard the client secret accordingly.
 func ensureServiceAccountRoles(ctx context.Context, gc *gocloak.GoCloak, token string, cfg Config, logger *zap.Logger) error {
 	saUsername := "service-account-" + cfg.ServiceClientID
 	exact := true

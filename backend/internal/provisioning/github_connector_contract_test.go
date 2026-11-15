@@ -39,6 +39,7 @@ const githubMembershipFixture = `{
 }`
 
 func TestGitHubConnector_ProvisionUser_MatchesRealAPIContract(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var gotMethod, gotPath, gotAuth, gotAPIVersion, gotAccept string
 	var gotBody map[string]interface{}
 
@@ -94,6 +95,7 @@ func TestGitHubConnector_ProvisionUser_MatchesRealAPIContract(t *testing.T) {
 }
 
 func TestGitHubConnector_DeprovisionUser_MatchesRealAPIContract(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var gotMethod, gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
@@ -122,6 +124,7 @@ func TestGitHubConnector_DeprovisionUser_MatchesRealAPIContract(t *testing.T) {
 // GitHub's real API returns 404 in that case, and reconciliation retries
 // must not treat "already gone" as a failure.
 func TestGitHubConnector_DeprovisionUser_AlreadyRemovedIsNotAnError(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -137,6 +140,7 @@ func TestGitHubConnector_DeprovisionUser_AlreadyRemovedIsNotAnError(t *testing.T
 // error response (e.g. insufficient scope, rate limit) is surfaced in the
 // returned error rather than swallowed.
 func TestGitHubConnector_ProvisionUser_ErrorSurfacesBody(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	const ghErrorBody = `{"message":"Must have admin rights to Organization.","documentation_url":"https://docs.github.com/rest/orgs/members#set-organization-membership-for-a-user"}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)

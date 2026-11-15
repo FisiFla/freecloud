@@ -81,14 +81,16 @@ producing an empty vector.
 ## Running the observability stack
 
 The observability services are in a separate Compose override so they are
-opt-in (not bundled in the production stack by default).
+opt-in (not bundled in the production stack by default). First hand-add the
+Grafana admin password (`GF_ADMIN_PASSWORD=<strong-password>` in
+`.secrets/secrets.env`, then `make prod-secrets-init`) — Grafana refuses to
+start without it.
 
 ```bash
 # Overlay on top of the production stack. The secrets have to be in the
 # shell environment: the production compose resolves the database DSN at
 # parse time and fails fast without it.
-set -a && . .secrets/secrets.env && set +a
-docker compose \
+scripts/load-secrets-env.sh .secrets/secrets.env -- docker compose \
   -f docker/docker-compose.prod.yml \
   -f docker/docker-compose.observability.yml \
   --env-file .env.prod \
@@ -123,7 +125,7 @@ dashboard are provisioned automatically from
 
 | Variable | Default | Description |
 |---|---|---|
-| `GF_ADMIN_PASSWORD` | *(none — required)* | Grafana admin password. The compose file fails to start Grafana when it is unset, so there is no usable default; set a strong one. |
+| `GF_ADMIN_PASSWORD` | *(none — required)* | Grafana admin password. Set it as a hand-added key in `.secrets/secrets.env` (**not** `.env.prod`), then `make prod-secrets-init`: the generator mirrors it to the `gf_admin_password` Docker secret and Grafana reads it via `GF_SECURITY_ADMIN_PASSWORD__FILE`, so the value stays out of `docker inspect`. Grafana refuses to start while it is unset, so there is no usable default — set a strong one (e.g. `openssl rand -hex 24`). Upgrading from a release that kept it in `.env.prod`? Move the value to `.secrets/secrets.env`; it is no longer read from `.env.prod`. |
 | `GF_PORT` | `3100` | Host port for Grafana — bound to `127.0.0.1` only, so use localhost on the host or an SSH tunnel (`ssh -L 3100:127.0.0.1:3100 <host>`), not the host's public address |
 | `SLACK_ALERT_WEBHOOK_URL` | *(unset — Slack delivery off)* | Slack incoming-webhook URL for **Alertmanager** delivery of the alerts above. This is a secret: set it in `.secrets/secrets.env` (hand-added key), **not** in `.env.prod`. It is separate from the backend's `NOTIFY_SLACK`/`SLACK_WEBHOOK_URL` in-app event notifications (see `docs/API.md`) — the two may point at the same or different channels. |
 
@@ -168,8 +170,7 @@ echo 'SLACK_ALERT_WEBHOOK_URL=https://hooks.slack.com/services/REDACTED' \
 make prod-secrets-init
 
 # 3. (Re)start the stack with the observability overlay
-set -a && . .secrets/secrets.env && set +a
-docker compose \
+scripts/load-secrets-env.sh .secrets/secrets.env -- docker compose \
   -f docker/docker-compose.prod.yml \
   -f docker/docker-compose.observability.yml \
   --env-file .env.prod \

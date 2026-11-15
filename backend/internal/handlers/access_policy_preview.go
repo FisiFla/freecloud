@@ -60,6 +60,14 @@ func (h *Handler) PreviewAppPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Both-or-neither: a lone deviceId or userId fails closed instead of
+	// silently skipping the posture check (which would report allow=true
+	// for conditions that were never evaluated).
+	if (req.DeviceID == "") != (req.UserID == "") {
+		respondError(w, http.StatusBadRequest, "deviceId and userId must be supplied together")
+		return
+	}
+
 	// Determine evaluation time.
 	evalTime := time.Now().UTC()
 	if req.EvalTime != "" {
@@ -120,6 +128,15 @@ func (h *Handler) PreviewAppPolicy(w http.ResponseWriter, r *http.Request) {
 
 	// Optional posture check when a deviceId + userId are supplied.
 	if req.DeviceID != "" && req.UserID != "" {
+		// Both IDs are caller-supplied: each must belong to the caller's
+		// org (as the provisioning dry-run does), otherwise a caller could
+		// evaluate — and thereby probe — another tenant's device posture.
+		if !h.requireUserInCallerOrg(w, r, req.UserID) {
+			return
+		}
+		if !h.requireDeviceInCallerOrg(w, r, req.DeviceID) {
+			return
+		}
 		// Verify device-user mapping.
 		var mappedDeviceID string
 		err := h.db.QueryRow(ctx,

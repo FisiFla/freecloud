@@ -159,6 +159,49 @@ func (h *Handler) ListApprovalRequests(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, out)
 }
 
+// isSelfApproval reports whether the decider (actorID username, plus the
+// JWT claims on ctx) is the stored request's requester.
+//
+// The stored requester_id is a preferred_username captured at submit time —
+// mutable. The comparison is therefore done on the immutable Keycloak
+// subject whenever the stored request carries or resolves to one:
+//   - direct equality when requester_id already is a subject
+//     (ActorIDMiddleware falls back to sub when preferred_username is empty);
+//   - otherwise resolution through users.email, which is exact in this
+//     deployment because Keycloak usernames are always the email (see the
+//     identity provider client) and users.email is UNIQUE NOT NULL.
+//
+// The username check is kept as an additional fail-closed condition: it
+// still rejects when the subject cannot be resolved (renamed email, deleted
+// user row) and when a username was recycled by a different subject. Either
+// identifier matching rejects.
+//
+// A follow-up migration should store requester_sub on approval_requests at
+// submit time; the email-resolution lookup above could then be replaced by a
+// direct column comparison that also survives email renames.
+func isSelfApproval(ctx context.Context, db DBPool, requesterID, actorID string) bool {
+	if actorID != "" && actorID == requesterID {
+		return true
+	}
+	claims := middleware.GetClaims(ctx)
+	if claims == nil || claims.Sub == "" {
+		return false
+	}
+	if requesterID != "" && requesterID == claims.Sub {
+		return true
+	}
+	if db == nil {
+		return false
+	}
+	var requesterSub string
+	if err := db.QueryRow(ctx,
+		`SELECT keycloak_user_id FROM users WHERE email = $1`, requesterID,
+	).Scan(&requesterSub); err != nil {
+		return false
+	}
+	return requesterSub != "" && requesterSub == claims.Sub
+}
+
 // DecideApproval approves or rejects a pending request. On approval, the
 // underlying onboard/offboard action is executed synchronously.
 //
@@ -211,7 +254,7 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusConflict, "approval request already decided")
 		return
 	}
-	if actorID == requesterID {
+	if isSelfApproval(r.Context(), h.db, requesterID, actorID) {
 		respondError(w, http.StatusForbidden, "cannot approve or reject your own request")
 		return
 	}

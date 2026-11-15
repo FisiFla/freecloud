@@ -2,6 +2,10 @@
 ##   docker compose -f docker/docker-compose.e2e.yml up -d --build
 ##   cd backend && go test -tags=e2e -v ./internal/e2e/...
 ##   docker compose -f docker/docker-compose.e2e.yml down -v
+##
+## Every published port is bound to 127.0.0.1 only: the stack uses trivial
+## credentials and the test harness reaches it from the same host, so
+## nothing here may listen on the LAN.
 
 services:
   postgres-e2e:
@@ -13,7 +17,7 @@ services:
     volumes:
       - ./postgres/init-keycloak-e2e-db.sql:/docker-entrypoint-initdb.d/init-keycloak-e2e-db.sql:ro
     ports:
-      - "55433:5432"
+      - "127.0.0.1:55433:5432"
     # Grace period for first-boot initdb (slow-disk fsync ~29s observed in
     # #315/#316): without it the retry budget can expire before postgres
     # accepts connections, stranding the service_healthy dependents.
@@ -68,7 +72,7 @@ services:
       # blocked in a real deployment.
       TRUST_PROXY: "true"
     ports:
-      - "8083:8080"
+      - "127.0.0.1:8083:8080"
     depends_on:
       postgres-e2e:
         condition: service_healthy
@@ -81,7 +85,7 @@ services:
   redis-e2e:
     image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499  # redis 7-alpine
     ports:
-      - "56379:6379"
+      - "127.0.0.1:56379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -112,7 +116,7 @@ services:
       # NOT 8086/8087 — those are claimed by the B4 HA overlay's lb-e2e and
       # backend-e2e-2 (docker-compose.e2e-ha.yml), which layers on top of
       # this base file. Keep this and scim-mock-e2e's ports out of that range.
-      - "8089:8080"
+      - "127.0.0.1:8089:8080"
     volumes:
       - ./keycloak-proxy-e2e/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:
@@ -123,7 +127,7 @@ services:
       context: ./fleetdm-mock
       dockerfile: Dockerfile
     ports:
-      - "8084:8080"
+      - "127.0.0.1:8084:8080"
     environment:
       BACKEND_URL: http://backend-e2e:8080
       FLEET_WEBHOOK_SECRET: e2e-webhook-secret
@@ -146,7 +150,7 @@ services:
     ports:
       # See keycloak-proxy-e2e's port comment — kept clear of the B4 HA
       # overlay's 8086/8087.
-      - "8088:8080"
+      - "127.0.0.1:8088:8080"
     environment:
       SCIM_MOCK_TOKEN: e2e-scim-mock-token
     healthcheck:
@@ -164,7 +168,7 @@ services:
     # a moving tag.
     image: bitnamilegacy/openldap:2.6.10@sha256:687f14a22b5c74fb057a57221acdbe7b8c82e2d3619fc380db3af48ec4aa04ed  # openldap 2.6.10
     ports:
-      - "1389:1389"
+      - "127.0.0.1:1389:1389"
     environment:
       LDAP_ADMIN_USERNAME: admin
       LDAP_ADMIN_PASSWORD: adminpassword
@@ -187,7 +191,7 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     ports:
-      - "8085:8080"
+      - "127.0.0.1:8085:8080"
     environment:
       DATABASE_URL: postgres://freecloud:freecloud@postgres-e2e:5432/freecloud_e2e?sslmode=disable
       APP_ENV: test

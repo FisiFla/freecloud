@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/FisiFla/freecloud/backend/internal/httpx"
 	"go.uber.org/zap"
 )
 
@@ -110,7 +111,8 @@ type FleetClient struct {
 	httpClient *http.Client
 }
 
-// NewClient creates a new FleetClient.
+// NewClient creates a new FleetClient. It is used for the operator-provided
+// environment URL, which may legitimately point at a private network.
 func NewClient(baseURL, apiToken string) *FleetClient {
 	return &FleetClient{
 		baseURL:  baseURL,
@@ -118,6 +120,18 @@ func NewClient(baseURL, apiToken string) *FleetClient {
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+	}
+}
+
+// NewOutboundClient creates a FleetClient for an admin-configured
+// (DB-stored) server URL. It uses the hardened outbound HTTP client so a
+// repointed URL cannot redirect or re-resolve to a blocked address and
+// exfiltrate the API token there.
+func NewOutboundClient(baseURL, apiToken string) *FleetClient {
+	return &FleetClient{
+		baseURL:    baseURL,
+		apiToken:   apiToken,
+		httpClient: httpx.NewOutboundClient(30 * time.Second),
 	}
 }
 
@@ -146,7 +160,12 @@ func (f *FleetClient) doRequest(ctx context.Context, method, path string, body i
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+f.apiToken)
+	// No Authorization header without a token: an empty "Bearer " value
+	// would advertise the auth scheme while authenticating as nobody, and
+	// the DB-without-token configuration explicitly means unauthenticated.
+	if f.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+f.apiToken)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	logger.Debug("fleet request",
@@ -169,7 +188,7 @@ func (f *FleetClient) doRequest(ctx context.Context, method, path string, body i
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("fleet API error: status %d, body: %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("fleet API error: status %d, body: %s", resp.StatusCode, httpx.TruncateErrorBody(respBody))
 	}
 
 	return respBody, nil

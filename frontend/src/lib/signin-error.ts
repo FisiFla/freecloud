@@ -1,4 +1,18 @@
 /**
+ * sessionStorage key carrying a sign-in error across federated logout.
+ *
+ * The Keycloak post_logout_redirect_uri is fixed to the bare /signin (it must
+ * match a registered URI exactly, so no ?error= query survives the round
+ * trip). When the refresh-failure path signs out an expired session, the
+ * client stashes "session_expired" here first (see lib/federated-logout.ts)
+ * and /signin consumes and clears it, so the "session expired" hint survives.
+ * Tab-scoped storage: nothing lingers for the next user of a shared machine
+ * once the tab closes, and the value is still mapped through
+ * signInErrorMessage (never echoed raw).
+ */
+export const PENDING_SIGNIN_ERROR_KEY = "fc-signin-error";
+
+/**
  * Maps the `error` query param on /signin to user-facing copy.
  *
  * Producers: Auth.js failures land on /signin?error=auth_failed (src/auth.ts

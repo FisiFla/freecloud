@@ -6,7 +6,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/audit"
-	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
 // VerifyAuditChain walks all audit_logs rows in seq order and reports whether
@@ -24,11 +23,15 @@ import (
 // view, so the handler enforces the stricter SYSTEM-ADMIN requirement
 // itself: only a system administrator may inspect the global chain
 // (issue #133).
+//
+// The chain is unkeyed SHA-256: a clean result detects corruption and
+// tampering by anyone without database write access, but cannot rule out
+// rewriting by someone with direct DB write access (see package audit).
 func (h *Handler) VerifyAuditChain(w http.ResponseWriter, r *http.Request) {
-	// Fail closed: no identity, or an identity that is not a system
-	// administrator, gets no information about the global chain.
-	claims := middleware.GetClaims(r.Context())
-	if claims == nil || claims.Role != middleware.RoleSuperAdmin {
+	// Fail closed: no identity, or an identity that is not a HUMAN system
+	// administrator, gets no information about the global chain. API tokens
+	// are org-confined and never pass this check, even super-admin-role ones.
+	if !isSystemAdminCaller(r.Context()) {
 		respondError(w, http.StatusForbidden, "forbidden: audit chain verification requires system-admin")
 		return
 	}

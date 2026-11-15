@@ -52,22 +52,31 @@ prod-build:
 	docker compose -f docker/docker-compose.prod.yml --env-file .env.prod build
 
 # Pull the pinned release images for FREECLOUD_VERSION (from .env.prod)
-# instead of compiling on the host. Like prod-up it sources the generated
+# instead of compiling on the host. Like prod-up it loads the generated
 # secrets first, so compose can interpolate POSTGRES_PASSWORD when parsing.
+# The loader exports KEY=value lines literally — the file is never sourced,
+# so a tampered value cannot execute as shell.
 prod-pull: prod-secrets-init
-	@set -a && . .secrets/secrets.env && set +a && \
+	@scripts/load-secrets-env.sh .secrets/secrets.env -- \
 		docker compose -f docker/docker-compose.prod.yml --env-file .env.prod pull backend frontend keycloak migrate
 
-# C3: prod-up generates secrets (if not yet present) then sources them into the
+# C3: prod-up generates secrets (if not yet present) then loads them into the
 # shell so compose can interpolate POSTGRES_PASSWORD / KC_ADMIN_PASSWORD into
-# URL strings in docker-compose.prod.yml.
+# URL strings in docker-compose.prod.yml. Never `set -a && . file` here: see
+# scripts/load-secrets-env.sh.
 # Deliberately NO --build: the app images are the pinned release images
 # (FREECLOUD_VERSION, see prod-pull), and --build would silently rebuild from
 # local source and retag over them, defeating pinning/rollback. Compose still
 # builds any image that is missing locally (e.g. freecloud-postgres:local on
 # first deploy); to deploy from source instead, run `make prod-build` first.
 prod-up: prod-secrets-init
-	@set -a && . .secrets/secrets.env && set +a && \
+	@if grep -Eq '^(SLACK_WEBHOOK_URL|LDAP_BIND_PASSWORD|GF_ADMIN_PASSWORD|DEVICE_COOKIE_SECRET)=.+' .env.prod; then \
+		echo "ERROR: .env.prod still sets a secret that is now read only from .secrets/secrets.env:" >&2; \
+		grep -Eo '^(SLACK_WEBHOOK_URL|LDAP_BIND_PASSWORD|GF_ADMIN_PASSWORD|DEVICE_COOKIE_SECRET)=' .env.prod >&2; \
+		echo "Move it to .secrets/secrets.env and delete the line (docs/DEPLOYMENT.md, Upgrades)." >&2; \
+		exit 1; \
+	fi
+	@scripts/load-secrets-env.sh .secrets/secrets.env -- \
 		docker compose -f docker/docker-compose.prod.yml --env-file .env.prod up -d
 
 prod-down:
@@ -76,11 +85,14 @@ prod-down:
 # Full backup bundle: PostgreSQL cluster dump (via the prod compose postgres
 # service, which must be up) + .secrets/ + manifest. See
 # docs/BACKUP_RESTORE.md. BACKUP_PASSPHRASE / BACKUP_RETENTION_DAYS in the
-# environment are passed through to scripts/backup-bundle.sh.
+# environment are passed through to scripts/backup-bundle.sh. The bundle is
+# encrypted; without BACKUP_PASSPHRASE the script aborts unless BACKUP_ARGS
+# carries --allow-plaintext (drills/tests only, never production).
 BACKUP_DIR ?= ./backups
+BACKUP_ARGS ?=
 
 prod-backup:
-	scripts/backup-bundle.sh --compose $(BACKUP_DIR)
+	scripts/backup-bundle.sh --compose $(BACKUP_DIR) $(BACKUP_ARGS)
 
 # C1/C2 — All-in-one localhost stack (no TLS, no required env).
 # Generates secrets on first boot, then starts all services.
@@ -182,7 +194,7 @@ test-db:
 			-e POSTGRES_USER=freecloud \
 			-e POSTGRES_PASSWORD=freecloud \
 			-e POSTGRES_DB=freecloud_test \
-			-p 55432:5432 \
+			-p 127.0.0.1:55432:5432 \
 			postgres:16-alpine >/dev/null; then \
 			echo "ERROR: failed to start the Postgres container. Is the Docker daemon running?"; \
 			exit 1; \

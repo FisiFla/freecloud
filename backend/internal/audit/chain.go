@@ -1,6 +1,13 @@
 // Package audit provides the hash-chaining layer for audit log integrity (C1).
 // Each row's SHA-256 hash covers its canonical content plus the previous row's
 // hash, forming an append-only chain anchored at seq order.
+//
+// Threat-model limitation: the chain is UNKEYED (plain SHA-256 over public
+// inputs), so it detects corruption and tampering by anyone without database
+// write access — but someone WITH write access to the audit_logs table can
+// modify a row and recompute every later hash. A keyed chain (HMAC with a
+// server-side secret) would close that gap; it needs a migration plus secret
+// plumbing and is tracked as a follow-up.
 package audit
 
 import (

@@ -7,7 +7,17 @@
  * helper.
  */
 import type { JWT } from "@auth/core/jwt";
+import { requiredProdEnv } from "./env";
 import { refreshAccessToken, type RefreshableToken } from "./keycloak";
+
+/**
+ * The dashboard's public origin. Auth.js treats AUTH_URL as optional and
+ * otherwise derives redirect URIs from request Host headers — in production
+ * it is required here (this module is imported by src/auth.ts, so the app
+ * refuses to boot without it) so a forged Host header can never steer OAuth
+ * callbacks. In development Auth.js keeps deriving it from the request.
+ */
+export const authUrl = requiredProdEnv("AUTH_URL", "");
 
 /**
  * Session lifetime in seconds (8 hours).

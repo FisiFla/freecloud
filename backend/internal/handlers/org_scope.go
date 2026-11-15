@@ -45,13 +45,16 @@ func (h *Handler) requireAppInCallerOrg(w http.ResponseWriter, r *http.Request, 
 	return h.requireResourceInCallerOrg(w, r, "connected_apps", "id", appID, "app not found")
 }
 
-// isSystemAdminCaller reports whether the authenticated caller holds the
-// global system-admin role (RoleSuperAdmin), as opposed to an org-scoped
-// admin/member. Used by read endpoints that otherwise expose realm/fleet-
-// wide data across every tenant (M1): only a system admin sees the
-// unfiltered view; every other caller is restricted to their own org (or
-// denied entirely where there is no per-org scoping to fall back to).
+// isSystemAdminCaller reports whether the authenticated caller is a HUMAN
+// holder of the global system-admin role (RoleSuperAdmin), as opposed to an
+// org-scoped admin/member — or an API token, which never passes even with
+// the super-admin role (tokens are always org-confined). Used by read
+// endpoints that otherwise expose realm/fleet-wide data across every tenant
+// (M1): only a human system admin sees the unfiltered view; every other
+// caller is restricted to their own org (or denied entirely where there is
+// no per-org scoping to fall back to).
 func isSystemAdminCaller(ctx context.Context) bool {
-	claims := middleware.GetClaims(ctx)
-	return claims != nil && claims.Role == middleware.RoleSuperAdmin
+	// Human system admins only: API tokens are always org-confined (even
+	// super-admin-role ones) and must never take a cross-tenant bypass.
+	return middleware.IsHumanSystemAdmin(middleware.GetClaims(ctx))
 }

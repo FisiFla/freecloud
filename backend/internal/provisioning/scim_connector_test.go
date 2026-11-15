@@ -11,6 +11,7 @@ import (
 )
 
 func TestSCIMConnector_ProvisionUser(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/Users" {
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
@@ -43,6 +44,7 @@ func TestSCIMConnector_ProvisionUser(t *testing.T) {
 }
 
 func TestSCIMConnector_DeprovisionUser(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var capturedBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch || !strings.HasSuffix(r.URL.Path, "/Users/rid-1") {
@@ -78,6 +80,7 @@ func TestSCIMConnector_DeprovisionUser(t *testing.T) {
 }
 
 func TestSCIMConnector_UpdateUser(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var capturedBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPatch || !strings.HasSuffix(r.URL.Path, "/Users/rid-2") {
@@ -107,6 +110,7 @@ func TestSCIMConnector_UpdateUser(t *testing.T) {
 }
 
 func TestSCIMConnector_InvalidBaseURL(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	c := NewSCIMConnector("http://127.0.0.1:1", "tok")
 	user := ProvisionableUser{Email: "x@y.com"}
 	_, err := c.ProvisionUser(context.Background(), user)
@@ -116,6 +120,7 @@ func TestSCIMConnector_InvalidBaseURL(t *testing.T) {
 }
 
 func TestSCIMConnector_FullFlow(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	// Tracks the sequence of calls: create → update → deactivate.
 	var calls []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

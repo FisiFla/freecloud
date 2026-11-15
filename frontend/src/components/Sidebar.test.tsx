@@ -1,10 +1,17 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
+const { useSessionMock, federatedSignOutMock } = vi.hoisted(() => ({
+  useSessionMock: vi.fn(),
+  federatedSignOutMock: vi.fn(),
+}));
 vi.mock("next/navigation", () => ({ usePathname: () => "/employees" }));
 vi.mock("next-auth/react", () => ({
-  useSession: () => ({ data: null, status: "unauthenticated" }),
+  useSession: (...args: unknown[]) => useSessionMock(...args),
   signOut: vi.fn(),
+}));
+vi.mock("@/lib/federated-logout", () => ({
+  federatedSignOut: (...args: unknown[]) => federatedSignOutMock(...args),
 }));
 vi.mock("@/app/providers", () => ({
   useOrg: () => ({
@@ -33,6 +40,28 @@ const localStorageMock = (() => {
   };
 })();
 Object.defineProperty(window, "localStorage", { value: localStorageMock });
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  useSessionMock.mockReturnValue({ data: null, status: "unauthenticated" });
+});
+
+describe("Sidebar sign out", () => {
+  it("is hidden when there is no session", () => {
+    render(<Sidebar />);
+    expect(screen.queryByLabelText("Sign out")).toBeNull();
+  });
+
+  it("runs federated sign-out (ending the Keycloak SSO session too)", () => {
+    useSessionMock.mockReturnValue({
+      data: { user: { name: "Op", email: "op@example.com" } },
+      status: "authenticated",
+    });
+    render(<Sidebar />);
+    fireEvent.click(screen.getByLabelText("Sign out"));
+    expect(federatedSignOutMock).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("Sidebar mobile drawer", () => {
   it("is not rendered until it is opened", () => {

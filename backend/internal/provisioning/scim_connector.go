@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/FisiFla/freecloud/backend/internal/httpx"
 )
@@ -24,11 +23,13 @@ type SCIMConnector struct {
 }
 
 // NewSCIMConnector creates a SCIMConnector targeting the given base URL.
+// The base URL is admin-configured, so all requests go through the hardened
+// outbound client (dial-time SSRF enforcement, redirect re-validation).
 func NewSCIMConnector(baseURL, bearerToken string) *SCIMConnector {
 	return &SCIMConnector{
 		baseURL:     strings.TrimRight(baseURL, "/"),
 		bearerToken: bearerToken,
-		client:      &http.Client{Timeout: 15 * time.Second},
+		client:      httpx.NewOutboundClient(0),
 	}
 }
 
@@ -87,13 +88,13 @@ func (s *SCIMConnector) ProvisionUser(ctx context.Context, user ProvisionableUse
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
 		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
-		return "", fmt.Errorf("scim: provision user returned %d: %s", resp.StatusCode, string(raw))
+		return "", fmt.Errorf("scim: provision user returned %d: %s", resp.StatusCode, httpx.TruncateErrorBody(raw))
 	}
 
 	var result struct {
 		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := httpx.DecodeBoundedJSON(resp.Body, 0, &result); err != nil {
 		return "", fmt.Errorf("scim: decode provision response: %w", err)
 	}
 	if result.ID == "" {
@@ -122,7 +123,7 @@ func (s *SCIMConnector) DeprovisionUser(ctx context.Context, remoteID string) er
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
-		return fmt.Errorf("scim: deprovision returned %d: %s", resp.StatusCode, string(raw))
+		return fmt.Errorf("scim: deprovision returned %d: %s", resp.StatusCode, httpx.TruncateErrorBody(raw))
 	}
 	return nil
 }
@@ -153,7 +154,7 @@ func (s *SCIMConnector) UpdateUser(ctx context.Context, remoteID string, user Pr
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
-		return fmt.Errorf("scim: update user returned %d: %s", resp.StatusCode, string(raw))
+		return fmt.Errorf("scim: update user returned %d: %s", resp.StatusCode, httpx.TruncateErrorBody(raw))
 	}
 	return nil
 }
@@ -192,13 +193,14 @@ func (s *SCIMConnector) SyncGroupMembership(ctx context.Context, remoteID string
 
 // findOrCreateGroup returns the SCIM group ID for the given display name, creating it if absent.
 func (s *SCIMConnector) findOrCreateGroup(ctx context.Context, displayName string) (string, error) {
-	// The display name is operator-controlled free text, so it is escaped
-	// before it is placed in the query string. Interpolating it raw broke
-	// the request line for a name containing a space, and a name containing
-	// a double quote injected into the SCIM filter expression — which made
-	// findOrCreateGroup return the first resource of an unrelated filter
-	// and put the user in an arbitrary group.
-	filter := `displayName eq "` + displayName + `"`
+	// The display name is interpolated into a SCIM filter string literal,
+	// so it must be escaped per SCIM filter string rules (RFC 7644
+	// §3.4.2.2, JSON string escaping): a raw double quote would terminate
+	// the literal and inject into the filter expression. Note
+	// url.Values.Encode below only escapes the URL transport encoding — it
+	// does NOT escape the SCIM filter itself, so the filter-level escaping
+	// here is what prevents the injection.
+	filter := `displayName eq "` + escapeSCIMFilterString(displayName) + `"`
 	query := url.Values{}
 	query.Set("filter", filter)
 	groupURL := s.baseURL + "/Groups?" + query.Encode()
@@ -211,10 +213,16 @@ func (s *SCIMConnector) findOrCreateGroup(ctx context.Context, displayName strin
 
 	var listResult struct {
 		Resources []struct {
-			ID string `json:"id"`
+			ID          string `json:"id"`
+			DisplayName string `json:"displayName"`
 		} `json:"Resources"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&listResult); err == nil && len(listResult.Resources) > 0 {
+	// Verify client-side that the returned group really is the requested
+	// one: filter semantics (case, substring vs equality, unicode folding)
+	// vary between servers, and a mismatched id would attach the user to
+	// the wrong group. On mismatch, fall through and create the group.
+	if err := httpx.DecodeBoundedJSON(resp.Body, 0, &listResult); err == nil &&
+		len(listResult.Resources) > 0 && listResult.Resources[0].DisplayName == displayName {
 		return listResult.Resources[0].ID, nil
 	}
 
@@ -235,10 +243,24 @@ func (s *SCIMConnector) findOrCreateGroup(ctx context.Context, displayName strin
 	var created struct {
 		ID string `json:"id"`
 	}
-	if err := json.NewDecoder(resp2.Body).Decode(&created); err != nil || created.ID == "" {
+	if err := httpx.DecodeBoundedJSON(resp2.Body, 0, &created); err != nil || created.ID == "" {
 		return "", fmt.Errorf("scim: create group response missing id")
 	}
 	return created.ID, nil
+}
+
+// escapeSCIMFilterString escapes a value for use inside a SCIM filter string
+// literal. RFC 7644 filter strings follow JSON string escaping, so encoding
+// via encoding/json and stripping the surrounding quotes is exactly right
+// (backslash, double quote and control characters are all handled).
+func escapeSCIMFilterString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		// json.Marshal on a string cannot fail; fail closed if it ever does.
+		return ""
+	}
+	// Strip the surrounding quotes: Marshal always emits at least "".
+	return string(b[1 : len(b)-1])
 }
 
 func (s *SCIMConnector) doRequest(ctx context.Context, method, url string, body []byte) (*http.Response, error) {

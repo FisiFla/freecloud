@@ -28,11 +28,62 @@
 # Does NOT require Docker — any reachable PostgreSQL instance works.
 
 set -euo pipefail
+umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/backup-lib.sh
+. "${SCRIPT_DIR}/backup-lib.sh"
 TMPDIR_BACKUP="$(mktemp -d)"
 VERIFY_DB=""
 KC_VERIFY_DB=""
+STRAY_UNSAFE=0
+
+# ── Extract one database section from a cluster dump ──────────────────────────
+# (Defined up here so the FC_LIB_ONLY test hook below can expose it; the
+# function only uses its arguments plus awk, so the move changes nothing.)
+#
+# pg_dumpall output is a cluster dump: it contains CREATE DATABASE statements
+# and \connect commands. Feeding the whole file to `psql --dbname=$VERIFY_DB`
+# creates databases named after the source (freecloud, keycloak) on the scratch
+# host and leaves $VERIFY_DB empty — which is why the assertions below used to
+# fail every single time. Extract only the section that belongs to the source
+# database and drop the cluster-level statements.
+extract_section() {
+  local dump="$1" target="$2" out="$3"
+  awk -v target="${target}" '
+    # A \connect line starts the section of exactly one database.
+    /^\\connect[ \t]/ {
+      db = $2
+      gsub(/"/, "", db)
+      in_section = (db == target)
+      seen = 1
+      next
+    }
+    # Everything before the first \connect is the cluster-global section
+    # (roles, role settings). It is skipped on purpose: the scratch host has
+    # its own roles, and a restored password hash would break them.
+    seen == 0 { next }
+    # Cluster-level statements do not belong to any database section.
+    # Matched case-insensitively: SQL keywords execute in any case, so a
+    # lowercase "create database" would otherwise slip into the section file
+    # and run against the scratch host.
+    { upper_stmt = toupper($0) }
+    upper_stmt ~ /^CREATE DATABASE / { next }
+    upper_stmt ~ /^ALTER DATABASE /  { next }
+    upper_stmt ~ /^DROP DATABASE /   { next }
+    in_section { print }
+  ' "${dump}" > "${out}"
+}
+
+# Test hook: `FC_LIB_ONLY=1 . scripts/verify-restore.sh` loads only
+# extract_section (used by scripts/test-backup-integrity.sh to exercise the
+# section filter without a live database). Normal runs are unaffected.
+if [ "${FC_LIB_ONLY:-}" = "1" ]; then
+  # The `exit 0` runs when executed (where `return` fails); shellcheck sees
+  # only the sourced path.
+  # shellcheck disable=SC2317
+  return 0 2>/dev/null || exit 0
+fi
 # The Keycloak database name is defined by the postgres init script.
 KC_DB=$(sed -n 's/^CREATE DATABASE \([A-Za-z0-9_]*\).*/\1/p' \
   "${SCRIPT_DIR}/../docker/postgres/init-keycloak-db.sql" 2> /dev/null | head -1)
@@ -64,11 +115,26 @@ cleanup() {
       if [ "${db}" = "${VERIFY_DB}" ] || [ "${db}" = "${KC_VERIFY_DB}" ]; then
         continue
       fi
+      # The name is interpolated into a DROP DATABASE statement run as the
+      # scratch superuser. A tampered dump could have created a database
+      # whose name breaks out of the quoting — only allow-listed names are
+      # dropped; anything else is left behind LOUDLY (failing the run) for a
+      # human to investigate.
+      if ! fc_valid_db_name "${db}"; then
+        echo "WARNING: refusing to auto-drop scratch database with an unexpected name: '${db}'." >&2
+        echo "WARNING: it was left behind on the scratch host — drop it manually after inspection." >&2
+        STRAY_UNSAFE=1
+        continue
+      fi
       echo "Dropping stray database ${db} ..."
       psql_scratch -c "DROP DATABASE IF EXISTS \"${db}\" WITH (FORCE);" > /dev/null 2>&1 || true
     done <<< "$(psql_scratch -c "SELECT datname FROM pg_database WHERE datistemplate = false;" 2>/dev/null || true)"
   fi
   rm -rf "$TMPDIR_BACKUP"
+  if [ "${STRAY_UNSAFE}" = "1" ]; then
+    echo "ERROR: a database with an unexpected (possibly malicious) name was left on the scratch host." >&2
+    exit 1
+  fi
 }
 trap cleanup EXIT
 
@@ -209,42 +275,14 @@ SRC_DEVICES=$(psql_source -c "SELECT COUNT(*) FROM devices;" | tr -d '[:space:]'
 echo "  Source: users=${SRC_USERS}, audit_logs=${SRC_AUDIT}, apps=${SRC_APPS}, devices=${SRC_DEVICES}"
 
 # ── Extract the target section from the cluster dump ──────────────────────────
-#
-# pg_dumpall output is a cluster dump: it contains CREATE DATABASE statements
-# and \connect commands. Feeding the whole file to `psql --dbname=$VERIFY_DB`
-# creates databases named after the source (freecloud, keycloak) on the scratch
-# host and leaves $VERIFY_DB empty — which is why the assertions below used to
-# fail every single time. Extract only the section that belongs to the source
-# database and drop the cluster-level statements.
-
-extract_section() {
-  local dump="$1" target="$2" out="$3"
-  awk -v target="${target}" '
-    # A \connect line starts the section of exactly one database.
-    /^\\connect[ \t]/ {
-      db = $2
-      gsub(/"/, "", db)
-      in_section = (db == target)
-      seen = 1
-      next
-    }
-    # Everything before the first \connect is the cluster-global section
-    # (roles, role settings). It is skipped on purpose: the scratch host has
-    # its own roles, and a restored password hash would break them.
-    seen == 0 { next }
-    # Cluster-level statements do not belong to any database section.
-    /^CREATE DATABASE / { next }
-    /^ALTER DATABASE /  { next }
-    /^DROP DATABASE /   { next }
-    in_section { print }
-  ' "${dump}" > "${out}"
-}
+# (extract_section is defined near the top of this file, above the
+# FC_LIB_ONLY test hook, so tests can source it standalone.)
 
 SECTION_FILE="$TMPDIR_BACKUP/target-section.sql"
 extract_section "$DUMP_FILE" "$TARGET_DB" "$SECTION_FILE"
 
 if [ ! -s "$SECTION_FILE" ]; then
-  if grep -q "^CREATE DATABASE " "$DUMP_FILE"; then
+  if grep -qi "^CREATE DATABASE " "$DUMP_FILE"; then
     echo "ERROR: the dump has no '${TARGET_DB}' section — it does not contain the source database." >&2
     exit 1
   fi

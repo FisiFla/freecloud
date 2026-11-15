@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useSession, signOut } from "next-auth/react";
+import { useSession } from "next-auth/react";
+import { federatedSignOut } from "@/lib/federated-logout";
 import { Cloud, Users, Grid, Shield, Settings, LogOut, ShieldCheck, LayoutDashboard, BarChart2, Layers, Lock, Plug2, FileBarChart2, Server, Mail, Link2, Building2, Menu, X } from "lucide-react";
 import DarkModeToggle from "./DarkModeToggle";
 import { useBodyScrollLock, useFocusTrap } from "./useFocusTrap";
@@ -144,7 +145,7 @@ export default function Sidebar() {
             <DarkModeToggle />
             {session && (
               <button
-                onClick={() => signOut({ callbackUrl: "/signin" })}
+                onClick={() => federatedSignOut()}
                 className="rounded-lg p-2.5 text-surface-fg-secondary transition-colors hover:bg-red-50 hover:text-red-600 focus-visible:ring-2 focus-visible:ring-indigo-500 dark:text-slate-500 dark:hover:bg-red-950 dark:hover:text-red-400"
                 aria-label="Sign out"
                 title="Sign out"

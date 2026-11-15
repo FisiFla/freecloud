@@ -23,7 +23,8 @@
 #                 admin Keycloak id via Admin API, org name via postgres).
 #                 Retries prod-smoke ONCE when it fails before any migration
 #                 completed (slow-disk postgres-init race — see stage code).
-#   2. BUNDLE     backup-bundle.sh --compose (unencrypted: BACKUP_PASSPHRASE=).
+#   2. BUNDLE     backup-bundle.sh --compose --allow-plaintext, then the
+#                 mandatory verify-bundle.sh integrity gate on the result.
 #   3. WIPE       down -v, assert the project's volumes/containers are gone,
 #                 move .secrets/ + .env.prod aside (total host loss).
 #   4. RESTORE    restore .secrets/ + .env.prod FROM THE BUNDLE ONLY,
@@ -44,11 +45,18 @@
 # marked MIRRORS-PROD-SMOKE. This script never edits prod-smoke.sh.
 
 set -euo pipefail
+umask 077
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
+# shellcheck source=scripts/backup-lib.sh
+. "${REPO_ROOT}/scripts/backup-lib.sh"
 
 COMPOSE_FILE="docker/docker-compose.prod.yml"
+# Pinned helper images (digests verified via `docker buildx imagetools
+# inspect`; never use floating tags for drill infrastructure).
+PY_IMAGE="python:3.12-alpine@sha256:c5ba3deef00c7758561a0f03c26f44f10589263d40e732b8748e0d1f38f6dd89"
+PG_SHIM_IMAGE="postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea"
 # COMPOSE_PROJECT_NAME: honoured if set by the caller; the drill default keeps
 # it away from every other stack on the host.
 : "${COMPOSE_PROJECT_NAME:=fcrestoredrill}"
@@ -354,7 +362,7 @@ PYEOF
   if py_out="$(docker run --rm --network "${net}" \
     -v "${DRILL_TMP}/kc_user.py:/kc_user.py:ro" \
     -v "${DRILL_TMP}/kc.pw:/kc.pw:ro" \
-    python:3.12-alpine python3 /kc_user.py "${email}" 2>"${DRILL_TMP}/kc_user.err")"; then
+    "${PY_IMAGE}" python3 /kc_user.py "${email}" 2>"${DRILL_TMP}/kc_user.err")"; then
     rc=0
   else
     rc=$?
@@ -497,20 +505,26 @@ stage_boot_save() {
 
 # ── Stage 2: BUNDLE ─────────────────────────────────────────────────────────
 stage_bundle() {
-  log "stage BUNDLE: taking an unencrypted backup bundle (--compose)"
-  # The drill covers the unencrypted bundle shape; an inherited
-  # BACKUP_PASSPHRASE must not silently switch it to encrypted.
-  if ! env BACKUP_PASSPHRASE= bash scripts/backup-bundle.sh --compose "${BUNDLE_OUT}" >"${DRILL_TMP}/bundle.log" 2>&1; then
+  log "stage BUNDLE: taking an unencrypted backup bundle (--compose --allow-plaintext)"
+  # The drill covers the unencrypted bundle shape (the nightly job covers
+  # the encrypted one); an inherited BACKUP_PASSPHRASE must not silently
+  # switch it to encrypted, and the explicit opt-out is required.
+  if ! env BACKUP_PASSPHRASE= bash scripts/backup-bundle.sh --compose --allow-plaintext "${BUNDLE_OUT}" >"${DRILL_TMP}/bundle.log" 2>&1; then
     tail -n 20 "${DRILL_TMP}/bundle.log" >&2 || true
-    stage_fail "BUNDLE" "backup-bundle.sh --compose failed"
+    stage_fail "BUNDLE" "backup-bundle.sh --compose --allow-plaintext failed"
   fi
-  BUNDLE_DIR="$(find "${BUNDLE_OUT}" -maxdepth 1 -name 'freecloud-bundle-*' -not -name '*.enc' -not -name '*.manifest.txt' | sort | tail -n 1)"
+  BUNDLE_DIR="$(find "${BUNDLE_OUT}" -maxdepth 1 -name 'freecloud-bundle-*' -not -name '*.enc' -not -name '*.manifest.txt' -not -name '*.hmac' | sort | tail -n 1)"
   [ -n "${BUNDLE_DIR}" ] && [ -d "${BUNDLE_DIR}" ] || stage_fail "BUNDLE" "no freecloud-bundle-* dir in ${BUNDLE_OUT}"
   for f in cluster.sql secrets.tar .env.prod manifest.txt; do
     [ -s "${BUNDLE_DIR}/${f}" ] || stage_fail "BUNDLE" "bundle is missing non-empty ${f}"
   done
   grep -q "env_prod: present" "${BUNDLE_DIR}/manifest.txt" \
     || stage_fail "BUNDLE" "bundle manifest does not record env_prod: present"
+  # Mandatory integrity gate: the fresh bundle must verify before the wipe.
+  if ! bash scripts/verify-bundle.sh "${BUNDLE_DIR}" >"${DRILL_TMP}/verify-bundle.log" 2>&1; then
+    tail -n 20 "${DRILL_TMP}/verify-bundle.log" >&2 || true
+    stage_fail "BUNDLE" "verify-bundle.sh rejected the fresh bundle"
+  fi
   log "bundle: ${BUNDLE_DIR} ($(du -sh "${BUNDLE_DIR}" | cut -f1))"
   result PASS "BUNDLE"
 }
@@ -553,7 +567,12 @@ snapshot_secrets() {
 stage_restore() {
   log "stage RESTORE: rebuilding the stack from the bundle alone"
   # Docs step 3, verbatim (BACKUP_RESTORE.md "Restore from a bundle on a
-  # fresh host"): the bundle tar carries .secrets/ with relative paths.
+  # fresh host"): verify the bundle, check the tar members, then extract.
+  # The bundle tar carries .secrets/ with relative paths.
+  bash scripts/verify-bundle.sh "${BUNDLE_DIR}" >"${DRILL_TMP}/reverify-bundle.log" 2>&1 \
+    || stage_fail "RESTORE" "verify-bundle.sh rejected the bundle before restore"
+  bash scripts/check-secrets-tar.sh "${BUNDLE_DIR}/secrets.tar" \
+    || stage_fail "RESTORE" "bundle secrets.tar failed the member-safety check"
   tar -xf "${BUNDLE_DIR}/secrets.tar" \
     || stage_fail "RESTORE" "could not extract secrets.tar from bundle"
   cp "${BUNDLE_DIR}/.env.prod" .env.prod \
@@ -580,19 +599,19 @@ stage_restore() {
     || stage_fail "RESTORE" "prod-secrets-init did not report no-op on restored secrets"
   log "prod-secrets-init confirmed no-op: $(grep -m1 'already complete' "${DRILL_TMP}/secrets-init.log")"
 
-  # Docs step 5: source secrets, postgres only, restore the cluster dump.
-  # shellcheck disable=SC1091
-  set -a
-  . .secrets/secrets.env || stage_fail "RESTORE" "could not source restored secrets.env"
-  set +a
+  # Docs step 5: load secrets (literally, never sourced), postgres only,
+  # restore the cluster dump.
+  fc_load_secrets_env .secrets/secrets.env \
+    || stage_fail "RESTORE" "could not load restored secrets.env"
   compose up -d postgres >"${DRILL_TMP}/pg-up.log" 2>&1 \
     || stage_fail "RESTORE" "could not bring up postgres alone"
   wait_postgres || stage_fail "RESTORE" "postgres never became ready"
 
   # restore.sh needs psql on PATH and an interactive YES. No apt-get: a
-  # docker one-shot shim (postgres:16, matching the server major) on the
-  # compose network, with the bundle dir mounted at the same path (restore.sh
-  # passes --file=<host path>, which must resolve inside the shim too).
+  # docker one-shot shim (pinned postgres:16, matching the server major) on
+  # the compose network, with the bundle dir mounted at the same path
+  # (restore.sh passes --file=<host path>, which must resolve inside the
+  # shim too).
   # The PG password comes from the RESTORED per-key file — read, never echoed.
   PG_RESTORE_PW="$(tr -d '[:space:]' <.secrets/files/postgres_password)"
   [ -n "${PG_RESTORE_PW}" ] || stage_fail "RESTORE" "restored postgres_password file is empty"
@@ -602,17 +621,19 @@ stage_restore() {
 #!/usr/bin/env bash
 exec docker run --rm -i --network "${RESTORE_NET}" -e PGPASSWORD \\
   -v "${BUNDLE_DIR}:${BUNDLE_DIR}:ro" \\
-  postgres:16-alpine psql "\$@"
+  "${PG_SHIM_IMAGE}" psql "\$@"
 EOF
   chmod +x "${SHIM_DIR}/psql"
-  log "restoring cluster.sql via restore.sh (shim psql on ${RESTORE_NET})"
+  log "restoring the verified bundle via restore.sh --bundle (shim psql on ${RESTORE_NET})"
   # RESTORE_DATABASE_URL must point at the postgres maintenance DB; the host
-  # part is the in-network service name the shim resolves.
+  # part is the in-network service name the shim resolves. --bundle re-runs
+  # the verify gate inside restore.sh and enables the manifest-inventory
+  # comparison after the restore.
   if ! printf 'YES\n' | RESTORE_DATABASE_URL="postgres://freecloud:${PG_RESTORE_PW}@postgres:5432/postgres" \
-      PATH="${SHIM_DIR}:${PATH}" bash scripts/restore.sh "${BUNDLE_DIR}/cluster.sql" \
+      PATH="${SHIM_DIR}:${PATH}" bash scripts/restore.sh --bundle "${BUNDLE_DIR}" \
       >"${DRILL_TMP}/restore.log" 2>&1; then
     tail -n 30 "${DRILL_TMP}/restore.log" >&2 || true
-    stage_fail "RESTORE" "scripts/restore.sh failed"
+    stage_fail "RESTORE" "scripts/restore.sh --bundle failed"
   fi
   PG_RESTORE_PW=""
   grep -q "Restore complete" "${DRILL_TMP}/restore.log" \

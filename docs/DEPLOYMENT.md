@@ -33,7 +33,7 @@ The following are generated automatically on first boot by the `secrets-init`
 container and stored in `.secrets/secrets.env`. You do not set them in `.env.prod`:
 
 `POSTGRES_PASSWORD`, `AUTH_SECRET`, `SCIM_BEARER_TOKEN`, `SETUP_TOKEN`, `ACCESS_EVAL_TOKEN`,
-`FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD`, `PROVISIONING_MASTER_KEY`
+`FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD`, `PROVISIONING_MASTER_KEY`, `REDIS_PASSWORD`
 
 The same values are also written one-per-file under `.secrets/files/`. The
 production compose mounts them as Docker secrets and the services read them
@@ -68,7 +68,15 @@ from `DATABASE_PASSWORD_FILE` (the same `postgres_password` Docker secret the
 **Do not delete `.secrets/secrets.env`.** The generator only fills in the
 *missing* keys and preserves every existing value, so deleting the file
 regenerates the database and Keycloak passwords and breaks the running
-cluster. Rotate one secret at a time instead:
+cluster. Rotate one secret at a time instead.
+
+Every line in `.secrets/secrets.env` must match
+`^[A-Z_][A-Z0-9_]*=[A-Za-z0-9_./+=:@-]*$` — the file is shell-sourced by the
+Makefile, so spaces, quotes, `$`, backticks and other shell metacharacters
+are rejected with an error instead of being interpreted. Replacement values
+you pick by hand (and every hand-added key below) must stay inside that
+charset: letters, digits and `_ . / + = : @ -`. A Slack webhook URL or API
+token passes as-is.
 
 | Secret | How to rotate | Effect |
 |---|---|---|
@@ -77,6 +85,7 @@ cluster. Rotate one secret at a time instead:
 | `ACCESS_EVAL_TOKEN` | Remove the line, re-run `make prod-secrets-init`, restart the backend **and** Keycloak. | The posture SPI can no longer evaluate access. |
 | `FLEET_WEBHOOK_SECRET` | Remove the line, re-run `make prod-secrets-init`, restart the backend, and update the webhook secret in Fleet. | Enrollment callbacks with the old secret are rejected. Also rotates the device-cookie signing key unless `DEVICE_COOKIE_SECRET` is set. |
 | `PROVISIONING_MASTER_KEY` | Remove the line, re-run `make prod-secrets-init`, restart the backend, and re-enter the connector tokens in Settings → Integrations. | Stored connector secrets have to be re-entered (they can no longer be decrypted). |
+| `REDIS_PASSWORD` | Remove the line, re-run `make prod-secrets-init`, then recreate **both** the redis and backend services (`make prod-up`). | Rate-limit counters reset; in-flight requests may briefly see stale limits. The backend reads the password once at config load and redis reads it once at start, so both must pick up the new file together. |
 | `POSTGRES_PASSWORD` | **Not rotatable by re-running the generator** — the Postgres image applies the password only when the data directory is empty. Change it in the database and update the file:<br>`ALTER ROLE freecloud WITH PASSWORD '<new>';`<br>then set `POSTGRES_PASSWORD=<new>` in `.secrets/secrets.env`, re-run `make prod-secrets-init` and restart the backend. | The backend must be restarted with the new DSN. |
 | `KC_ADMIN_PASSWORD` | **Not rotatable by re-running the generator** — Keycloak stores the admin password in its own database after first boot. Change it with `kcadm` over the **internal** Keycloak port (see [Keycloak admin access](#keycloak-admin-access-internal-only); the public URL 404s admin paths), then update `.secrets/secrets.env` the same way as above. | The Keycloak master-realm admin password changes. |
 
@@ -86,15 +95,19 @@ recreate the affected services (`make prod-up`).
 
 ### Keycloak admin access (internal only)
 
-The public Keycloak vhost returns **404** for `/admin/*` and
-`/realms/master/*` (`@kcadmin` in `docker/Caddyfile`). The admin console and
-any master-realm `kcadm` call against the public `KC_PUBLIC_URL` therefore
+The public Keycloak vhost returns **404** for `/admin`, `/admin/*`,
+`/realms/master` and `/realms/master/*` (`@kcadmin` in `docker/Caddyfile` —
+the bare paths are blocked too, otherwise `/realms/master` would still
+answer master-realm metadata publicly). The admin console and any
+master-realm `kcadm` call against the public `KC_PUBLIC_URL` therefore
 fail — administer Keycloak from inside the compose network instead.
 
 From a shell on the host (repo root), with the secrets loaded:
 
 ```bash
-set -a && . .secrets/secrets.env && set +a
+# Opens a subshell with the secrets exported (never `. secrets.env`: sourcing
+# would execute the file). `exit` when done.
+scripts/load-secrets-env.sh .secrets/secrets.env -- bash
 KC="docker compose -f docker/docker-compose.prod.yml --env-file .env.prod exec -T keycloak"
 $KC /opt/keycloak/bin/kcadm.sh config credentials --server http://localhost:8080 \
   --realm master --user admin --password "$KC_ADMIN_PASSWORD"
@@ -122,7 +135,9 @@ show a temporary IP-allowlist snippet for emergencies — revert it after).
 
 Set in `.secrets/secrets.env` (the generator preserves hand-added keys) to
 HMAC-sign device-identity cookies independently of `FLEET_WEBHOOK_SECRET`.
-Unset = fall back to the Fleet webhook secret (see `docs/SECRETS.md`).
+Unset = fall back to the Fleet webhook secret (see `docs/SECRETS.md`). The
+backend reads it via `DEVICE_COOKIE_SECRET_FILE`, so the value never appears
+in `docker inspect`.
 
 ### Fleet teams multi-tenant mapping (`fleet_team_orgs`)
 
@@ -168,8 +183,11 @@ SMTP_TO=admin@example.com
 SMTP_PASSWORD=CHANGE_ME
 ```
 
-The same applies to the other channels: `NOTIFY_SLACK` + `SLACK_WEBHOOK_URL`
-and `NOTIFY_WEBHOOK` + `WEBHOOK_URL` + `WEBHOOK_SECRET`.
+The same flag pattern applies to the other channels: `NOTIFY_SLACK` and
+`NOTIFY_WEBHOOK` + `WEBHOOK_URL` + `WEBHOOK_SECRET` (`.env.prod` variables).
+`SLACK_WEBHOOK_URL` itself, however, is a secret: set it as a hand-added key
+in `.secrets/secrets.env`, not in `.env.prod` — the backend reads it via
+`SLACK_WEBHOOK_URL_FILE` (see "Upgrade notes: secrets moved to files").
 
 ## Deploy
 
@@ -189,7 +207,11 @@ Startup sequence (all automatic, single command):
   secret it generated (no manual `make kc-setup` required).
 - A dedicated `redis` container backs the shared rate limiter. `REDIS_URL` is
   **required in production** — the backend fails closed at startup without it
-  (it is pre-wired in the prod compose file; nothing to configure).
+  (it is pre-wired in the prod compose file; nothing to configure). Redis is
+  password-authenticated: `REDIS_PASSWORD` is auto-generated into
+  `.secrets/secrets.env`, redis reads it from its secret file at start, and
+  the backend injects it into its password-less `REDIS_URL` at config load
+  (see "Redis password" below). Nothing else uses this Redis.
 
 There is **no** `setup_realm.sh` script to run. Do not run `make kc-setup` — it
 has been removed.
@@ -312,6 +334,53 @@ The Postgres image (`freecloud-postgres:local`) is built on the host from
 If the GHCR packages are private, run `docker login ghcr.io` on the host
 (with a token that can read packages) before `make prod-pull`.
 
+### Upgrade notes: secrets moved to files
+
+Recent releases deliver every secret as a Docker secret file instead of a
+plain environment value, so secrets stay out of `docker inspect`. If you
+upgrade from a release that set any of these in `.env.prod` (or exported
+them in the shell), move each value to `.secrets/secrets.env` as a
+hand-added `KEY=value` line and re-run `make prod-secrets-init` — values
+left in `.env.prod` are silently no longer read:
+
+| Secret | Old location | New location (hand-added key) |
+|---|---|---|
+| `SLACK_WEBHOOK_URL` | `.env.prod` | `.secrets/secrets.env` → backend `SLACK_WEBHOOK_URL_FILE` |
+| `LDAP_BIND_PASSWORD` | `.env.prod` / shell env | `.secrets/secrets.env` → backend `LDAP_BIND_PASSWORD_FILE` |
+| `GF_ADMIN_PASSWORD` | `.env.prod` | `.secrets/secrets.env` → Grafana `GF_SECURITY_ADMIN_PASSWORD__FILE` |
+
+`DEVICE_COOKIE_SECRET` already lived in `.secrets/secrets.env`; it now
+reaches the backend via `DEVICE_COOKIE_SECRET_FILE` with no operator action
+needed. All three backend secrets stay optional: an absent value mirrors as
+an empty file, which keeps meaning "not configured". Grafana is the
+exception — it refuses to start until `GF_ADMIN_PASSWORD` is set (see
+[docs/OBSERVABILITY.md](OBSERVABILITY.md)).
+
+Two more upgrade notes:
+
+- `.secrets/secrets.env` lines must now match
+  `^[A-Z_][A-Z0-9_]*=[A-Za-z0-9_./+=:@-]*$` (see "Rotating secrets" above).
+  The next `make prod-secrets-init` validates the whole file and aborts with
+  a clear error naming the offending key if a hand-added line falls outside
+  the charset — fix the line and re-run. Nothing is rewritten on abort.
+- `REDIS_PASSWORD` is new and auto-generated (see "Redis password" below):
+  the first `make prod-up` after upgrading generates it and recreates the
+  redis and backend containers against the new secret. The redis container
+  also runs as its non-root `redis` user now — no action needed: the data
+  volume inherits that ownership from the image.
+
+### Redis password
+
+`REDIS_PASSWORD` is auto-generated into `.secrets/secrets.env` like the
+other generated secrets and mirrored one-per-file. Redis reads it from its
+secret file at start (it never appears on a command line or in
+`docker inspect`), the backend reads the same file via `REDIS_PASSWORD_FILE`
+and injects it into its password-less `REDIS_URL` at config load, and the
+redis healthcheck authenticates from the file. Rotate it like any generated
+secret (see the rotation table above). The dev stacks (`localhost`, `sim`,
+`e2e`) each define their own password-less Redis and are intentionally left
+that way — only production authenticates.
+
 ## Troubleshooting
 
 - **Backend exits immediately** with an `insecure configuration` error — a
@@ -353,8 +422,7 @@ Grafana stack is available as a Compose overlay:
 ```bash
 # The secrets have to be in the shell environment — the production compose
 # resolves the database DSN at parse time and fails fast without it.
-set -a && . .secrets/secrets.env && set +a
-docker compose \
+scripts/load-secrets-env.sh .secrets/secrets.env -- docker compose \
   -f docker/docker-compose.prod.yml \
   -f docker/docker-compose.observability.yml \
   --env-file .env.prod up -d
@@ -401,6 +469,49 @@ sync, and re-run `make prod-up`.
 
 The images in `backend/Dockerfile` and `frontend/Dockerfile` are pinned the
 same way.
+
+**Scheduled pin refresh.** A digest pin freezes a base image in time,
+including its OS packages — a pin from six months ago silently misses six
+months of CVE fixes. Refresh the pins on a schedule (monthly is a good
+default; immediately when a base-image CVE lands): re-run the inspect
+commands above for every pinned image, update any digest that moved,
+redeploy to a staging stack first (`docker-compose.localhost.yml` plus the
+e2e suite), then `make prod-pull` + `make prod-up`. A digest that changed
+under an unchanged tag means the upstream rebuilt the image — read the
+upstream release notes before rolling it out.
+
+### Pinning release images by digest
+
+The first-party images (`ghcr.io/fisifla/freecloud/{backend,frontend,keycloak}`)
+float on the mutable `FREECLOUD_VERSION` tag by default: re-pulling the same
+tag later can fetch a rebuilt image. To freeze exactly what you deploy, set
+the optional digest-suffix variables in `.env.prod` alongside the version:
+
+```bash
+FREECLOUD_VERSION=1.7.0
+FREECLOUD_BACKEND_DIGEST=@sha256:<digest of the backend image>
+FREECLOUD_FRONTEND_DIGEST=@sha256:<digest of the frontend image>
+FREECLOUD_KEYCLOAK_DIGEST=@sha256:<digest of the keycloak image>
+```
+
+Read each digest from the registry (no pull needed):
+
+```bash
+docker buildx imagetools inspect \
+  ghcr.io/fisifla/freecloud/backend:1.7.0 --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect \
+  ghcr.io/fisifla/freecloud/frontend:1.7.0 --format '{{.Manifest.Digest}}'
+docker buildx imagetools inspect \
+  ghcr.io/fisifla/freecloud/keycloak:1.7.0 --format '{{.Manifest.Digest}}'
+```
+
+(If the GHCR packages are private, `docker login ghcr.io` first.) Then
+`make prod-pull` + `make prod-up` as usual — the compose file resolves
+`tag` + `digest-suffix` to the exact image, and fails loudly if the digest
+does not exist. Leave the variables unset to keep plain tag behaviour.
+Bump them together with `FREECLOUD_VERSION` on every upgrade, and clear all
+three when rolling back to a version whose digests you did not record
+(unset = tag behaviour, so the rollback still works).
 
 ## Outbound Provisioning
 
@@ -606,6 +717,16 @@ never read at all, and network/geo conditions evaluate the direct connection
 IP — safe by default, but requires no proxy in front of Keycloak for those
 conditions to see the real client IP.
 
+**Production topology requirement.** In `docker/docker-compose.prod.yml` the
+Keycloak service sets `TRUST_PROXY=true` and has **no `ports:` mapping**:
+Caddy is the only path to Keycloak, which is what makes trusting the
+rightmost `X-Forwarded-For` hop sound. Never publish Keycloak's port to the
+host or to any network the proxy is meant to gate — the moment a client can
+reach Keycloak directly, a single forged `X-Forwarded-For` value becomes the
+trusted client IP and network/geo conditions can be bypassed. The same
+applies to custom deployments: whenever `TRUST_PROXY=true`, the reverse
+proxy must be the sole route to Keycloak.
+
 ## Provisioning Dry-Run and Reconcile
 
 **Dry-run** previews what a full provisioning push would do without sending any
@@ -680,10 +801,11 @@ POST /api/v1/federation/sources
 **Prerequisites:**
 
 1. A running Keycloak instance (already required for the core stack).
-2. `LDAP_BIND_PASSWORD` set in the backend's environment before creating any
-   federation source — the backend passes this to Keycloak when it creates the
-   federation component. Omitting it will cause the creation call to fail with
-   `400 Bad Request`.
+2. `LDAP_BIND_PASSWORD` set as a hand-added key in `.secrets/secrets.env`
+   (then `make prod-secrets-init` + `make prod-up`) before creating any
+   federation source — the backend reads it via `LDAP_BIND_PASSWORD_FILE`
+   and passes it to Keycloak when it creates the federation component.
+   Omitting it will cause the creation call to fail with `400 Bad Request`.
 
 **How it works:** the backend stores the federation source config in its own DB
 and creates a matching Keycloak LDAP federation component. Keycloak handles the

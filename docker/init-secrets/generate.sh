@@ -12,6 +12,7 @@
 #   ACCESS_EVAL_TOKEN    — posture-evaluation token (backend ↔ Keycloak SPI)
 #   FLEET_WEBHOOK_SECRET — Fleet enrollment-callback HMAC (+ default device-cookie HMAC)
 #   PROVISIONING_MASTER_KEY — AES-256-GCM key for stored connector secrets
+#   REDIS_PASSWORD — password for the production Redis (rate limiter store)
 #
 # It ALSO writes one file per secret to .secrets/files/<lowercase-key> so the
 # production compose can mount them as Docker secrets (see docker-compose.prod.yml
@@ -22,6 +23,24 @@
 # unset, freecloud-device-id cookies are signed with FLEET_WEBHOOK_SECRET.
 # Set DEVICE_COOKIE_SECRET in secrets.env by hand to rotate cookie signing
 # independently of the Fleet webhook. Hand-added keys are preserved.
+# It is mirrored one-per-file (empty when unset) so the prod backend can read
+# it via DEVICE_COOKIE_SECRET_FILE; empty keeps meaning "not configured".
+#
+# SLACK_WEBHOOK_URL, LDAP_BIND_PASSWORD and GF_ADMIN_PASSWORD are likewise
+# operator-managed and mirrored one-per-file (never generated): the backend
+# reads the first two via <VAR>_FILE and Grafana reads its admin password
+# via GF_SECURITY_ADMIN_PASSWORD__FILE, so none of them is interpolated
+# by value into a container environment. See MIRRORED_KEYS below.
+#
+# Every line this script writes to secrets.env must match
+#   ^[A-Z_][A-Z0-9_]*=[A-Za-z0-9_./+=:@-]*$
+# because the file is a plain KEY=value list that older tooling shell-sourced
+# (the Makefile now uses scripts/load-secrets-env.sh, which never evaluates
+# it): anything outside that charset (spaces, quotes, $, backticks,
+# command substitutions) would be interpreted by the shell instead of read
+# as a literal value. Hand-added or hand-edited lines outside the charset
+# abort the run with an error — pick a value from the allowed charset
+# (a Slack webhook URL or API token passes as-is).
 #
 # SLACK_ALERT_WEBHOOK_URL is likewise operator-managed and never generated.
 # Its per-key file (.secrets/files/slack_alert_webhook_url) is the Docker
@@ -52,7 +71,16 @@
 #     Keycloak stores the admin password in its own database after first boot.
 #     Rotate them with ALTER ROLE / kcadm — see docs/DEPLOYMENT.md.
 
-set -e
+# Strongest options every shell that runs this supports. It executes as
+# /bin/sh in the busybox:1.36 secrets-init container (busybox ash, which
+# supports -u and -o pipefail) AND as host `sh` under `make verify-secrets`,
+# where sh may be dash (no pipefail) — hence the guarded probe instead of a
+# bare `set -o pipefail`, which would abort the run on dash. The explicit
+# non-empty checks on every generated value below are the backstop where
+# pipefail is unavailable: a failed generator pipeline can never silently
+# produce an empty secret.
+set -eu
+set -o pipefail 2>/dev/null || true
 # The secrets file (and every per-key file) must never be world-readable, not
 # even for the window between creation and chmod.
 umask 077
@@ -62,12 +90,24 @@ SECRETS_DIR=${SECRETS_DIR:-/run/freecloud/files}
 
 # Keys owned by the generator. Anything else in secrets.env is operator-managed
 # and is copied through untouched.
-GENERATED_KEYS="POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN SETUP_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY"
+GENERATED_KEYS="POSTGRES_PASSWORD KC_ADMIN_PASSWORD AUTH_SECRET SCIM_BEARER_TOKEN SETUP_TOKEN ACCESS_EVAL_TOKEN FLEET_WEBHOOK_SECRET PROVISIONING_MASTER_KEY REDIS_PASSWORD"
 
 # Operator-managed keys mirrored one-per-file (like the generated ones) so
 # they can be mounted as Docker secrets. Unlike GENERATED_KEYS these are
 # never created here: an unset key mirrors as an empty file.
-MIRRORED_KEYS="SLACK_ALERT_WEBHOOK_URL FLEET_API_TOKEN"
+#
+#   SLACK_ALERT_WEBHOOK_URL — Alertmanager api_url_file (empty = no delivery)
+#   FLEET_API_TOKEN         — backend FLEET_API_TOKEN_FILE (required by backend)
+#   SLACK_WEBHOOK_URL       — backend SLACK_WEBHOOK_URL_FILE (optional)
+#   DEVICE_COOKIE_SECRET    — backend DEVICE_COOKIE_SECRET_FILE (optional)
+#   LDAP_BIND_PASSWORD      — backend LDAP_BIND_PASSWORD_FILE (optional)
+#   PROVISIONING_MASTER_KEY_PREVIOUS — backend ..._PREVIOUS_FILE (optional,
+#                             retired key kept decrypt-only during a rotation)
+#   GF_ADMIN_PASSWORD       — Grafana GF_SECURITY_ADMIN_PASSWORD__FILE
+#                             (observability overlay; Grafana refuses to
+#                             start when the file is empty — see its compose
+#                             entrypoint guard and docs/OBSERVABILITY.md)
+MIRRORED_KEYS="SLACK_ALERT_WEBHOOK_URL FLEET_API_TOKEN SLACK_WEBHOOK_URL DEVICE_COOKIE_SECRET LDAP_BIND_PASSWORD GF_ADMIN_PASSWORD PROVISIONING_MASTER_KEY_PREVIOUS"
 
 gen() {
   # 32 random bytes → 64-char hex string (256 bits of entropy).
@@ -89,6 +129,38 @@ value_of() {
 
 lower_key() {
   printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# check_line LINE — require the safe secrets.env charset (see the header).
+# Operators may still shell-source this file by hand, so a line
+# outside ^[A-Z_][A-Z0-9_]*=[A-Za-z0-9_./+=:@-]*$ would be interpreted by the
+# shell instead of read literally. Reject it with a clear error and abort
+# BEFORE the atomic rename, so the previous secrets.env stays intact.
+check_line() {
+  case "$1" in
+    *=*) ;;
+    *)
+      echo "[secrets-init] ERROR: refusing to write line without KEY=value form: '$1'" >&2
+      exit 1
+      ;;
+  esac
+  _key=${1%%=*}
+  _value=${1#*=}
+  case "${_key}" in
+    ''|*[!A-Z0-9_]*|[^A-Z_]*)
+      echo "[secrets-init] ERROR: refusing line with invalid key '${_key}': keys must match ^[A-Z_][A-Z0-9_]*\$" >&2
+      exit 1
+      ;;
+  esac
+  case "${_value}" in
+    *[!A-Za-z0-9_./+=:@-]*)
+      echo "[secrets-init] ERROR: refusing ${_key}: value contains characters outside [A-Za-z0-9_./+=:@-]." >&2
+      echo "[secrets-init] ERROR: secrets.env is shell-sourced, so spaces, quotes, \$, backticks and other" >&2
+      echo "[secrets-init] ERROR: shell metacharacters are not allowed — pick a value from the allowed charset" >&2
+      echo "[secrets-init] ERROR: (letters, digits and _ . / + = : @ -; a Slack webhook URL or API token passes as-is)." >&2
+      exit 1
+      ;;
+  esac
 }
 
 # ── Idempotency check ────────────────────────────────────────────────────────
@@ -120,7 +192,29 @@ for key in ${MIRRORED_KEYS}; do
   fi
 done
 
+# Validate the existing file even when nothing needs regenerating: a
+# hand-added line lands in secrets.env between runs, so the early exit below
+# must not vouch for a file it never checked — every secrets-init run
+# guarantees the file is safe to shell-source.
+if [ -f "${SECRETS_FILE}" ]; then
+  while IFS= read -r existing_line; do
+    case "${existing_line}" in
+      ''|'#'*) continue ;;
+      *=*) ;;
+      *) continue ;;
+    esac
+    check_line "${existing_line}"
+  done < "${SECRETS_FILE}"
+fi
+
 if [ -z "${missing}" ] && [ "${files_ok}" -eq 1 ]; then
+  # Re-assert the 0444 mode written below: the non-root service users (e.g.
+  # redis, uid 999) read the mounted secret as "other", and a .secrets/
+  # restored from a backup under umask 077 comes back 0400, which would keep
+  # those services from starting.
+  for key in ${GENERATED_KEYS} ${MIRRORED_KEYS}; do
+    chmod 0444 "${SECRETS_DIR}/$(lower_key "${key}")"
+  done
   echo "[secrets-init] secrets.env already complete — skipping generation"
   exit 0
 fi
@@ -140,8 +234,12 @@ trap cleanup EXIT INT TERM
 mkdir -p "$(dirname "${SECRETS_FILE}")" "${SECRETS_DIR}"
 # The per-key files are mounted into containers that may run as a non-root uid,
 # so they must be world-readable; the 0700 parent directory (.secrets) is what
-# keeps them off the host's other users.
-chmod 700 "$(dirname "${SECRETS_FILE}")" 2>/dev/null || true
+# keeps them off the host's other users. A failed chmod aborts the run (no
+# `|| true`): silently leaving the directory group/world-readable would
+# defeat the umask above, and there is no bind-mount setup in the documented
+# flows (make prod-secrets-init, the secrets-init compose service) where the
+# generator cannot chmod the directory it just created.
+chmod 700 "$(dirname "${SECRETS_FILE}")"
 
 {
   echo "# Auto-generated by docker/init-secrets/generate.sh on first boot."
@@ -156,13 +254,27 @@ for key in ${GENERATED_KEYS}; do
       PROVISIONING_MASTER_KEY) value=$(gen_b64) ;;
       *) value=$(gen) ;;
     esac
+    # An empty generator result (failed /dev/urandom, od or base64 — note
+    # `set -e` does not fire inside $() on every shell) must abort instead
+    # of being written as an empty secret.
+    if [ -z "${value}" ]; then
+      echo "[secrets-init] ERROR: generator produced an empty value for ${key}; aborting instead of writing an empty secret" >&2
+      exit 1
+    fi
     echo "[secrets-init] generated ${key}"
   fi
+  # Validate preserved values too: a hand-edited generated key (e.g. a
+  # rotated POSTGRES_PASSWORD from docs/DEPLOYMENT.md) goes through this
+  # path, and consumers shell-source the file unquoted.
+  check_line "${key}=${value}"
   printf '%s=%s\n' "${key}" "${value}" >> "${TMP_FILE}"
 done
 
 # Preserve operator-managed keys the generator does not own (e.g.
 # DEVICE_COOKIE_SECRET, FLEET_API_TOKEN) so a re-run never drops them.
+# Every preserved line is validated: a line outside the safe charset aborts
+# the run (previous secrets.env stays intact) instead of passing shell
+# metacharacters through to the consumers that source this file.
 if [ -f "${SECRETS_FILE}" ]; then
   while IFS= read -r line; do
     case "${line}" in
@@ -174,6 +286,7 @@ if [ -f "${SECRETS_FILE}" ]; then
     case " ${GENERATED_KEYS} " in
       *" ${key} "*) continue ;;
     esac
+    check_line "${line}"
     printf '%s\n' "${line}" >> "${TMP_FILE}"
   done < "${SECRETS_FILE}"
 fi

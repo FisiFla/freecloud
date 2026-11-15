@@ -107,6 +107,9 @@ func TestCreateFederationSource_MissingField(t *testing.T) {
 }
 
 func TestCreateFederationSource_Success(t *testing.T) {
+	// Fixture uses a plain-ldap example hostname: test env, where cleartext
+	// LDAP and the unset host allow-list are unrestricted.
+	t.Setenv("APP_ENV", "test")
 	h := &Handler{
 		keycloak:         &fakeKeycloak{},
 		ldapBindPassword: "secret",
@@ -277,6 +280,9 @@ func TestDeleteFederationSource_Success(t *testing.T) {
 // --- TestFederationConnection ---
 
 func TestTestFederationConnection_Success(t *testing.T) {
+	// The stored fixture URL is plain ldap: test env, where cleartext LDAP
+	// is unrestricted.
+	t.Setenv("APP_ENV", "test")
 	h := &Handler{
 		keycloak:         &fakeKeycloak{},
 		ldapBindPassword: "secret",

@@ -23,7 +23,10 @@ func TestSAMLAttributesBuilt(t *testing.T) {
 			{UserAttribute: "department", SAMLAttributeName: "dept"},
 		},
 	}
-	attrs := buildSAMLAttributes("my-app", "https://sp.example.com/acs", "https://sp.example.com", opts)
+	attrs, err := buildSAMLAttributes("my-app", "https://sp.example.com/acs", "https://sp.example.com", opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA512" {
 		t.Errorf("signing algorithm: got %q, want RSA_SHA512", got)
@@ -47,7 +50,10 @@ func TestSAMLAttributesBuilt(t *testing.T) {
 
 // TestSAMLAttributesDefaults verifies that nil opts produces safe interoperable defaults.
 func TestSAMLAttributesDefaults(t *testing.T) {
-	attrs := buildSAMLAttributes("app", "https://sp.example.com/acs", "https://sp.example.com", nil)
+	attrs, err := buildSAMLAttributes("app", "https://sp.example.com/acs", "https://sp.example.com", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA256" {
 		t.Errorf("default signing algorithm: got %q, want RSA_SHA256", got)
@@ -67,7 +73,10 @@ func TestSAMLAttributesUnknownValuesReset(t *testing.T) {
 		SigningAlgorithm: "BOGUS_ALGO",
 		NameIDFormat:     "invalid-format",
 	}
-	attrs := buildSAMLAttributes("app", "", "", opts)
+	attrs, err := buildSAMLAttributes("app", "", "", opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA256" {
 		t.Errorf("unknown algo should fall back to RSA_SHA256, got %q", got)

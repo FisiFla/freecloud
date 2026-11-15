@@ -1,6 +1,7 @@
 "use client";
 
-import { SessionProvider, useSession, signOut } from "next-auth/react";
+import { SessionProvider, useSession } from "next-auth/react";
+import { federatedSignOut } from "@/lib/federated-logout";
 import { setActiveOrgId, getMe } from "@/lib/api";
 import type { MeResponse } from "@/lib/api";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
@@ -26,11 +27,13 @@ function AuthTokenSync({ children }: { children: React.ReactNode }) {
   const { data: session, status } = useSession();
   const ready = status === "authenticated";
 
-  // If the access token can no longer be refreshed, force a sign-out so the
-  // user is sent back to the sign-in page instead of seeing failing API calls.
+  // If the access token can no longer be refreshed, force a federated
+  // sign-out so the user is sent back to the sign-in page (with the expired
+  // hint) instead of seeing failing API calls — and the dead SSO session
+  // ends too rather than lingering for the next sign-in click.
   useEffect(() => {
     if (session?.error === "RefreshAccessTokenError") {
-      signOut({ callbackUrl: "/signin?error=session_expired" });
+      federatedSignOut({ expired: true });
     }
   }, [session?.error]);
 

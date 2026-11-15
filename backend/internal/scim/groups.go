@@ -3,6 +3,7 @@ package scim
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -86,13 +87,23 @@ func (s *Service) ListGroups(w http.ResponseWriter, r *http.Request) {
 	var displayNameFilter string
 	if filterRaw != "" {
 		// Logical expressions are rejected rather than silently ignored —
-		// see ListUsers.
+		// see ListUsers. Only `displayName eq "..."` is supported: any
+		// other operator (ne, pr, co, sw, ew) or attribute fails closed
+		// with 400 invalidFilter instead of returning the whole org set.
 		f, err := ParseFlatFilterStrict(filterRaw)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, "filter: logical expressions (and/or/not) are not supported", "invalidFilter")
 			return
 		}
-		if f != nil && f.Op == "eq" && strings.EqualFold(f.Attr, "displayname") {
+		if f != nil {
+			if !strings.EqualFold(f.Attr, "displayname") {
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("filter: unsupported attribute %q (supported: displayName)", f.Attr), "invalidFilter")
+				return
+			}
+			if f.Op != "eq" {
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("filter: unsupported operator %q (supported: eq)", f.Op), "invalidFilter")
+				return
+			}
 			displayNameFilter = f.Value
 		}
 	}

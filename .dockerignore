@@ -22,6 +22,10 @@
 .env.*.local
 frontend/.env.local
 
+# Backup bundles, dumps and the backup passphrase — production data/secrets
+backups/
+.backup-passphrase
+
 # Dependencies and build outputs
 **/node_modules/
 **/.next/
