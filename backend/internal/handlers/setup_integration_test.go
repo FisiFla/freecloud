@@ -70,7 +70,10 @@ func (k *raceKeycloak) CreateAdminUser(ctx context.Context, email, password, fir
 	defer k.mu.Unlock()
 	k.provisioned = true
 	atomic.AddInt32(&k.createCalls, 1)
-	return "admin-id", nil
+	// Valid UUID: users.keycloak_user_id is a UUID column and Setup now
+	// INSERTs the returned ID (Lane H) — a placeholder like "admin-id"
+	// fails that insert against a real database.
+	return "00000000-0000-0000-0000-0000000000a1", nil
 }
 
 // TestSetupConcurrentReplicasSingleWinner is the H3 regression guard: two

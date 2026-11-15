@@ -10,15 +10,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/mail"
 	"net/smtp"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
+	"github.com/FisiFla/freecloud/backend/internal/httpx"
 	"github.com/FisiFla/freecloud/backend/internal/keycloak"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 	"github.com/FisiFla/freecloud/backend/internal/notify"
@@ -57,17 +61,20 @@ func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		host         string
-		port         string
-		username     string
-		fromAddress  string
-		passwordHash *string
-		updatedAt    time.Time
+		host        string
+		port        string
+		username    string
+		fromAddress string
+		passwordEnc *string
+		updatedAt   time.Time
 	)
+	// "Configured" is derived from the encrypted value's presence. The legacy
+	// password_hash column (unsalted SHA-256) is cleared by migration and
+	// never written again.
 	err := h.db.QueryRow(r.Context(),
-		`SELECT host, port, username, from_address, password_hash, updated_at
+		`SELECT host, port, username, from_address, password_enc, updated_at
 		 FROM smtp_config WHERE id = 1`,
-	).Scan(&host, &port, &username, &fromAddress, &passwordHash, &updatedAt)
+	).Scan(&host, &port, &username, &fromAddress, &passwordEnc, &updatedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			respondJSON(w, http.StatusOK, SMTPConfigResponse{Port: "587"})
@@ -83,7 +90,7 @@ func (h *Handler) GetSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		Port:               port,
 		Username:           username,
 		FromAddress:        fromAddress,
-		PasswordConfigured: passwordHash != nil && *passwordHash != "",
+		PasswordConfigured: passwordEnc != nil && *passwordEnc != "",
 		UpdatedAt:          updatedAt,
 	})
 }
@@ -99,6 +106,9 @@ const (
 )
 
 // UpsertSMTPConfig saves SMTP connection settings and syncs them to Keycloak.
+// Changing the host requires the password to be re-entered when one is
+// stored, otherwise the old secret would silently follow the relay to the
+// new destination (test and send both reuse the stored password).
 // Route: PUT /api/v1/settings/smtp
 func (h *Handler) UpsertSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	if h.db == nil {
@@ -112,61 +122,85 @@ func (h *Handler) UpsertSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	req.Host = strings.TrimSpace(req.Host)
+	req.Port = strings.TrimSpace(req.Port)
+	if req.Port == "" {
+		req.Port = "587"
+	}
+	if req.Host != "" {
+		if err := validateSMTPHost(req.Host); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	if err := validateSMTPPort(req.Port); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	ctx := r.Context()
 	actorID := middleware.GetActorID(ctx)
 
 	var pwEnc *string
-	var pwHash *string
 	if req.Password != "" {
-		enc, err := encryptProvisioningToken(req.Password)
+		enc, err := encryptSecret(SecretPurposeSMTPPassword, req.Password)
 		if err != nil {
 			h.logger.Error("upsert smtp config: encrypt password failed", zap.Error(err))
 			respondError(w, http.StatusInternalServerError, "failed to encrypt password")
 			return
 		}
-		hash := tokenSHA256(req.Password)
 		pwEnc = &enc
-		pwHash = &hash
-	}
-
-	if req.Port == "" {
-		req.Port = "587"
 	}
 
 	// Capture the previous row so a Keycloak failure can be compensated by
 	// restoring it — otherwise the DB and Keycloak end up describing two
 	// different relays.
 	prevHost, prevPort, prevUsername, prevFrom := "", "", "", ""
-	var prevPwEnc, prevPwHash *string
+	// The legacy password_hash column is still selected so the row shape is
+	// stable, but its value is deliberately discarded: it is cleared by
+	// migration, never written, and "configured" comes from password_enc.
+	var prevPwEnc, prevPwHashIgnored *string
 	prevErr := h.db.QueryRow(ctx,
 		`SELECT host, port, username, from_address, password_enc, password_hash FROM smtp_config WHERE id = 1`,
-	).Scan(&prevHost, &prevPort, &prevUsername, &prevFrom, &prevPwEnc, &prevPwHash)
+	).Scan(&prevHost, &prevPort, &prevUsername, &prevFrom, &prevPwEnc, &prevPwHashIgnored)
 	if prevErr != nil && !errors.Is(prevErr, pgx.ErrNoRows) {
 		h.logger.Error("upsert smtp config: read previous config failed", zap.Error(prevErr))
 		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
+	// A host-only update reuses the stored password on test/send, so a new
+	// destination requires the password alongside it. Clearing the host is
+	// exempt: with no relay configured nothing is sent anywhere.
+	storedPassword := prevPwEnc != nil && *prevPwEnc != ""
+	if req.Host != "" && storedPassword && req.Password == "" &&
+		!strings.EqualFold(strings.TrimSpace(prevHost), req.Host) {
+		respondError(w, http.StatusBadRequest, "changing host to a different relay requires the password in the same request")
+		return
+	}
+
 	// writeConfig persists the SMTP config. mode decides what happens to
 	// the stored password:
-	//   smtpPasswordSet   — store enc/hash (a new password was supplied),
+	//   smtpPasswordSet   — store enc (a new password was supplied),
 	//   smtpPasswordKeep  — leave the stored password untouched,
 	//   smtpPasswordClear — remove the stored password.
-	writeConfig := func(host, port, username, from string, enc, hash *string, mode int) error {
+	// No mode writes a password hash: the legacy password_hash column is
+	// only ever cleared (NULL), never given a digest value.
+	writeConfig := func(host, port, username, from string, enc *string, mode int) error {
 		switch mode {
 		case smtpPasswordSet:
 			_, err := h.db.Exec(ctx,
 				`INSERT INTO smtp_config (id, host, port, username, password_enc, password_hash, from_address, updated_at)
-				 VALUES (1, $1, $2, $3, $4, $5, $6, NOW())
+				 VALUES (1, $1, $2, $3, $4, NULL, $5, NOW())
 				 ON CONFLICT (id) DO UPDATE SET
 				     host = EXCLUDED.host,
 				     port = EXCLUDED.port,
 				     username = EXCLUDED.username,
 				     password_enc = EXCLUDED.password_enc,
-				     password_hash = EXCLUDED.password_hash,
+				     password_hash = NULL,
 				     from_address = EXCLUDED.from_address,
 				     updated_at = NOW()`,
-				host, port, username, enc, hash, from,
+				host, port, username, enc, from,
 			)
 			return err
 		case smtpPasswordClear:
@@ -204,7 +238,7 @@ func (h *Handler) UpsertSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	if pwEnc != nil {
 		writeMode = smtpPasswordSet
 	}
-	if err := writeConfig(req.Host, req.Port, req.Username, req.FromAddress, pwEnc, pwHash, writeMode); err != nil {
+	if err := writeConfig(req.Host, req.Port, req.Username, req.FromAddress, pwEnc, writeMode); err != nil {
 		h.logger.Error("upsert smtp config: exec failed", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -219,12 +253,13 @@ func (h *Handler) UpsertSMTPConfig(w http.ResponseWriter, r *http.Request) {
 	// password, the stored one is re-sent so both sides stay in sync.
 	kcPassword := req.Password
 	if kcPassword == "" && prevPwEnc != nil && *prevPwEnc != "" {
-		plaintext, decErr := decryptProvisioningToken(*prevPwEnc)
+		plaintext, rotated, decErr := decryptSecret(SecretPurposeSMTPPassword, *prevPwEnc)
 		if decErr != nil {
 			h.logger.Warn("upsert smtp config: decrypt stored password failed; keycloak password left untouched",
 				zap.Error(decErr))
 		} else {
 			kcPassword = plaintext
+			h.reencryptSMTPPasswordBestEffort(ctx, plaintext, rotated)
 		}
 	}
 	kcCfg := keycloak.SMTPConfig{
@@ -248,19 +283,89 @@ func (h *Handler) UpsertSMTPConfig(w http.ResponseWriter, r *http.Request) {
 		} else {
 			restoreMode = smtpPasswordClear
 		}
-		if restoreErr := writeConfig(prevHost, prevPort, prevUsername, prevFrom, prevPwEnc, prevPwHash, restoreMode); restoreErr != nil {
+		if restoreErr := writeConfig(prevHost, prevPort, prevUsername, prevFrom, prevPwEnc, restoreMode); restoreErr != nil {
 			h.logger.Error("upsert smtp config: failed to restore previous config", zap.Error(restoreErr))
 		}
 		respondError(w, http.StatusInternalServerError, "failed to apply SMTP settings to the identity provider")
 		return
 	}
 
+	auditDetails := map[string]interface{}{"host": req.Host, "port": req.Port, "password_updated": req.Password != ""}
+	if !strings.EqualFold(strings.TrimSpace(prevHost), req.Host) {
+		// Repoint audit: old and new host, never the password.
+		auditDetails["old_host"] = strings.TrimSpace(prevHost)
+		auditDetails["new_host"] = req.Host
+	}
 	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "smtp_config.upsert", "smtp_config", "1",
-		map[string]interface{}{"host": req.Host, "port": req.Port, "password_updated": req.Password != ""}); err != nil {
+		auditDetails); err != nil {
 		h.logger.Warn("failed to write SMTP config audit log", zap.Error(err))
 	}
 
 	respondJSON(w, http.StatusOK, map[string]bool{"saved": true})
+}
+
+// reencryptSMTPPasswordBestEffort rewrites an SMTP password sealed under the
+// previous master key, completing a rotation opportunistically.
+func (h *Handler) reencryptSMTPPasswordBestEffort(ctx context.Context, plaintext string, rotated bool) {
+	if !rotated || h.db == nil {
+		return
+	}
+	fresh, err := encryptSecret(SecretPurposeSMTPPassword, plaintext)
+	if err != nil {
+		h.logger.Warn("smtp config: re-encrypt password failed", zap.Error(err))
+		return
+	}
+	if _, err := h.db.Exec(ctx,
+		`UPDATE smtp_config SET password_enc = $1, updated_at = NOW() WHERE id = 1`,
+		fresh,
+	); err != nil {
+		h.logger.Warn("smtp config: re-encrypt password failed", zap.Error(err))
+	}
+}
+
+// smtpHostLabelPattern matches one DNS label (RFC 1035): alphanumerics and
+// interior hyphens. Single-label names (compose services, intranet relays)
+// are allowed — they are just one label.
+var smtpHostLabelPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+// validateSMTPHost rejects hosts that are not a bare IP literal or hostname:
+// no userinfo, scheme, path, port or whitespace. Loopback, link-local and
+// unspecified addresses are blocked outside development/test; private
+// (RFC1918/ULA) relays stay allowed everywhere because that is where
+// corporate mail relays normally live.
+func validateSMTPHost(host string) error {
+	h := host
+	if strings.HasPrefix(h, "[") {
+		// Bracketed IPv6 literal.
+		if !strings.HasSuffix(h, "]") {
+			return errors.New("host must be a valid hostname or IP address")
+		}
+		h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+	}
+	if ip := net.ParseIP(h); ip != nil {
+		if !httpx.IsDevOrTestEnv() && httpx.IsBlockedLoopbackOrLinkLocal(ip) {
+			return errors.New("host must not target a loopback or link-local address")
+		}
+		return nil
+	}
+	if len(h) == 0 || len(h) > 253 {
+		return errors.New("host must be a valid hostname or IP address")
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(h, "."), ".") {
+		if !smtpHostLabelPattern.MatchString(label) {
+			return errors.New("host must be a valid hostname or IP address")
+		}
+	}
+	return httpx.ValidateHostAddresses("host", h, httpx.IsBlockedLoopbackOrLinkLocal)
+}
+
+// validateSMTPPort accepts TCP ports 1-65535.
+func validateSMTPPort(port string) error {
+	n, err := strconv.Atoi(strings.TrimSpace(port))
+	if err != nil || n < 1 || n > 65535 {
+		return errors.New("port must be a number between 1 and 65535")
+	}
+	return nil
 }
 
 // TestSMTPEmail sends a test email to the provided address using the stored config.
@@ -318,11 +423,12 @@ func (h *Handler) TestSMTPEmail(w http.ResponseWriter, r *http.Request) {
 
 	var password string
 	if pwEncVal != nil && *pwEncVal != "" {
-		pw, decErr := decryptProvisioningToken(*pwEncVal)
+		pw, rotated, decErr := decryptSecret(SecretPurposeSMTPPassword, *pwEncVal)
 		if decErr != nil {
 			h.logger.Warn("test smtp email: decrypt password failed", zap.Error(decErr))
 		} else {
 			password = pw
+			h.reencryptSMTPPasswordBestEffort(ctx, pw, rotated)
 		}
 	}
 
@@ -353,8 +459,11 @@ func (h *Handler) TestSMTPEmail(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	sendErr := notify.SendMail(sendCtx, addr, auth, fromAddress, []string{req.To}, []byte(body))
 	if sendErr != nil {
+		// The transport error can carry internal topology (relay address,
+		// TLS details); the detail stays in the server log and the caller
+		// gets a generic failure.
 		h.logger.Warn("test smtp email: send failed", zap.Error(sendErr))
-		respondJSON(w, http.StatusOK, map[string]interface{}{"sent": false, "error": sendErr.Error()})
+		respondJSON(w, http.StatusOK, map[string]interface{}{"sent": false, "error": "failed to send test email"})
 		return
 	}
 

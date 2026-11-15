@@ -36,7 +36,7 @@
 	# e.g. from a shell on the host:  docker compose exec keycloak kcadm ...
 	# or temporarily allowlist your own IP by replacing the two lines below
 	# with:
-	#   @kcadmin path /admin/* /realms/master/*
+	#   @kcadmin path /admin /admin/* /realms/master /realms/master/*
 	#   @kcadminremote remote_ip 203.0.113.10/32
 	#   handle @kcadmin {
 	#       handle @kcadminremote {
@@ -44,7 +44,12 @@
 	#       }
 	#       respond 404
 	#   }
-	@kcadmin path /admin/* /realms/master/*
+	# The bare paths matter too: without them /admin answers a redirect and
+	# /realms/master answers master-realm metadata to the public internet.
+	# Nothing legitimate uses these paths through Caddy — the Keycloak
+	# container healthcheck probes keycloak:8080 directly, and the
+	# backend's Admin API calls use the internal http://keycloak:8080 URL.
+	@kcadmin path /admin /admin/* /realms/master /realms/master/*
 	respond @kcadmin 404
 	# Keycloak is proxied directly, so it gets none of the hardening headers
 	# the backend (cmd/server/main.go) and the frontend (next.config.js) set on
@@ -57,6 +62,18 @@
 		X-Frame-Options "SAMEORIGIN"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
+		# Report-only CSP for the Keycloak 26 login/consent pages: 'self'
+		# plus the inline scripts/styles Keycloak's own theme needs
+		# (no external hosts — Keycloak serves everything itself),
+		# no framing, forms back to self only. Report-only on purpose:
+		# a too-tight enforced policy would break sign-in. To enforce,
+		# watch for violation reports first (add report-uri/report-to and
+		# collect them), then rename this header to
+		# Content-Security-Policy once sign-in, logout, registration,
+		# password reset and the account console are all violation-free.
+		# (If the admin console's same-origin self-framing reports
+		# violations, use frame-ancestors 'self' when enforcing.)
+		Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'"
 	}
 	reverse_proxy keycloak:8080
 }

@@ -56,6 +56,14 @@ docker compose -f docker/docker-compose.e2e.yml down -v
 7. **Fleet teams** — create team → row in `fleet_team_orgs` → ListTeams returns team.
 8. **Backup** — `pg_dumpall` of FreeCloud Postgres cluster; restore into empty instance; count tables.
 
+**First-admin bootstrap window.** On a pristine stack the setup-created admin
+can log in before any device exists: while zero device mappings exist
+system-wide, access/evaluate allows an admin-role user with no enrolled device
+(once app policy conditions, if any, pass). The window closes permanently at
+the first device enrollment, so the admin should enroll their own device
+promptly; steady-state posture stays fail-closed for everyone. The allow is
+logged and audited as a bootstrap-window decision.
+
 ## Backup / restore (verified against e2e Postgres)
 
 ```bash

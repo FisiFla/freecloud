@@ -88,11 +88,15 @@ var permissionMatrix = map[Permission][]Role{
 	PermReadGroups:      {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
 	PermManageDevices:   {RoleSuperAdmin, RoleHelpdesk},
 	PermReadCompliance:  {RoleSuperAdmin, RoleHelpdesk, RoleAuditor, RoleReadOnly},
-	// PermManagePolicies gates CreateTeam + AssignTeamPolicy. Helpdesk was
-	// added 2026-08-02 (product decision: read + mutate within org). Both
-	// handlers remain org-scoped via requireFleetTeamInCallerOrg, so the
-	// added capability is strictly within the caller's org — a helpdesk user
-	// cannot touch another org's teams.
+	// PermManagePolicies gates Fleet team management (CreateTeam +
+	// AssignTeamPolicy) and the read-only per-app policy preview
+	// (PreviewAppPolicy). Helpdesk was added 2026-08-02 (product decision:
+	// read + mutate within org). Both team handlers remain org-scoped via
+	// requireFleetTeamInCallerOrg, so the added capability is strictly
+	// within the caller's org — a helpdesk user cannot touch another org's
+	// teams. It deliberately does NOT gate the per-app access-policy WRITE
+	// (UpsertAppAccessPolicy): that route is a security-policy change and
+	// is gated by PermManageAccountPolicy (super-admin only).
 	PermManagePolicies:      {RoleSuperAdmin, RoleHelpdesk},
 	PermManageMFA:           {RoleSuperAdmin, RoleHelpdesk},
 	PermManageAPITokens:     {RoleSuperAdmin},
@@ -137,6 +141,20 @@ type JWTClaims struct {
 	Email             string `json:"email"`
 	IsAdmin           bool   `json:"-"` // kept for back-compat; true when Role == RoleSuperAdmin
 	Role              Role   `json:"-"` // resolved RBAC role
+	// IsAPIToken marks claims derived from an fc_ API token rather than a
+	// human's JWT. Tokens are always org-confined to the org they were
+	// created in (see handleAPIToken): even a super-admin-role token must
+	// never take a cross-tenant bypass. Every check that grants a
+	// cross-tenant view must therefore consult IsHumanSystemAdmin below,
+	// never Role == RoleSuperAdmin directly.
+	IsAPIToken bool `json:"-"`
+}
+
+// IsHumanSystemAdmin reports whether claims belong to a HUMAN system admin —
+// the only identity class allowed a cross-tenant view. API tokens always
+// fail this check (they see their own org only), even super-admin-role ones.
+func IsHumanSystemAdmin(claims *JWTClaims) bool {
+	return claims != nil && claims.Role == RoleSuperAdmin && !claims.IsAPIToken
 }
 
 type claimsKeyType struct{}
@@ -175,6 +193,9 @@ func resolveRole(roles []string) Role {
 		roleSet[r] = true
 	}
 	switch {
+	// NOTE: the legacy "admin" realm role MUST keep mapping to super-admin:
+	// the setup wizard creates the first administrator with exactly that
+	// realm role, so removing this arm would lock out fresh installs.
 	case roleSet["admin"] || roleSet["freecloud-admin"]:
 		return RoleSuperAdmin
 	case roleSet["freecloud-helpdesk"]:
@@ -275,6 +296,7 @@ func (a *APITokenMiddleware) handleAPIToken(w http.ResponseWriter, r *http.Reque
 		PreferredUsername: "api-token:" + serviceIdentity,
 		IsAdmin:           resolved == RoleSuperAdmin,
 		Role:              resolved,
+		IsAPIToken:        true,
 	}
 	ctx := context.WithValue(r.Context(), claimsKey, claims)
 	// C2/C5 (Epic C multi-tenant): an API token is scoped to the org it was
@@ -743,6 +765,15 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 					}
 					if email, ok := claims["email"].(string); ok {
 						jc.Email = email
+					}
+					// Only access tokens are credentials for this API. Keycloak
+					// marks them typ=Bearer; an ID token (typ=ID) is signed by
+					// the same key and names this client in `aud`, and it
+					// travels in the logout redirect URL (id_token_hint), so
+					// it must never be accepted here.
+					if typ, _ := claims["typ"].(string); typ != "Bearer" {
+						writeAuthError(w, http.StatusUnauthorized, "unauthorized: not an access token")
+						return
 					}
 					// Validate audience.
 					//

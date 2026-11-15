@@ -121,7 +121,9 @@ func OrgContextMiddleware(db OrgDB) func(http.Handler) http.Handler {
 				return
 			}
 
-			isSystemAdmin := claims.Role == RoleSuperAdmin
+			// Human system admins only: a super-admin-role API token must
+			// never take the any-org override below — it sees its own org only.
+			isSystemAdmin := IsHumanSystemAdmin(claims)
 
 			if requestedOrg != "" {
 				if !isValidOrgID(requestedOrg) {
@@ -224,7 +226,10 @@ func orgExists(ctx context.Context, db OrgDB, orgID string) (bool, error) {
 func RequireOrgAdminOrSystemAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := GetClaims(r.Context())
-		if claims != nil && claims.Role == RoleSuperAdmin {
+		// Human system admins only; a super-admin-role API token still
+		// passes below via its org-admin membership role, scoped to the
+		// org the token was created in.
+		if IsHumanSystemAdmin(claims) {
 			next.ServeHTTP(w, r)
 			return
 		}

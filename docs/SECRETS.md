@@ -39,16 +39,24 @@ per secret). The production compose mounts the per-key files as Docker secrets
 | `AUTH_SECRET` | frontend | mounted file, read by the container entrypoint |
 | `SCIM_BEARER_TOKEN`, `ACCESS_EVAL_TOKEN`, `FLEET_API_TOKEN`, `FLEET_WEBHOOK_SECRET`, `KC_ADMIN_PASSWORD` | backend | `<VAR>_FILE` (resolved natively by `config.resolveSecret`) |
 | `POSTGRES_PASSWORD` | backend, migrate | `DATABASE_PASSWORD_FILE` → injected (URL-escaped) into the password-less `DATABASE_URL` at config load |
-| `PROVISIONING_MASTER_KEY` | backend | `<VAR>_FILE` **and** the plain env var — `backend/internal/handlers/provisioning.go` still reads the plain variable directly |
+| `REDIS_PASSWORD` | redis | `redis_password` Docker secret → written into the redis config as `requirepass` by the redis entrypoint |
+| `REDIS_PASSWORD` | backend | `REDIS_PASSWORD_FILE` → injected (URL-escaped) into the password-less `REDIS_URL` at config load (a password already embedded in `REDIS_URL` wins) |
+| `PROVISIONING_MASTER_KEY` | backend | `<VAR>_FILE` (resolved by `config.resolveSecret` and injected into the handlers at startup) |
 
-The values are therefore not visible in `docker inspect` or
-`/proc/<pid>/environ` — with the single exception of the remaining
-operator-provided variables in `.env.prod` (`AUTH_KEYCLOAK_SECRET`,
-`SMTP_PASSWORD`, `WEBHOOK_SECRET`, `SIEM_HTTP_TOKEN`). `FLEET_API_TOKEN`
-is operator-provided too, but it lives in `.secrets/secrets.env`
-(hand-added key, mirrored to `.secrets/files/fleet_api_token`), not in
-`.env.prod`; the database password travels via `DATABASE_PASSWORD_FILE`,
-so `DATABASE_URL` itself carries no password.
+The values are therefore not visible in `docker inspect`. The backend
+Go process reads the files directly, so backend secrets are not in its
+process environment either; but the frontend and Keycloak entrypoints
+shell-`export` their secrets (`AUTH_SECRET`,
+`KC_BOOTSTRAP_ADMIN_PASSWORD`, ...), so those values ARE visible in
+`/proc/<pid>/environ` of the respective container processes. The
+remaining operator-provided variables in `.env.prod`
+(`AUTH_KEYCLOAK_SECRET`, `SMTP_PASSWORD`, `WEBHOOK_SECRET`,
+`SIEM_HTTP_TOKEN`) are plain environment from the start.
+`FLEET_API_TOKEN` is operator-provided too, but it lives in
+`.secrets/secrets.env` (hand-added key, mirrored to
+`.secrets/files/fleet_api_token`), not in `.env.prod`; the database
+password travels via `DATABASE_PASSWORD_FILE`, so `DATABASE_URL` itself
+carries no password.
 
 `.secrets/` is created with mode `0700`; the per-key files inside are
 world-readable so that containers running as a non-root uid can read them,
@@ -85,8 +93,11 @@ The following config fields use `resolveSecret`:
 | `FleetWebhookSecret` | `FLEET_WEBHOOK_SECRET` |
 | `DeviceCookieSecret` | `DEVICE_COOKIE_SECRET` (optional; falls back to fleet webhook secret) |
 | `ProvisioningMasterKey` | `PROVISIONING_MASTER_KEY` |
+| (previous key, decrypt-only) | `PROVISIONING_MASTER_KEY_PREVIOUS` (operator-provided; the retired key kept during a rotation so values sealed before the rotation stay readable; `_FILE` form also supported) |
 | `SCIMBearerToken` | `SCIM_BEARER_TOKEN` |
 | `AccessEvalToken` | `ACCESS_EVAL_TOKEN` |
+| `RedisPassword` | `REDIS_PASSWORD` |
+| (federation allow-list) | `LDAP_ALLOWED_HOSTS` (operator-provided; comma-separated allowed LDAP hostnames, required before creating or repointing a federation source) |
 
 ### Device identity cookie signing
 
@@ -112,4 +123,4 @@ Non-secret fields (URLs, feature flags, timeouts) use the plain env var only.
 
 ## Validation
 
-`config.Validate()` remains fail-closed: it rejects empty, insecure-default, or known placeholder/trivial values (`changeme`, `secret`, the documented e2e/dev defaults, single characters — the `placeholderSecrets` set in `backend/internal/config/config.go`) for all required secrets in any non-development environment (`APP_ENV` ≠ `development`/`test`). A misconfigured `_FILE` path that returns empty will therefore cause the server to refuse to start, surfacing the misconfiguration immediately rather than running with a missing secret.
+`config.Validate()` remains fail-closed: it rejects empty, whitespace-only, insecure-default, or known placeholder/trivial values (`changeme`, `secret`, the documented e2e/dev defaults, single characters — the `placeholderSecrets` set in `backend/internal/config/config.go`) for all required secrets in any non-development environment (`APP_ENV` ≠ `development`/`test`). A misconfigured `_FILE` path that returns empty, or a `_FILE` whose content is blank, will therefore cause the server to refuse to start — except for the optional mirrored secrets the generator deliberately writes empty when unset (`FLEET_API_TOKEN`, `SLACK_ALERT_WEBHOOK_URL`, `SLACK_WEBHOOK_URL`, `DEVICE_COOKIE_SECRET`, `LDAP_BIND_PASSWORD`, `REDIS_PASSWORD`), which keep meaning "not configured".

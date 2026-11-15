@@ -2,14 +2,15 @@ package handlers
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
 	"github.com/FisiFla/freecloud/backend/internal/db"
@@ -24,11 +25,11 @@ const setupAdvisoryLockID int64 = 8241093572
 
 // SetupStatus handles GET /api/v1/setup/status.
 // Returns {"provisioned": bool, "setupTokenRequired": bool} — unauthenticated, read-only.
-// "Provisioned" is derived from Keycloak state: true when at least one user
-// holds the "admin" realm role (no migration required).
+// "Provisioned" means an admin exists (see isProvisioned): a local users row
+// with the admin role, or a Keycloak "admin" realm-role member.
 func (h *Handler) SetupStatus(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	provisioned, err := h.keycloak.HasAdminUser(ctx)
+	provisioned, err := h.isProvisioned(ctx)
 	if err != nil {
 		h.logger.Error("setup status check failed", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "internal error")
@@ -71,6 +72,7 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	// Keycloak receives the trimmed value (same convention as onboarding.go).
 	body.AdminFirstName = strings.TrimSpace(body.AdminFirstName)
 	body.AdminLastName = strings.TrimSpace(body.AdminLastName)
+	body.AdminEmail = strings.ToLower(strings.TrimSpace(body.AdminEmail))
 
 	var errs []ValidationError
 	if !isValidEmail(body.AdminEmail) {
@@ -106,7 +108,9 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	// deployment first owns it. Checked before the lock (a pure function of
 	// the request + startup config). Token values are never logged.
 	if h.setupToken != "" {
-		if subtle.ConstantTimeCompare([]byte(body.SetupToken), []byte(h.setupToken)) != 1 {
+		// Hash-then-compare: a raw ConstantTimeCompare fails fast on length
+		// mismatch, leaking the expected token's length through timing.
+		if !constantTimeStringEqual(body.SetupToken, h.setupToken) {
 			h.logger.Warn("setup: rejected request with invalid setup token")
 			respondError(w, http.StatusForbidden, "invalid setup token")
 			return
@@ -127,8 +131,9 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 
 	// Fail-closed: check provisioned FIRST, INSIDE the lock, so a sibling
 	// replica that raced us here and lost cannot also provision.
-	provisioned, err := h.keycloak.HasAdminUser(ctx)
+	provisioned, err := h.isProvisioned(ctx)
 	if err != nil {
+		h.logger.Error("setup: provisioned check failed", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -137,11 +142,53 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = h.keycloak.CreateAdminUser(ctx, body.AdminEmail, body.AdminPassword, body.AdminFirstName, body.AdminLastName)
+	userID, err := h.keycloak.CreateAdminUser(ctx, body.AdminEmail, body.AdminPassword, body.AdminFirstName, body.AdminLastName)
 	if err != nil {
 		h.logger.Error("setup: create admin user failed", zap.Error(err))
 		respondError(w, http.StatusInternalServerError, "failed to create admin user")
 		return
+	}
+	if userID == "" {
+		// Defensive: without an ID there is nothing to persist (or roll
+		// back). Mirrors the missing-ID guard in onboarding.go.
+		h.logger.Error("setup: keycloak admin creation returned missing user ID")
+		respondError(w, http.StatusInternalServerError, "keycloak admin creation returned missing user ID")
+		return
+	}
+
+	// The first admin needs a matching `users` row to pass access-eval's
+	// local-user lookup — otherwise it can authenticate but every
+	// posture/access decision denies with "user not found or disabled".
+	// Same upsert semantics as the seeded e2e admin in main.go
+	// (ON CONFLICT (keycloak_user_id) DO NOTHING); org_id is passed
+	// explicitly even though Migration043 defaults it, matching
+	// onboarding.go's persistOnboard. Runs before the cosmetic org-name
+	// update below so a failed setup leaves no half-applied state behind.
+	if h.db != nil {
+		if _, err := h.db.Exec(ctx,
+			`INSERT INTO users (keycloak_user_id, email, first_name, last_name, role, org_id)
+			 VALUES ($1, $2, $3, $4, 'admin', $5)
+			 ON CONFLICT (keycloak_user_id) DO NOTHING`,
+			userID, body.AdminEmail, body.AdminFirstName, body.AdminLastName, middleware.DefaultOrgID,
+		); err != nil {
+			// Compensation (onboarding.go precedent): the Keycloak admin
+			// already exists at this point, so a bare 500 would brick
+			// provisioning — HasAdminUser reports provisioned and every
+			// retry gets 409 — while a best-effort 201 would leave a
+			// silently-broken admin. Delete the orphaned KC user so a
+			// retry provisions cleanly. Fresh context so cleanup still
+			// runs if the client disconnected.
+			h.logger.Error("setup: failed to persist admin users row; rolling back Keycloak admin",
+				zap.String("kc_user_id", userID), zap.Error(err))
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if delErr := h.keycloak.DeleteUser(cleanupCtx, userID); delErr != nil {
+				h.logger.Error("setup: failed to roll back orphaned Keycloak admin",
+					zap.String("kc_user_id", userID), zap.Error(delErr))
+			}
+			respondError(w, http.StatusInternalServerError, "failed to persist admin user")
+			return
+		}
 	}
 
 	// Persist the operator-supplied org name onto the seeded Default
@@ -157,6 +204,34 @@ func (h *Handler) Setup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusCreated, map[string]string{"message": "provisioned"})
+}
+
+// isProvisioned reports whether first-run setup is complete — i.e. whether
+// AN ADMIN EXISTS. It prefers the local database (a users row with the
+// admin role, exactly as Setup persists it) and falls back to the Keycloak
+// "admin" realm-role membership query (HasAdminUser), so existing
+// deployments whose first admin has no local row still count as
+// provisioned. A SCIM-provisioned or demo user created before setup must
+// NOT read as provisioned: neither carries the admin role.
+//
+// Fail-closed: any error (local DB or Keycloak) is returned, and both
+// callers translate it to 500 — an error must never make setup look
+// un-provisioned and reopen first-admin creation.
+func (h *Handler) isProvisioned(ctx context.Context) (bool, error) {
+	if h.db != nil {
+		var one int
+		switch err := h.db.QueryRow(ctx,
+			`SELECT 1 FROM users WHERE role = 'admin' LIMIT 1`,
+		).Scan(&one); {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, pgx.ErrNoRows):
+			// No local admin row — consult Keycloak below.
+		default:
+			return false, err
+		}
+	}
+	return h.keycloak.HasAdminUser(ctx)
 }
 
 // acquireSetupLock serializes Setup's check-then-act sequence. When h.pgPool

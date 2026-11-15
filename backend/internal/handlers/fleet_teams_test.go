@@ -89,7 +89,11 @@ func TestListTeams_FleetError(t *testing.T) {
 		},
 	}
 	h := NewHandler(nil, &fakeKeycloak{}, f, zap.NewNop())
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil)
+	// L3: ListTeams resolves the caller's org before calling Fleet (like
+	// ListPolicies), so an anonymous caller gets 403 without Fleet being
+	// consulted. Exercise the Fleet-error path with system-admin claims.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/teams", nil).WithContext(
+		middleware.SetClaims(context.Background(), &middleware.JWTClaims{Sub: "admin", Role: middleware.RoleSuperAdmin}))
 	rec := httptest.NewRecorder()
 	h.ListTeams(rec, req)
 	if rec.Code != http.StatusBadGateway {

@@ -168,7 +168,7 @@ func (h *Handler) ExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusOK)
 		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"id", "actor_id", "action", "target_type", "target_id", "details", "created_at"})
+		_ = cw.Write(sanitizeCSVRecord([]string{"id", "actor_id", "action", "target_type", "target_id", "details", "created_at"}))
 		for rows.Next() {
 			entry, ok := h.scanAuditExportRow(rows)
 			if !ok {
@@ -179,9 +179,9 @@ func (h *Handler) ExportAuditLogs(w http.ResponseWriter, r *http.Request) {
 				b, _ := json.Marshal(entry.Details)
 				detailsStr = string(b)
 			}
-			_ = cw.Write([]string{
+			_ = cw.Write(sanitizeCSVRecord([]string{
 				entry.ID, entry.ActorID, entry.Action, entry.TargetType, entry.TargetID, detailsStr, entry.CreatedAt,
-			})
+			}))
 		}
 		cw.Flush()
 	}

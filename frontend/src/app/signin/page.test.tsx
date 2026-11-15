@@ -7,6 +7,7 @@ vi.mock("next/navigation", () => ({ useSearchParams: searchParamsMock }));
 vi.mock("next-auth/react", () => ({ signIn: vi.fn() }));
 
 import SignIn from "./page";
+import { PENDING_SIGNIN_ERROR_KEY } from "@/lib/signin-error";
 
 describe("SignIn page error surfacing", () => {
   beforeEach(() => {
@@ -47,5 +48,23 @@ describe("SignIn page error surfacing", () => {
     setErrorParam(null);
     render(<SignIn />);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows the pending expired hint left by federated sign-out, exactly once", () => {
+    setErrorParam(null);
+    window.sessionStorage.setItem(PENDING_SIGNIN_ERROR_KEY, "session_expired");
+    render(<SignIn />);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Your session has expired. Sign in again to continue.",
+    );
+    // Consumed: a reload must not show it again.
+    expect(window.sessionStorage.getItem(PENDING_SIGNIN_ERROR_KEY)).toBeNull();
+  });
+
+  it("prefers the error query param over the pending stash", () => {
+    setErrorParam("auth_failed");
+    window.sessionStorage.setItem(PENDING_SIGNIN_ERROR_KEY, "session_expired");
+    render(<SignIn />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/Sign-in failed\. Try again/);
   });
 });

@@ -653,7 +653,8 @@ func (k *KeycloakClient) AssignRealmRoleToUser(ctx context.Context, userID strin
 // All fields are optional; zero/empty values retain existing safe defaults.
 type SAMLOptions struct {
 	// SigningAlgorithm is the XML signature algorithm.
-	// Allowed: "RSA_SHA256" (default), "RSA_SHA512", "RSA_SHA1".
+	// Allowed: "RSA_SHA256" (default), "RSA_SHA512". "RSA_SHA1" is
+	// rejected: SHA-1 signatures are not accepted.
 	SigningAlgorithm string
 	// EncryptAssertions controls whether Keycloak encrypts SAML assertions.
 	EncryptAssertions bool
@@ -684,11 +685,12 @@ func samlSlug(name string) string {
 	return s
 }
 
-// validSigningAlgorithms is the set of Keycloak-supported SAML signing algorithms.
+// validSigningAlgorithms is the set of accepted SAML signing algorithms.
+// RSA_SHA1 is deliberately absent: SHA-1 signatures are rejected with a
+// validation error (see buildSAMLAttributes), not silently remapped.
 var validSigningAlgorithms = map[string]bool{
 	"RSA_SHA256": true,
 	"RSA_SHA512": true,
-	"RSA_SHA1":   true,
 }
 
 // validNameIDFormats is the set of supported NameID formats.
@@ -701,19 +703,32 @@ var validNameIDFormats = map[string]bool{
 
 // buildSAMLAttributes returns the Keycloak client attribute map for a SAML client.
 // This is extracted as a pure function so it can be unit-tested without HTTP.
-func buildSAMLAttributes(name, acsURL, entityID string, opts *SAMLOptions) map[string]string {
+//
+// An empty option selects the default; any value outside the supported sets
+// (including RSA_SHA1 — SHA-1 signatures are not accepted) is a validation
+// error, never silently remapped.
+func buildSAMLAttributes(name, acsURL, entityID string, opts *SAMLOptions) (map[string]string, error) {
 	signingAlgo := "RSA_SHA256"
 	encryptAssertions := "false"
 	nameIDFormat := "persistent"
 
 	if opts != nil {
-		if validSigningAlgorithms[opts.SigningAlgorithm] {
+		if strings.EqualFold(opts.SigningAlgorithm, "RSA_SHA1") {
+			return nil, fmt.Errorf("unsupported SAML signing algorithm %q: SHA-1 signatures are not accepted (use RSA_SHA256 or RSA_SHA512)", opts.SigningAlgorithm)
+		}
+		if opts.SigningAlgorithm != "" {
+			if !validSigningAlgorithms[opts.SigningAlgorithm] {
+				return nil, fmt.Errorf("unsupported SAML signing algorithm %q (use RSA_SHA256 or RSA_SHA512)", opts.SigningAlgorithm)
+			}
 			signingAlgo = opts.SigningAlgorithm
 		}
 		if opts.EncryptAssertions {
 			encryptAssertions = "true"
 		}
-		if validNameIDFormats[opts.NameIDFormat] {
+		if opts.NameIDFormat != "" {
+			if !validNameIDFormats[opts.NameIDFormat] {
+				return nil, fmt.Errorf("unsupported SAML NameID format %q (use persistent, transient, email or unspecified)", opts.NameIDFormat)
+			}
 			nameIDFormat = opts.NameIDFormat
 		}
 	}
@@ -736,7 +751,7 @@ func buildSAMLAttributes(name, acsURL, entityID string, opts *SAMLOptions) map[s
 		"saml_assertion_lifespan":                          "3600",
 		"saml.signature.algorithm":                         signingAlgo,
 		"saml.idp.initiated.sso.url.name":                  samlSlug(name),
-	}
+	}, nil
 }
 
 // samlProtocolMappers returns the standard X.500/SAML attribute mappers plus any
@@ -873,7 +888,10 @@ func (k *KeycloakClient) CreateClient(ctx context.Context, name, protocol string
 			acsURL = redirectURIs[0]
 		}
 
-		attrs := buildSAMLAttributes(name, acsURL, entityID, opts)
+		attrs, samlErr := buildSAMLAttributes(name, acsURL, entityID, opts)
+		if samlErr != nil {
+			return "", samlErr
+		}
 		client.Attributes = &attrs
 		client.ProtocolMappers = samlProtocolMappers(opts)
 	}
@@ -1250,13 +1268,23 @@ func (k *KeycloakClient) ListGroupMembers(ctx context.Context, groupID string) (
 	return members, nil
 }
 
-// RenameGroup changes a group's display name.
+// RenameGroup changes a group's display name. It reads the current
+// representation first and PUTs it back with only the name changed
+// (read-modify-write): PUTting an id+name-only representation would wipe
+// the group's attributes — notably org_id, which scopes SCIM groups to
+// their org. Fail closed: when the current representation cannot be read,
+// no PUT goes out.
 func (k *KeycloakClient) RenameGroup(ctx context.Context, groupID, newName string) error {
 	token, err := k.login(ctx)
 	if err != nil {
 		return err
 	}
-	if err := k.client.UpdateGroup(ctx, token, k.realm, gocloak.Group{ID: &groupID, Name: &newName}); err != nil {
+	existing, err := k.client.GetGroup(ctx, token, k.realm, groupID)
+	if err != nil {
+		return fmt.Errorf("read group %s: %w", groupID, err)
+	}
+	existing.Name = &newName
+	if err := k.client.UpdateGroup(ctx, token, k.realm, *existing); err != nil {
 		return fmt.Errorf("rename group %s: %w", groupID, err)
 	}
 	zap.L().Info("renamed group", zap.String("group_id", groupID), zap.String("name", newName))
@@ -1536,32 +1564,39 @@ func (k *KeycloakClient) GetUserByID(ctx context.Context, userID string) (*goclo
 }
 
 // HasAdminUser reports whether the instance has been set up — true when the
-// realm contains at least one real (human) user, i.e. any user that is not a
-// client service-account. On a freshly self-bootstrapped realm the only users
-// are the bootstrap clients' service accounts, so this is false; once the setup
-// wizard creates the first admin it becomes true.
+// realm has at least one member of the "admin" realm role. A
+// SCIM-provisioned or demo user created before first-run setup carries no
+// admin role, so it must NOT read as provisioned: the old any-user check
+// bricked POST /api/v1/setup with a permanent 409 (no admin, yet setup
+// refused to create one).
 //
-// It lists users (a permission the service account reliably holds) rather than
-// querying the "admin" realm role's members: Keycloak's /roles/{role}/users
-// endpoint needs broader privileges than view-users and returns 403 for the
-// service account.
+// The service account holds the realm-admin role (see bootstrap.go), so the
+// role-members query below is authorized; the old comment about a 403 on
+// narrower grants predates that decision.
+//
+// Fail-closed: any Keycloak error other than a 404 (no "admin" role yet,
+// which means no admin can exist) is returned, and both setup callers
+// translate it to 500 — an error must never make setup look
+// un-provisioned (which would reopen first-admin creation).
 func (k *KeycloakClient) HasAdminUser(ctx context.Context) (bool, error) {
 	token, err := k.login(ctx)
 	if err != nil {
 		return false, err
 	}
-	maxUsers := 100
-	users, err := k.client.GetUsers(ctx, token, k.realm, gocloak.GetUsersParams{Max: &maxUsers})
+	one := 1
+	members, err := k.client.GetUsersByRoleName(
+		ctx, token, k.realm, "admin",
+		gocloak.GetUsersByRoleParams{Max: &one},
+	)
 	if err != nil {
-		return false, fmt.Errorf("list users: %w", err)
-	}
-	for _, u := range users {
-		if u.Username != nil && strings.HasPrefix(*u.Username, "service-account-") {
-			continue
+		if isNotFoundErr(err) {
+			// No "admin" realm role yet (bootstrap has not run): no
+			// admin can exist.
+			return false, nil
 		}
-		return true, nil
+		return false, fmt.Errorf("list admin role members: %w", err)
 	}
-	return false, nil
+	return len(members) > 0, nil
 }
 
 // CreateAdminUser creates a Keycloak user with the given email, password and

@@ -5,7 +5,7 @@ COPY main.go .
 RUN CGO_ENABLED=0 go build -o scim-mock-e2e main.go
 
 # alpine 3.20
-FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 # Run as a non-root user: the mock needs no privileges at all.
 RUN addgroup -S mock && adduser -S -G mock mock
 COPY --from=builder /app/scim-mock-e2e /usr/local/bin/scim-mock-e2e

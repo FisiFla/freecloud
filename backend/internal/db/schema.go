@@ -187,6 +187,21 @@ var migrations = []migration{
 		name:      "analytics_snapshots_units_and_org_index",
 		statement: Migration048,
 	},
+	{
+		id:        49,
+		name:      "clear_unsalted_secret_hashes",
+		statement: Migration049,
+	},
+	{
+		id:        50,
+		name:      "approval_requests_requester_sub",
+		statement: Migration050,
+	},
+	{
+		id:        51,
+		name:      "audit_logs_row_mac",
+		statement: Migration051,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -1041,6 +1056,33 @@ UPDATE analytics_snapshots
 
 CREATE INDEX IF NOT EXISTS idx_analytics_snapshots_org_captured_at
     ON analytics_snapshots(org_id, captured_at DESC);
+`
+
+// Migration049 clears the unsalted SHA-256 digests of low-entropy secrets
+// (provisioning bearer tokens, Fleet API tokens, SMTP passwords) that were
+// stored next to the AES-GCM ciphertexts just to render "configured"
+// booleans. The digests are crackable offline without the master key, so
+// they are wiped; the application now derives "configured" from the presence
+// of the encrypted value and only ever writes NULL to these columns. The
+// columns themselves are kept (a later migration may drop them) so that
+// rollback of the application binary stays possible.
+const Migration049 = `
+UPDATE app_provisioning_config SET bearer_token_hash = NULL WHERE bearer_token_hash IS NOT NULL;
+UPDATE fleet_config SET api_token_hash = NULL WHERE api_token_hash IS NOT NULL;
+UPDATE smtp_config SET password_hash = NULL WHERE password_hash IS NOT NULL;
+`
+
+// Migration050 stores the requester's immutable Keycloak subject on approval
+// requests so the self-approval check does not rely on the mutable username.
+// Existing rows keep ” and fall back to the username/email resolution.
+const Migration050 = `
+ALTER TABLE approval_requests ADD COLUMN IF NOT EXISTS requester_sub TEXT NOT NULL DEFAULT '';
+`
+
+// Migration051 adds the keyed-chain MAC (HMAC-SHA256 over row_hash with a
+// server-side key, see internal/audit). NULL for rows written before keying.
+const Migration051 = `
+ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS row_mac TEXT;
 `
 
 // migrationLockID is the pg_advisory_lock key guarding RunMigrations. It is a

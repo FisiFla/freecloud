@@ -7,8 +7,11 @@ import { NextRequest } from "next/server";
 // request from lib/api.ts hits this same-origin Route Handler, which
 // resolves the token SERVER-SIDE via next-auth/jwt's getToken() (mocked
 // below) and attaches it itself — the browser never holds it.
-const { getTokenMock } = vi.hoisted(() => ({ getTokenMock: vi.fn() }));
-vi.mock("next-auth/jwt", () => ({ getToken: getTokenMock }));
+const { getTokenMock, encodeMock } = vi.hoisted(() => ({
+  getTokenMock: vi.fn(),
+  encodeMock: vi.fn(),
+}));
+vi.mock("next-auth/jwt", () => ({ getToken: getTokenMock, encode: encodeMock }));
 
 import { GET, POST, readBoundedBody } from "./route";
 
@@ -546,6 +549,70 @@ describe("BFF proxy route (app/api/v1/[...path])", () => {
     expect(backendCalls).toEqual(["http://localhost:8080/api/v1/users"]);
   });
 
+  it("writes the rotated refresh token back to the session cookie", async () => {
+    process.env.AUTH_SECRET = "test-secret";
+    encodeMock.mockReset();
+    encodeMock.mockResolvedValue("encoded-session");
+    getTokenMock.mockResolvedValue({
+      sub: "user-1",
+      accessToken: "stale-access-token",
+      refreshToken: "spent-refresh-token",
+      expiresAt: Math.floor(Date.now() / 1000) - 60,
+      error: "RefreshAccessTokenError",
+    });
+    global.fetch = vi.fn(async (url: string) => {
+      if (String(url).includes("/protocol/openid-connect/token")) {
+        return new Response(
+          JSON.stringify({
+            access_token: "fresh-access-token",
+            refresh_token: "rotated-refresh-token",
+            expires_in: 300,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+
+    try {
+      const req = makeRequest("http://localhost/api/v1/users");
+      const res = await GET(req, { params: Promise.resolve({ path: ["users"] }) });
+
+      expect(res.status).toBe(200);
+      expect(encodeMock).toHaveBeenCalledTimes(1);
+      const persisted = encodeMock.mock.calls[0][0].token;
+      expect(persisted.refreshToken).toBe("rotated-refresh-token");
+      expect(persisted.accessToken).toBe("fresh-access-token");
+      expect(persisted.sub).toBe("user-1");
+      expect(persisted.error).toBeUndefined();
+      const cookie = res.cookies.get("authjs.session-token");
+      expect(cookie?.value).toBe("encoded-session");
+      expect(cookie?.httpOnly).toBe(true);
+    } finally {
+      delete process.env.AUTH_SECRET;
+    }
+  });
+
+  it("sets no session cookie when no refresh happened", async () => {
+    encodeMock.mockReset();
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+    const res = await GET(makeRequest("http://localhost/api/v1/users"), {
+      params: Promise.resolve({ path: ["users"] }),
+    });
+    expect(res.status).toBe(200);
+    expect(encodeMock).not.toHaveBeenCalled();
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
   // --- #193: raw upstream error text must not reach the browser ---
   it("replaces a raw upstream error body with a generic message", async () => {
     getTokenMock.mockResolvedValue({ accessToken: "tok" });
@@ -584,6 +651,146 @@ describe("BFF proxy route (app/api/v1/[...path])", () => {
     const text = await res.text();
     expect(text).not.toContain("/srv/backend/main.go");
     expect(text).toContain("Request failed with status 502");
+  });
+
+  it("sets a lockdown CSP and nosniff on proxied success responses", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+
+    const req = makeRequest("http://localhost/api/v1/users");
+    const res = await GET(req, { params: Promise.resolve({ path: ["users"] }) });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-security-policy")).toBe(
+      "default-src 'none'; frame-ancestors 'none'; sandbox",
+    );
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("sets the lockdown CSP and nosniff on every error response too", async () => {
+    // 400 (invalid path) — no session, no backend call.
+    getTokenMock.mockResolvedValue(null);
+    global.fetch = vi.fn() as unknown as typeof fetch;
+    const badPath = await GET(makeRequest("http://localhost/api/v1/users"), {
+      params: Promise.resolve({ path: [".."] }),
+    });
+    expect(badPath.status).toBe(400);
+    expect(badPath.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(badPath.headers.get("x-content-type-options")).toBe("nosniff");
+
+    // 401 (no session on a protected path).
+    const unauth = await GET(makeRequest("http://localhost/api/v1/users"), {
+      params: Promise.resolve({ path: ["users"] }),
+    });
+    expect(unauth.status).toBe(401);
+    expect(unauth.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
+    expect(unauth.headers.get("x-content-type-options")).toBe("nosniff");
+
+    // 502 (backend unreachable).
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    global.fetch = vi.fn().mockRejectedValue(new Error("ECONNREFUSED")) as unknown as typeof fetch;
+    const down = await GET(makeRequest("http://localhost/api/v1/users"), {
+      params: Promise.resolve({ path: ["users"] }),
+    });
+    expect(down.status).toBe(502);
+    expect(down.headers.get("content-security-policy")).toContain("sandbox");
+    expect(down.headers.get("x-content-type-options")).toBe("nosniff");
+
+    // Sanitized upstream 4xx/5xx.
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response("nope", { status: 500, headers: { "content-type": "text/plain" } }),
+    ) as unknown as typeof fetch;
+    const upstream = await GET(makeRequest("http://localhost/api/v1/users"), {
+      params: Promise.resolve({ path: ["users"] }),
+    });
+    expect(upstream.status).toBe(500);
+    expect(upstream.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(upstream.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("keeps CSV/JSON download headers working alongside the lockdown CSP", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response("a,b\n1,2\n", {
+        status: 200,
+        headers: {
+          "content-type": "text/csv",
+          "content-disposition": 'attachment; filename="report.csv"',
+        },
+      }),
+    ) as unknown as typeof fetch;
+
+    const req = makeRequest("http://localhost/api/v1/reports");
+    const res = await GET(req, { params: Promise.resolve({ path: ["reports"] }) });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/csv");
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="report.csv"');
+    expect(res.headers.get("content-security-policy")).toContain("default-src 'none'");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    await expect(res.text()).resolves.toBe("a,b\n1,2\n");
+  });
+
+  it("forwards the incoming X-Forwarded-For chain to the backend unchanged", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const req = makeRequest("http://localhost/api/v1/users", {
+      headers: { "x-forwarded-for": "203.0.113.7, 10.0.0.2" },
+    });
+    const res = await GET(req, { params: Promise.resolve({ path: ["users"] }) });
+
+    expect(res.status).toBe(200);
+    const headers = fetchSpy.mock.calls[0][1].headers as Headers;
+    expect(headers.get("X-Forwarded-For")).toBe("203.0.113.7, 10.0.0.2");
+  });
+
+  it("does not synthesise X-Forwarded-For when the incoming request has none", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "tok" });
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const req = makeRequest("http://localhost/api/v1/users");
+    await GET(req, { params: Promise.resolve({ path: ["users"] }) });
+
+    const headers = fetchSpy.mock.calls[0][1].headers as Headers;
+    expect(headers.get("X-Forwarded-For")).toBeNull();
+  });
+
+  it("never forwards a client-supplied Authorization header to the backend", async () => {
+    getTokenMock.mockResolvedValue({ accessToken: "real-session-token" });
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    global.fetch = fetchSpy as unknown as typeof fetch;
+
+    const req = makeRequest("http://localhost/api/v1/users", {
+      headers: { authorization: "Bearer attacker-supplied-token" },
+    });
+    const res = await GET(req, { params: Promise.resolve({ path: ["users"] }) });
+
+    expect(res.status).toBe(200);
+    const headers = fetchSpy.mock.calls[0][1].headers as Headers;
+    expect(headers.get("Authorization")).toBe("Bearer real-session-token");
   });
 });
 

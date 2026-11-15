@@ -179,7 +179,7 @@ export default function FederationPage() {
                 className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none"
                 value={form.connectionUrl}
                 onChange={(e) => setForm({ ...form, connectionUrl: e.target.value })}
-                placeholder="ldap://dc.example.com:389"
+                placeholder="ldaps://dc.example.com:636"
               />
             </div>
             <div>

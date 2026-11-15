@@ -101,6 +101,11 @@ func startJWKSServer(t *testing.T, jwksPayload string) *httptest.Server {
 // signedToken creates a signed JWT with the given claims and kid, signed by privKey.
 func signedToken(t *testing.T, privKey *rsa.PrivateKey, kid string, claims jwt.MapClaims) string {
 	t.Helper()
+	// Keycloak access tokens carry typ=Bearer; tests override it to mint
+	// other token types.
+	if _, ok := claims["typ"]; !ok {
+		claims["typ"] = "Bearer"
+	}
 	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	if kid != "" {
 		tok.Header["kid"] = kid
@@ -110,6 +115,42 @@ func signedToken(t *testing.T, privKey *rsa.PrivateKey, kid string, claims jwt.M
 		t.Fatalf("failed to sign token: %v", err)
 	}
 	return s
+}
+
+// TestAuthMiddlewareRejectsIDToken verifies that a correctly signed ID token
+// (same key, issuer and audience as an access token) is not a credential.
+func TestAuthMiddlewareRejectsIDToken(t *testing.T) {
+	privKey, jwksPayload, kid, _ := generateTestKeyAndJWKS(t)
+	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(jwksPayload))
+	}))
+	defer jwksSrv.Close()
+
+	am := NewAuthMiddleware(jwksSrv.URL, "freecloud", "freecloud-dashboard")
+	handler := am.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	now := time.Now()
+	for _, typ := range []string{"ID", "Refresh", ""} {
+		tokenStr := signedToken(t, privKey, kid, jwt.MapClaims{
+			"sub": "user",
+			"iss": jwksSrv.URL + "/realms/freecloud",
+			"aud": "freecloud-dashboard",
+			"azp": "freecloud-dashboard",
+			"typ": typ,
+			"exp": now.Add(time.Hour).Unix(),
+			"iat": now.Unix(),
+		})
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+		req.Header.Set("Authorization", "Bearer "+tokenStr)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusUnauthorized {
+			t.Errorf("typ=%q: expected 401, got %d", typ, rr.Code)
+		}
+	}
 }
 
 // TestAuthMiddlewareAdminBoundary verifies an admin token reaches /api/v1/users.

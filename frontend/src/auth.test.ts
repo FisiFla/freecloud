@@ -135,3 +135,47 @@ describe("session lifetime", () => {
     expect(SESSION_MAX_AGE_SECONDS).toBeLessThan(30 * 24 * 60 * 60);
   });
 });
+
+describe("production startup checks (AUTH_URL)", () => {
+  const origEnv = { ...process.env };
+
+  beforeEach(() => {
+    process.env = { ...origEnv };
+  });
+
+  afterEach(() => {
+    process.env = { ...origEnv };
+  });
+
+  // The check lives in @/lib/session (imported by @/auth), because @/auth
+  // itself cannot be imported under vitest — next-auth's server runtime
+  // requires next/server, which does not resolve outside the Next.js build.
+  function validProdEnv() {
+    vi.stubEnv("NODE_ENV", "production");
+    delete process.env.NEXT_PHASE;
+    process.env.AUTH_SECRET = "a".repeat(64);
+    process.env.AUTH_KEYCLOAK_ID = "freecloud-dashboard";
+    process.env.AUTH_KEYCLOAK_ISSUER = "https://auth.example.com/realms/freecloud";
+    delete process.env.AUTH_URL;
+    delete process.env.NEXTAUTH_URL;
+  }
+
+  it("refuses to boot in production without AUTH_URL", async () => {
+    validProdEnv();
+    await expect(loadSession()).rejects.toThrow("AUTH_URL");
+  });
+
+  it("boots in production with AUTH_URL set", async () => {
+    validProdEnv();
+    process.env.AUTH_URL = "https://app.example.com";
+    const mod = await loadSession();
+    expect(mod.jwtCallback).toBeDefined();
+  });
+
+  it("boots in development without AUTH_URL (Auth.js derives it from the request)", async () => {
+    validProdEnv();
+    vi.stubEnv("NODE_ENV", "development");
+    const mod = await loadSession();
+    expect(mod.jwtCallback).toBeDefined();
+  });
+});

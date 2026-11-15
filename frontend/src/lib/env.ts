@@ -56,19 +56,39 @@ const INSECURE_PLACEHOLDERS = new Set([
 ]);
 
 /**
+ * Minimum accepted secret length in production. Short secrets fall to brute
+ * force even when they are not on the placeholder list; 32 characters keeps
+ * the check well below what the generator produces (generate.sh writes 64
+ * hex chars for AUTH_SECRET) while rejecting weak hand-picked values.
+ */
+export const MIN_SECRET_LENGTH = 32;
+
+/**
  * rejectInsecureInProd throws (at runtime, in production) if a secret is still
- * set to a well-known placeholder value. In development it only warns. Skipped
- * during `next build`.
+ * set to a well-known placeholder value or is shorter than MIN_SECRET_LENGTH.
+ * In development it only warns. Skipped during `next build`.
  */
 export function rejectInsecureInProd(name: string, value: string): void {
-  if (isBuildPhase || !INSECURE_PLACEHOLDERS.has(value)) return;
-  if (isProd) {
-    throw new Error(
-      `${name} is set to a well-known placeholder; generate a real secret (e.g. \`openssl rand -base64 33\`).`,
-    );
+  if (isBuildPhase) return;
+  if (INSECURE_PLACEHOLDERS.has(value)) {
+    if (isProd) {
+      throw new Error(
+        `${name} is set to a well-known placeholder; generate a real secret (e.g. \`openssl rand -base64 33\`).`,
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.warn(`[dev] ${name} is the example placeholder — fine locally, NEVER in production.`);
+    return;
   }
-  // eslint-disable-next-line no-console
-  console.warn(`[dev] ${name} is the example placeholder — fine locally, NEVER in production.`);
+  if (value.length < MIN_SECRET_LENGTH) {
+    if (isProd) {
+      throw new Error(
+        `${name} must be at least ${MIN_SECRET_LENGTH} characters in production; generate a real secret (e.g. \`openssl rand -base64 33\`).`,
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.warn(`[dev] ${name} is shorter than ${MIN_SECRET_LENGTH} characters — fine locally, NEVER in production.`);
+  }
 }
 
 /**
@@ -76,4 +96,74 @@ export function rejectInsecureInProd(name: string, value: string): void {
  */
 export function isProduction(): boolean {
   return isProd;
+}
+
+/**
+ * isLoopbackHost reports whether a URL hostname is a loopback address:
+ * localhost, *.localhost, 127/8, or ::1. Shared by the production issuer
+ * guard and the safe-external-URL helper.
+ */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/\.$/, "");
+  return (
+    h === "localhost" ||
+    h.endsWith(".localhost") ||
+    h.startsWith("127.") ||
+    h === "::1" ||
+    h === "[::1]"
+  );
+}
+
+/**
+ * validateProdIssuer enforces the Keycloak issuer contract at runtime in
+ * production: the issuer must be an absolute https URL, so tokens never
+ * transit cleartext (plain http is tolerated, loudly, only on loopback — the
+ * quickstart stack). A loopback issuer (localhost, *.localhost, 127/8, ::1)
+ * only WARNS in production — deliberately not a hard failure — because the
+ * prod-smoke stack runs the production build against https://auth.localhost
+ * and is indistinguishable from a real deployment by NODE_ENV (the same
+ * mechanism every other startup guard uses; see scripts/prod-smoke.sh).
+ * Skipped during `next build`, warn-only in development.
+ */
+export function validateProdIssuer(issuer: string): void {
+  if (isBuildPhase) return;
+  let url: URL;
+  try {
+    url = new URL(issuer);
+  } catch {
+    if (isProd) {
+      throw new Error(`AUTH_KEYCLOAK_ISSUER is not a valid absolute URL: ${issuer}`);
+    }
+    // eslint-disable-next-line no-console
+    console.warn("[dev] AUTH_KEYCLOAK_ISSUER is not a valid absolute URL — fine locally, NEVER in production.");
+    return;
+  }
+  if (url.protocol !== "https:" && isProd && isLoopbackHost(url.hostname)) {
+    // The quickstart stack (docker-compose.localhost.yml) runs the production
+    // build against http://localhost: loopback traffic never leaves the host,
+    // so this is allowed, loudly. Any non-loopback http issuer still throws.
+    // eslint-disable-next-line no-console
+    console.error(
+      `[security] AUTH_KEYCLOAK_ISSUER is plain http on loopback (${url.host}). ` +
+        "Acceptable only for the single-host quickstart stack; a real deployment must use the public https Keycloak origin.",
+    );
+    return;
+  }
+  if (url.protocol !== "https:") {
+    if (isProd) {
+      throw new Error(
+        `AUTH_KEYCLOAK_ISSUER must use https in production (got ${url.protocol}//${url.host}); tokens must never transit cleartext.`,
+      );
+    }
+    // eslint-disable-next-line no-console
+    console.warn("[dev] AUTH_KEYCLOAK_ISSUER is not https — fine locally, NEVER in production.");
+    return;
+  }
+  if (isLoopbackHost(url.hostname)) {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[security] AUTH_KEYCLOAK_ISSUER points at loopback (${url.hostname}) in production. ` +
+        "Expected only for the prod-smoke stack (https://*.localhost); a real deployment must use the public Keycloak origin.",
+    );
+  }
 }

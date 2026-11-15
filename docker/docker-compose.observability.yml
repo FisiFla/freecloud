@@ -38,15 +38,24 @@ services:
     image: prom/prometheus:v2.53.0@sha256:075b1ba2c4ebb04bc3a6ab86c06ec8d8099f8fda1c96ef6d104d9bb1def1d8bc  # prometheus v2.53.0
     restart: unless-stopped
     logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus_data:/prometheus
+    # No --web.enable-lifecycle: nothing in docs/ or scripts/ calls /-/reload
+    # (config changes redeploy the container), so the remote shutdown/reload
+    # endpoints stay disabled.
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--storage.tsdb.retention.time=30d"
-      - "--web.enable-lifecycle"
     depends_on:
       - blackbox-exporter
       - alertmanager
@@ -57,6 +66,13 @@ services:
     image: prom/blackbox-exporter:v0.25.0@sha256:b04a9fef4fa086a02fc7fcd8dcdbc4b7b35cc30cdee860fdc6a19dd8b208d63e  # blackbox-exporter v0.25.0
     restart: unless-stopped
     logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     command:
       - "--config.file=/etc/blackbox_exporter/config.yml"
     volumes:
@@ -80,6 +96,13 @@ services:
     image: prom/alertmanager:v0.27.0@sha256:e13b6ed5cb929eeaee733479dce55e10eb3bc2e9c4586c705a4e8da41e5eacf5  # alertmanager v0.27.0
     restart: unless-stopped
     logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
     volumes:
       - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - alertmanager_data:/alertmanager
@@ -93,9 +116,40 @@ services:
     image: grafana/grafana:11.1.0@sha256:079600c9517b678c10cda6006b4487d3174512fd4c6cface37df7822756ed7a5  # grafana 11.1.0
     restart: unless-stopped
     logging: *default-logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    # The admin password arrives ONLY as the gf_admin_password Docker secret
+    # (GF_ADMIN_PASSWORD hand-added in .secrets/secrets.env, mirrored one-
+    # per-file by generate.sh), read via Grafana's __FILE convention — never
+    # interpolated by value, so it stays out of `docker inspect`.
+    # Upgrade note: GF_ADMIN_PASSWORD previously lived in .env.prod and is no
+    # longer read from there — move it to .secrets/secrets.env (see
+    # docs/OBSERVABILITY.md "Environment variables").
+    secrets:
+      - gf_admin_password
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:?set GF_ADMIN_PASSWORD in .env.prod}
+      - GF_SECURITY_ADMIN_PASSWORD__FILE=/run/secrets/gf_admin_password
       - GF_USERS_ALLOW_SIGN_UP=false
+    # Fail fast when the operator has not set GF_ADMIN_PASSWORD: silently
+    # booting Grafana with its default admin/admin would be worse than not
+    # booting. Note the emptiness test reads the file instead of using
+    # `test -s`: generate.sh mirrors an unset key as a file containing a
+    # single newline (consumers trim it), so -s would wrongly call it set.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -eu
+        if [ -z "$(cat /run/secrets/gf_admin_password)" ]; then
+          echo 'GF_ADMIN_PASSWORD is not set: add GF_ADMIN_PASSWORD=<strong-password> to .secrets/secrets.env and re-run make prod-secrets-init' >&2
+          exit 1
+        fi
+        exec /run.sh
     ports:
       - "127.0.0.1:${GF_PORT:-3100}:3000"
     volumes:
@@ -114,3 +168,5 @@ volumes:
 secrets:
   slack_alert_webhook_url:
     file: ../.secrets/files/slack_alert_webhook_url
+  gf_admin_password:
+    file: ../.secrets/files/gf_admin_password

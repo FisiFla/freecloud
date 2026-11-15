@@ -67,7 +67,7 @@ func TestGetSMTPConfig_NoRow(t *testing.T) {
 // without revealing the password.
 func TestGetSMTPConfig_Row(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
-	hash := "somehash"
+	enc := "some-encrypted-value"
 	db := &fakeDB{
 		queryRowFn: func(_ context.Context, sql string, args ...any) pgx.Row {
 			if isCanonicalQuery(sql) {
@@ -78,7 +78,7 @@ func TestGetSMTPConfig_Row(t *testing.T) {
 				*(dest[1].(*string)) = "587"
 				*(dest[2].(*string)) = "user@example.com"
 				*(dest[3].(*string)) = "from@example.com"
-				*(dest[4].(**string)) = &hash
+				*(dest[4].(**string)) = &enc
 				*(dest[5].(*time.Time)) = now
 				return nil
 			}}
@@ -115,6 +115,9 @@ func TestGetSMTPConfig_Row(t *testing.T) {
 
 // TestUpsertSMTPConfig_SavesConfig verifies persistence and Keycloak sync.
 func TestUpsertSMTPConfig_SavesConfig(t *testing.T) {
+	// The fixture hostname cannot resolve, so run as test env: production
+	// host validation fails closed on unresolvable names.
+	t.Setenv("APP_ENV", "test")
 	var execSQL string
 	db := &fakeDB{
 		execFn: func(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {

@@ -72,12 +72,19 @@ func (h *Handler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The immutable Keycloak subject is stored next to the (mutable) username
+	// so the self-approval check does not depend on a rename-able identifier.
+	requesterSub := ""
+	if claims := middleware.GetClaims(r.Context()); claims != nil {
+		requesterSub = claims.Sub
+	}
+
 	var id string
 	err = h.db.QueryRow(r.Context(),
-		`INSERT INTO approval_requests (action_type, requester_id, payload, org_id)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO approval_requests (action_type, requester_id, payload, org_id, requester_sub)
+		 VALUES ($1, $2, $3, $4, $5)
 		 RETURNING id`,
-		req.ActionType, actorID, payloadBytes, oc.OrgID,
+		req.ActionType, actorID, payloadBytes, oc.OrgID, requesterSub,
 	).Scan(&id)
 	if err != nil {
 		h.logger.Error("failed to insert approval request", zap.Error(err))
@@ -159,6 +166,53 @@ func (h *Handler) ListApprovalRequests(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, out)
 }
 
+// isSelfApproval reports whether the decider (actorID username, plus the
+// JWT claims on ctx) is the stored request's requester.
+//
+// The stored requester_id is a preferred_username captured at submit time —
+// mutable. The comparison is therefore done on the immutable Keycloak
+// subject whenever the stored request carries or resolves to one:
+//   - direct equality when requester_id already is a subject
+//     (ActorIDMiddleware falls back to sub when preferred_username is empty);
+//   - otherwise resolution through users.email, which is exact in this
+//     deployment because Keycloak usernames are always the email (see the
+//     identity provider client) and users.email is UNIQUE NOT NULL.
+//
+// The username check is kept as an additional fail-closed condition: it
+// still rejects when the subject cannot be resolved (renamed email, deleted
+// user row) and when a username was recycled by a different subject. Either
+// identifier matching rejects.
+//
+// Requests submitted since migration 050 store requester_sub; for those the
+// stored subject is compared directly and the resolution above is not used.
+func isSelfApproval(ctx context.Context, db DBPool, requesterID, requesterSub, actorID string) bool {
+	if actorID != "" && actorID == requesterID {
+		return true
+	}
+	claims := middleware.GetClaims(ctx)
+	if claims == nil || claims.Sub == "" {
+		return false
+	}
+	if requesterSub != "" {
+		// Stored at submit time (migration 050): authoritative.
+		return requesterSub == claims.Sub
+	}
+	// Rows submitted before migration 050 carry no subject: resolve it.
+	if requesterID != "" && requesterID == claims.Sub {
+		return true
+	}
+	if db == nil {
+		return false
+	}
+	var resolvedSub string
+	if err := db.QueryRow(ctx,
+		`SELECT keycloak_user_id FROM users WHERE email = $1`, requesterID,
+	).Scan(&resolvedSub); err != nil {
+		return false
+	}
+	return resolvedSub != "" && resolvedSub == claims.Sub
+}
+
 // DecideApproval approves or rejects a pending request. On approval, the
 // underlying onboard/offboard action is executed synchronously.
 //
@@ -197,12 +251,12 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch and lock the approval request.
-	var actionType, status, requesterID string
+	var actionType, status, requesterID, requesterSub string
 	var payloadBytes []byte
 	err := h.db.QueryRow(r.Context(),
-		`SELECT action_type, status, payload, requester_id FROM approval_requests WHERE id = $1 AND org_id = $2`,
+		`SELECT action_type, status, payload, requester_id, requester_sub FROM approval_requests WHERE id = $1 AND org_id = $2`,
 		approvalID, oc.OrgID,
-	).Scan(&actionType, &status, &payloadBytes, &requesterID)
+	).Scan(&actionType, &status, &payloadBytes, &requesterID, &requesterSub)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "approval request not found")
 		return
@@ -211,7 +265,7 @@ func (h *Handler) DecideApproval(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusConflict, "approval request already decided")
 		return
 	}
-	if actorID == requesterID {
+	if isSelfApproval(r.Context(), h.db, requesterID, requesterSub, actorID) {
 		respondError(w, http.StatusForbidden, "cannot approve or reject your own request")
 		return
 	}

@@ -188,6 +188,7 @@ func TestApplyAttributeMap_StableAcrossRuns(t *testing.T) {
 // ---- #147: outbound SCIM group filter is escaped ----
 
 func TestSCIMConnector_GroupFilterIsEscaped(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var capturedRawQuery string
 	var capturedFilter string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -210,9 +211,18 @@ func TestSCIMConnector_GroupFilterIsEscaped(t *testing.T) {
 	defer srv.Close()
 
 	c := NewSCIMConnector(srv.URL, "tok")
-	// A group name with a space and one with a quote.
-	for _, name := range []string{"Sales Team", `x" or displayName co "y`} {
-		_, _ = c.findOrCreateGroup(context.Background(), name)
+	// A group name with a space, one with a quote (filter injection
+	// attempt), and one with a quote and a backslash.
+	cases := []struct {
+		name       string
+		wantFilter string
+	}{
+		{"Sales Team", `displayName eq "Sales Team"`},
+		{`x" or displayName co "y`, `displayName eq "x\" or displayName co \"y"`},
+		{`a"b\c`, `displayName eq "a\"b\\c"`},
+	}
+	for _, tc := range cases {
+		_, _ = c.findOrCreateGroup(context.Background(), tc.name)
 		if capturedRawQuery == "" {
 			t.Fatal("no request captured")
 		}
@@ -224,10 +234,11 @@ func TestSCIMConnector_GroupFilterIsEscaped(t *testing.T) {
 		if strings.Contains(capturedRawQuery, `"`) {
 			t.Errorf("raw query contains an unescaped quote: %q", capturedRawQuery)
 		}
-		// The decoded filter must be the intended expression — the quote in
-		// the name must not terminate the string literal early.
-		if capturedFilter != `displayName eq "`+name+`"` {
-			t.Errorf("filter=%q want %q", capturedFilter, `displayName eq "`+name+`"`)
+		// The decoded filter must carry the SCIM-escaped name (JSON string
+		// escaping): the quote in the name must not terminate the string
+		// literal early.
+		if capturedFilter != tc.wantFilter {
+			t.Errorf("filter=%q want %q", capturedFilter, tc.wantFilter)
 		}
 	}
 }

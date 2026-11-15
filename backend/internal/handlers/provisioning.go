@@ -9,15 +9,12 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -27,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
+	"github.com/FisiFla/freecloud/backend/internal/httpx"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 	"github.com/FisiFla/freecloud/backend/internal/provisioning"
 )
@@ -87,14 +85,17 @@ func (h *Handler) GetProvisioningConfig(w http.ResponseWriter, r *http.Request) 
 		enabled           bool
 		connectorType     string
 		endpointURL       string
-		bearerTokenHash   *string
+		bearerTokenEnc    *string
 		attributeMapBytes []byte
 	)
+	// "Configured" is derived from the encrypted value's presence. The legacy
+	// bearer_token_hash column (unsalted SHA-256 of low-entropy secrets) is
+	// no longer read: it is cleared by migration and never written again.
 	err := h.db.QueryRow(r.Context(),
-		`SELECT enabled, connector_type, COALESCE(endpoint_url, ''), bearer_token_hash, attribute_map
+		`SELECT enabled, connector_type, COALESCE(endpoint_url, ''), bearer_token_enc, attribute_map
 		 FROM app_provisioning_config WHERE app_id = $1`,
 		appID,
-	).Scan(&enabled, &connectorType, &endpointURL, &bearerTokenHash, &attributeMapBytes)
+	).Scan(&enabled, &connectorType, &endpointURL, &bearerTokenEnc, &attributeMapBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			respondJSON(w, http.StatusOK, ProvisioningConfigResponse{
@@ -121,14 +122,15 @@ func (h *Handler) GetProvisioningConfig(w http.ResponseWriter, r *http.Request) 
 		Enabled:               enabled,
 		ConnectorType:         connectorType,
 		EndpointURL:           endpointURL,
-		BearerTokenConfigured: bearerTokenHash != nil && *bearerTokenHash != "",
+		BearerTokenConfigured: bearerTokenEnc != nil && *bearerTokenEnc != "",
 		AttributeMap:          attrMap,
 	})
 }
 
 // UpsertProvisioningConfig creates or updates the provisioning config for an app.
-// The bearer token is encrypted at rest (AES-256-GCM) and its SHA-256 hash stored
-// for "configured" detection. The plaintext is never echoed back.
+// The bearer token is encrypted at rest (AES-256-GCM, v1 envelope); the
+// plaintext is never echoed back. "Configured" is derived from the encrypted
+// value's presence — no secret hash is written.
 func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Request) {
 	appID := chi.URLParam(r, "appId")
 	if err := ValidateUserID(appID); err != nil {
@@ -159,9 +161,20 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// The endpoint field means something different per connector type: a
+	// SCIM/Slack base URL versus a GitHub organization name. Validating a
+	// GitHub org as an https URL both rejected valid orgs and stored URLs
+	// that the connector then used as an org name, so validate per type.
 	req.EndpointURL = strings.TrimSpace(req.EndpointURL)
 	if req.EndpointURL != "" {
-		if err := validateOutboundEndpointURL(req.EndpointURL); err != nil {
+		if req.ConnectorType == "github" {
+			org, err := provisioning.NormalizeGitHubOrgRef(req.EndpointURL)
+			if err != nil {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			req.EndpointURL = org
+		} else if err := validateOutboundEndpointURL(req.EndpointURL); err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -183,13 +196,8 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Encrypt the bearer token if provided.
-	var tokenHash *string
 	var tokenEnc *string
 	if req.BearerToken != "" {
-		h256 := sha256.Sum256([]byte(req.BearerToken))
-		hStr := fmt.Sprintf("%x", h256)
-		tokenHash = &hStr
-
 		enc, err := encryptProvisioningToken(req.BearerToken)
 		if err != nil {
 			h.logger.Error("upsert provisioning config: encrypt token failed", zap.Error(err))
@@ -210,6 +218,8 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 	// Upsert the config. Clearing the bearer token needs its own statement:
 	// the normal upsert keeps the stored token whenever the request does
 	// not carry a new one (COALESCE), so there was no way to remove it.
+	// No statement writes a token hash anymore: the legacy bearer_token_hash
+	// column is only ever cleared (NULL), never given a digest value.
 	var err error
 	if req.ClearBearerToken {
 		_, err = h.db.Exec(ctx,
@@ -230,16 +240,16 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		_, err = h.db.Exec(ctx,
 			`INSERT INTO app_provisioning_config
 			   (app_id, enabled, connector_type, endpoint_url, bearer_token_hash, bearer_token_enc, attribute_map, org_id)
-			 VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8)
+			 VALUES ($1, $2, $3, NULLIF($4, ''), NULL, $5, $6, $7)
 			 ON CONFLICT (app_id) DO UPDATE
 			   SET enabled         = EXCLUDED.enabled,
 			       connector_type  = EXCLUDED.connector_type,
 			       endpoint_url    = EXCLUDED.endpoint_url,
-			       bearer_token_hash = COALESCE(EXCLUDED.bearer_token_hash, app_provisioning_config.bearer_token_hash),
 			       bearer_token_enc  = COALESCE(EXCLUDED.bearer_token_enc,  app_provisioning_config.bearer_token_enc),
+			       bearer_token_hash = NULL,
 			       attribute_map   = EXCLUDED.attribute_map,
 			       updated_at      = NOW()`,
-			appID, req.Enabled, req.ConnectorType, req.EndpointURL, tokenHash, tokenEnc, string(attrMapJSON), oc.OrgID,
+			appID, req.Enabled, req.ConnectorType, req.EndpointURL, tokenEnc, string(attrMapJSON), oc.OrgID,
 		)
 	}
 	if err != nil {
@@ -261,13 +271,13 @@ func (h *Handler) UpsertProvisioningConfig(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	tokenConfigured := tokenHash != nil
+	tokenConfigured := tokenEnc != nil
 	if !tokenConfigured && !req.ClearBearerToken {
-		var savedHash *string
+		var savedEnc *string
 		if err := h.db.QueryRow(ctx,
-			`SELECT bearer_token_hash FROM app_provisioning_config WHERE app_id = $1`,
+			`SELECT bearer_token_enc FROM app_provisioning_config WHERE app_id = $1`,
 			appID,
-		).Scan(&savedHash); err == nil && savedHash != nil && *savedHash != "" {
+		).Scan(&savedEnc); err == nil && savedEnc != nil && *savedEnc != "" {
 			tokenConfigured = true
 		}
 	}
@@ -410,6 +420,11 @@ func (h *Handler) ResyncUser(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("failed to write provisioning resync audit log", zap.Error(err))
 	}
 
+	if !tryAcquireAsyncProvisioning() {
+		respondError(w, http.StatusTooManyRequests, "provisioning is busy, try again later")
+		return
+	}
+
 	capturedAppID := appID
 	capturedUser := provisioning.ProvisionableUser{
 		ID:         userID,
@@ -419,6 +434,7 @@ func (h *Handler) ResyncUser(w http.ResponseWriter, r *http.Request) {
 		Department: department,
 	}
 	go func() {
+		defer releaseAsyncProvisioning()
 		resyncCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := h.provisionEngine.ProvisionUser(resyncCtx, capturedAppID, capturedUser); err != nil {
@@ -584,7 +600,13 @@ func (h *Handler) ReconcileAllHandler(w http.ResponseWriter, r *http.Request) {
 		h.logger.Warn("failed to write provisioning reconcile-all audit log", zap.Error(err))
 	}
 
+	if !tryAcquireAsyncProvisioning() {
+		respondError(w, http.StatusTooManyRequests, "provisioning is busy, try again later")
+		return
+	}
+
 	go func() {
+		defer releaseAsyncProvisioning()
 		reconcileCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		if err := h.provisionEngine.ReconcileAll(reconcileCtx); err != nil {
@@ -595,53 +617,75 @@ func (h *Handler) ReconcileAllHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusAccepted, map[string]bool{"queued": true})
 }
 
-// tokenSHA256 returns a hex-encoded SHA-256 digest of the given plaintext.
-// Used to store a "configured" indicator without persisting the plaintext.
-func tokenSHA256(plaintext string) string {
-	h := sha256.Sum256([]byte(plaintext))
-	return fmt.Sprintf("%x", h)
+// maxAsyncProvisioning bounds how many async provisioning jobs (user resyncs
+// and reconcile-all runs) may be in flight at once. Without the bound, every
+// request spawns a goroutine that holds a DB connection and hammers the
+// downstream SaaS for up to 5 minutes — a handful of requests exhausts the
+// pool. Saturated requests fail fast with 429 instead of queueing.
+const maxAsyncProvisioning = 8
+
+var asyncProvisioningSem = make(chan struct{}, maxAsyncProvisioning)
+
+// tryAcquireAsyncProvisioning takes a concurrency slot without blocking,
+// reporting whether one was available.
+func tryAcquireAsyncProvisioning() bool {
+	select {
+	case asyncProvisioningSem <- struct{}{}:
+		return true
+	default:
+		return false
+	}
 }
 
-// decryptProvisioningToken reverses encryptProvisioningToken.
-// In development/test only, a missing PROVISIONING_MASTER_KEY treats the input
-// as plain base64 so local tests do not require secret setup.
+// releaseAsyncProvisioning frees a slot taken by tryAcquireAsyncProvisioning.
+func releaseAsyncProvisioning() {
+	<-asyncProvisioningSem
+}
+
+// Secret purposes bound into the v1 envelope as AES-GCM additional
+// authenticated data, so a ciphertext copied from one use to another (SMTP
+// password replayed as a Fleet token, ...) fails to decrypt.
+const (
+	SecretPurposeConnectorToken = "connector-token"
+	SecretPurposeFleetToken     = "fleet-token"
+	SecretPurposeSMTPPassword   = "smtp-password"
+)
+
+// secretEnvelopeV1 prefixes every new ciphertext. Legacy ciphertexts are raw
+// base64 (no colon), so the prefix unambiguously distinguishes the formats.
+const secretEnvelopeV1 = "v1:"
+
+// secretAAD derives the GCM additional authenticated data for a purpose.
+func secretAAD(purpose string) []byte {
+	return []byte("freecloud-provisioning/v1:" + purpose)
+}
+
+// decryptProvisioningToken reverses encryptProvisioningToken. It accepts both
+// the legacy unversioned format and v1 envelopes (verifying the AAD recorded
+// in the envelope). Prefer decryptSecret with an explicit purpose for new
+// code; this wrapper stays for compatibility. Rotation signalling is dropped
+// here — callers that can write the value back must use decryptSecret.
 func decryptProvisioningToken(ciphertext string) (string, error) {
-	raw, err := base64.StdEncoding.DecodeString(ciphertext)
-	if err != nil {
-		return "", fmt.Errorf("decode ciphertext: %w", err)
-	}
-	key, err := provisioningMasterKey()
-	if err != nil {
-		return "", err
-	}
-	if key == nil {
-		// Dev/test mode: the "ciphertext" is just base64(plaintext).
-		return string(raw), nil
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return "", err
-	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return "", err
-	}
-	nonceSize := gcm.NonceSize()
-	if len(raw) < nonceSize {
-		return "", fmt.Errorf("ciphertext too short")
-	}
-	nonce, ciphertextBytes := raw[:nonceSize], raw[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ciphertextBytes, nil)
-	if err != nil {
-		return "", fmt.Errorf("decrypt: %w", err)
-	}
-	return string(plaintext), nil
+	plaintext, _, err := decryptSecret("", ciphertext)
+	return plaintext, err
 }
 
-// encryptProvisioningToken encrypts a plaintext bearer token using AES-256-GCM
-// with the key from PROVISIONING_MASTER_KEY (base64-encoded 32 bytes).
+// encryptProvisioningToken encrypts a plaintext connector token using
+// AES-256-GCM with the key from PROVISIONING_MASTER_KEY (base64-encoded 32
+// bytes). New ciphertexts use the v1 envelope with connector-token AAD.
 // In development/test only, a missing key returns a plain base64 encoding.
 func encryptProvisioningToken(plaintext string) (string, error) {
+	return encryptSecret(SecretPurposeConnectorToken, plaintext)
+}
+
+// encryptSecret seals plaintext for purpose. New ciphertexts always use the
+// v1 envelope ("v1:<purpose>:<base64>") with the purpose bound as AAD. In
+// development/test only, a missing PROVISIONING_MASTER_KEY returns a plain
+// base64 encoding (unchanged legacy dev format).
+func encryptSecret(purpose, plaintext string) (string, error) {
+	if purpose == "" {
+		return "", fmt.Errorf("secret purpose is required")
+	}
 	key, err := provisioningMasterKey()
 	if err != nil {
 		return "", err
@@ -662,8 +706,94 @@ func encryptProvisioningToken(plaintext string) (string, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-	return base64.StdEncoding.EncodeToString(ciphertext), nil
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), secretAAD(purpose))
+	return secretEnvelopeV1 + purpose + ":" + base64.StdEncoding.EncodeToString(ciphertext), nil
+}
+
+// decryptSecret opens a ciphertext sealed by encryptSecret (or the legacy
+// format). purpose, when non-empty, must match the purpose recorded in a v1
+// envelope, otherwise decryption fails. The legacy unversioned format
+// (AES-GCM, nil AAD) keeps decrypting regardless of purpose so existing rows
+// stay readable. The previous master key, when configured, is tried after the
+// current one; rotated reports whether it was the one that worked, so the
+// caller can re-encrypt the value with the current key.
+func decryptSecret(purpose, ciphertext string) (plaintext string, rotated bool, err error) {
+	key, err := provisioningMasterKey()
+	if err != nil {
+		return "", false, err
+	}
+	prevKey, err := provisioningMasterKeyPrevious()
+	if err != nil {
+		return "", false, err
+	}
+
+	if rest, ok := strings.CutPrefix(ciphertext, secretEnvelopeV1); ok {
+		recorded, payload, found := strings.Cut(rest, ":")
+		if !found || recorded == "" || payload == "" {
+			return "", false, fmt.Errorf("malformed v1 secret envelope")
+		}
+		if purpose != "" && recorded != purpose {
+			return "", false, fmt.Errorf("secret purpose mismatch")
+		}
+		if key == nil {
+			return "", false, fmt.Errorf("PROVISIONING_MASTER_KEY must be set to decrypt v1 secrets")
+		}
+		raw, err := base64.StdEncoding.DecodeString(payload)
+		if err != nil {
+			return "", false, fmt.Errorf("decode ciphertext: %w", err)
+		}
+		aad := secretAAD(recorded)
+		if pt, err := openSecret(key, raw, aad); err == nil {
+			return pt, false, nil
+		}
+		if prevKey != nil {
+			if pt, err := openSecret(prevKey, raw, aad); err == nil {
+				return pt, true, nil
+			}
+		}
+		return "", false, fmt.Errorf("decrypt: authentication failed")
+	}
+
+	// Legacy format: base64(nonce||ciphertext), nil AAD.
+	raw, err := base64.StdEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", false, fmt.Errorf("decode ciphertext: %w", err)
+	}
+	if key == nil {
+		// Dev/test mode: the "ciphertext" is just base64(plaintext).
+		return string(raw), false, nil
+	}
+	if pt, err := openSecret(key, raw, nil); err == nil {
+		return pt, false, nil
+	}
+	if prevKey != nil {
+		if pt, err := openSecret(prevKey, raw, nil); err == nil {
+			return pt, true, nil
+		}
+	}
+	return "", false, fmt.Errorf("decrypt: authentication failed")
+}
+
+// openSecret decrypts one AES-256-GCM ciphertext with a single key.
+func openSecret(key, raw, aad []byte) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(raw) < nonceSize {
+		return "", fmt.Errorf("ciphertext too short")
+	}
+	nonce, ciphertextBytes := raw[:nonceSize], raw[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertextBytes, aad)
+	if err != nil {
+		return "", err
+	}
+	return string(plaintext), nil
 }
 
 // provisioningMasterKeyB64 holds the RESOLVED PROVISIONING_MASTER_KEY — i.e.
@@ -712,6 +842,55 @@ func provisioningMasterKey() ([]byte, error) {
 	return key, nil
 }
 
+// provisioningMasterKeyPreviousB64 holds the RESOLVED
+// PROVISIONING_MASTER_KEY_PREVIOUS — the retired key, tried on decrypt only
+// so values sealed before a rotation stay readable until they are
+// re-encrypted. Injected by SetProvisioningMasterKeyPrevious; the plain-env
+// and _FILE fallbacks below exist until main.go wires the setter (follow-up
+// for the config lane).
+var provisioningMasterKeyPreviousB64 atomic.Value // string
+
+// SetProvisioningMasterKeyPrevious injects the resolved previous master key.
+func SetProvisioningMasterKeyPrevious(keyB64 string) {
+	provisioningMasterKeyPreviousB64.Store(keyB64)
+}
+
+// resolvedProvisioningMasterKeyPrevious returns the injected previous key,
+// falling back to PROVISIONING_MASTER_KEY_PREVIOUS_FILE (mounted secret,
+// mirroring the current key's _FILE form) and then the plain environment
+// variable. Empty means no rotation is in progress.
+func resolvedProvisioningMasterKeyPrevious() string {
+	if v, ok := provisioningMasterKeyPreviousB64.Load().(string); ok && v != "" {
+		return v
+	}
+	if path := strings.TrimSpace(os.Getenv("PROVISIONING_MASTER_KEY_PREVIOUS_FILE")); path != "" {
+		if data, err := os.ReadFile(path); err == nil {
+			if s := strings.TrimSpace(string(data)); s != "" {
+				return s
+			}
+		}
+	}
+	return os.Getenv("PROVISIONING_MASTER_KEY_PREVIOUS")
+}
+
+// ProvisioningMasterKeyPrevious exposes the retired key (nil when no rotation
+// is in progress) so main can derive verification-only keys from it.
+func ProvisioningMasterKeyPrevious() ([]byte, error) { return provisioningMasterKeyPrevious() }
+
+// provisioningMasterKeyPrevious returns the previous key, or nil when no
+// rotation is in progress. It is only ever used for decryption.
+func provisioningMasterKeyPrevious() ([]byte, error) {
+	prevB64 := resolvedProvisioningMasterKeyPrevious()
+	if prevB64 == "" {
+		return nil, nil
+	}
+	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(prevB64))
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("PROVISIONING_MASTER_KEY_PREVIOUS must be a base64-encoded 32-byte key")
+	}
+	return key, nil
+}
+
 // validateOutboundEndpointURL rejects non-HTTPS (except localhost in
 // development/test) and private/link-local/metadata destinations so a
 // super-admin cannot point provisioning at the cloud IMDS or internal
@@ -722,79 +901,8 @@ func validateOutboundEndpointURL(raw string) error {
 
 // validateOutboundURL is the shared SSRF guard for operator-supplied
 // outbound URLs. field names the request field so the error message points
-// at the offending input.
+// at the offending input. The policy lives in internal/httpx (shared with
+// the hardened outbound client); this wrapper keeps the call sites stable.
 func validateOutboundURL(field, raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return fmt.Errorf("%s must be a valid absolute URL", field)
-	}
-	scheme := strings.ToLower(u.Scheme)
-	host := u.Hostname()
-	if host == "" {
-		return fmt.Errorf("%s must include a host", field)
-	}
-	devOrTest := os.Getenv("APP_ENV") == "development" || os.Getenv("APP_ENV") == "test"
-	switch scheme {
-	case "https":
-		// always ok
-	case "http":
-		// HTTP only in development/test (compose mocks rarely terminate TLS).
-		if !devOrTest {
-			return fmt.Errorf("%s must use https", field)
-		}
-	default:
-		return fmt.Errorf("%s scheme must be https", field)
-	}
-
-	// Block obvious metadata / internal hostnames without DNS.
-	lowerHost := strings.ToLower(host)
-	if lowerHost == "metadata.google.internal" ||
-		strings.HasSuffix(lowerHost, ".internal") ||
-		lowerHost == "metadata" {
-		return fmt.Errorf("%s host is not allowed", field)
-	}
-
-	// If host is a literal IP, check it directly.
-	if ip := net.ParseIP(host); ip != nil {
-		if isBlockedOutboundIP(ip) {
-			return fmt.Errorf("%s must not target a private or link-local address", field)
-		}
-		return nil
-	}
-
-	// Resolve DNS and reject if any answer is private/link-local.
-	// Skip DNS in unit tests when host is clearly external-looking? Always resolve
-	// for safety; failures fail closed.
-	ips, err := net.LookupIP(host)
-	if err != nil {
-		// Fail closed: cannot verify destination.
-		return fmt.Errorf("%s host could not be resolved", field)
-	}
-	for _, ip := range ips {
-		if isBlockedOutboundIP(ip) {
-			return fmt.Errorf("%s must not target a private or link-local address", field)
-		}
-	}
-	return nil
-}
-
-func isBlockedOutboundIP(ip net.IP) bool {
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		// In development/test, allow loopback and RFC1918 so compose services
-		// (scim-mock-e2e, etc.) can be used as provisioning endpoints. Outside
-		// those envs, all private/link-local destinations are blocked.
-		devOrTest := os.Getenv("APP_ENV") == "development" || os.Getenv("APP_ENV") == "test"
-		if devOrTest && (ip.IsLoopback() || ip.IsPrivate()) {
-			return false
-		}
-		return true
-	}
-	// AWS/GCP/Azure link-local metadata (169.254.169.254 is link-local; covered above).
-	// Also block CGNAT 100.64.0.0/10 commonly used for cloud private nets.
-	if ip4 := ip.To4(); ip4 != nil {
-		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
-			return true
-		}
-	}
-	return false
+	return httpx.ValidateOutboundURL(field, raw)
 }

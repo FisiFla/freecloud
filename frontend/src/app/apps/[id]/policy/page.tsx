@@ -14,11 +14,16 @@ import {
   type AppAccessPolicy,
   type AccessEvalResponse,
 } from "@/lib/api";
-import { useApiReady } from "../../../providers";
+import { useApiReady, useOrg } from "../../../providers";
 
 export default function AppPolicyPage() {
   const { id: appId } = useParams<{ id: string }>();
   const apiReady = useApiReady();
+  const { me } = useOrg();
+  // PUT /api/v1/apps/{id}/policy is super-admin only — other roles (helpdesk,
+  // org-admins) see the policy read-only instead of a save button that would
+  // fail with 403. Same gate as the organizations settings page.
+  const canEditPolicy = !!me?.isSystemAdmin;
 
   // Policy load state
   const [loading, setLoading] = useState(true);
@@ -92,7 +97,7 @@ export default function AppPolicyPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!appId) return;
+    if (!appId || !canEditPolicy) return;
     setSaving(true);
     setSaveError(null);
     setSaveOk(false);
@@ -153,6 +158,13 @@ export default function AppPolicyPage() {
 
       {loadError && <ErrorBanner message={loadError} />}
 
+      {!canEditPolicy && (
+        <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          Only super-admins can modify access policies — the form below is read-only. You can
+          still run previews.
+        </p>
+      )}
+
       {/* Policy form */}
       <form onSubmit={handleSave} className="space-y-6 bg-white border border-gray-200 rounded-lg p-5">
         {/* Posture requirements */}
@@ -186,8 +198,9 @@ export default function AppPolicyPage() {
                   type="checkbox"
                   id={id}
                   checked={checked}
+                  disabled={!canEditPolicy}
                   onChange={(e) => onChange(e.target.checked)}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:opacity-60"
                 />
                 {label}
               </label>
@@ -213,8 +226,9 @@ export default function AppPolicyPage() {
                 type="text"
                 placeholder="09:00"
                 value={allowedTimeStart}
+                disabled={!canEditPolicy}
                 onChange={(e) => setAllowedTimeStart(e.target.value)}
-                className="block w-28 rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="block w-28 rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100"
               />
             </div>
             <span className="mt-4 text-gray-400">–</span>
@@ -227,8 +241,9 @@ export default function AppPolicyPage() {
                 type="text"
                 placeholder="18:00"
                 value={allowedTimeEnd}
+                disabled={!canEditPolicy}
                 onChange={(e) => setAllowedTimeEnd(e.target.value)}
-                className="block w-28 rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="block w-28 rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100"
               />
             </div>
           </div>
@@ -245,10 +260,11 @@ export default function AppPolicyPage() {
           </p>
           <textarea
             value={networkAllowlistRaw}
+            disabled={!canEditPolicy}
             onChange={(e) => setNetworkAllowlistRaw(e.target.value)}
             rows={4}
             placeholder={"10.0.0.0/8\n192.168.1.0/24"}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100"
           />
         </div>
 
@@ -264,10 +280,11 @@ export default function AppPolicyPage() {
           </p>
           <textarea
             value={geoCountryAllowlistRaw}
+            disabled={!canEditPolicy}
             onChange={(e) => setGeoCountryAllowlistRaw(e.target.value)}
             rows={3}
             placeholder={"DE\nAT\nCH"}
-            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:bg-gray-100"
           />
         </div>
 
@@ -276,7 +293,8 @@ export default function AppPolicyPage() {
 
         <button
           type="submit"
-          disabled={saving}
+          disabled={saving || !canEditPolicy}
+          title={canEditPolicy ? undefined : "Only super-admins can modify access policies"}
           className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
         >
           {saving ? "Saving…" : "Save policy"}

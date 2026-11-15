@@ -7,17 +7,19 @@
  * helper.
  */
 import type { JWT } from "@auth/core/jwt";
+import { requiredProdEnv } from "./env";
 import { refreshAccessToken, type RefreshableToken } from "./keycloak";
 
 /**
- * Session lifetime in seconds (8 hours).
- *
- * Auth.js defaults to 30 days with no idle timeout (see
- * @auth/core/lib/init.js), which is far too long for an admin dashboard
- * holding a live Keycloak access token. The value bounds both the session
- * JWT's `exp` and the session cookie's lifetime.
+ * The dashboard's public origin. Auth.js treats AUTH_URL as optional and
+ * otherwise derives redirect URIs from request Host headers — in production
+ * it is required here (this module is imported by src/auth.ts, so the app
+ * refuses to boot without it) so a forged Host header can never steer OAuth
+ * callbacks. In development Auth.js keeps deriving it from the request.
  */
-export const SESSION_MAX_AGE_SECONDS = 8 * 60 * 60;
+export const authUrl = requiredProdEnv("AUTH_URL", "");
+
+export { SESSION_MAX_AGE_SECONDS } from "./session-cookie";
 
 /** The OIDC tokens Auth.js stores on the session JWT. */
 type TokenWithAccess = RefreshableToken;

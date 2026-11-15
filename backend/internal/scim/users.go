@@ -30,6 +30,13 @@ func respondError(w http.ResponseWriter, status int, detail, scimType string) {
 	})
 }
 
+// likeEscaper escapes the LIKE/ILIKE metacharacters (backslash, percent,
+// underscore) so a co/sw/ew filter value matches literally. Every ILIKE
+// predicate built from user input must pair this with an ESCAPE '\' clause.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func escapeLike(s string) string { return likeEscaper.Replace(s) }
+
 func userFromRow(id, email, firstName, lastName string, disabled bool, createdAt, updatedAt time.Time, version int64) User {
 	return User{
 		Schemas:  []string{SchemaUser},
@@ -83,21 +90,33 @@ func (s *Service) ListUsers(w http.ResponseWriter, r *http.Request) {
 
 	filterRaw := r.URL.Query().Get("filter")
 	// filterOp and filterVal are used to build a SQL WHERE clause.
-	// filterOp: "eq", "co", "sw" — derived from the SCIM filter node.
+	// filterOp: "eq", "co", "sw", "ew" — derived from the SCIM filter node.
 	var filterOp, filterVal string
 	if filterRaw != "" {
 		// A logical filter (and/or/not) cannot be expressed as a single
 		// SQL predicate. Ignoring it silently returned every user instead
 		// of the filtered set, so it is rejected with 400 invalidFilter as
-		// RFC 7644 §3.4.2.2 requires.
+		// RFC 7644 §3.4.2.2 requires. The same holds for an unsupported
+		// operator (ne, pr) or attribute: failing open to the whole org
+		// list would hand a client data it did not ask for.
 		f, err := ParseFlatFilterStrict(filterRaw)
 		if err != nil {
 			respondError(w, http.StatusBadRequest, "filter: logical expressions (and/or/not) are not supported", "invalidFilter")
 			return
 		}
-		if f != nil && (f.Attr == "username" || f.Attr == "emails.value") {
-			filterOp = f.Op
-			filterVal = strings.ToLower(f.Value)
+		if f != nil {
+			if f.Attr != "username" && f.Attr != "emails.value" {
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("filter: unsupported attribute %q (supported: userName, emails.value)", f.Attr), "invalidFilter")
+				return
+			}
+			switch f.Op {
+			case "eq", "co", "sw", "ew":
+				filterOp = f.Op
+				filterVal = strings.ToLower(f.Value)
+			default:
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("filter: unsupported operator %q (supported: eq, co, sw, ew)", f.Op), "invalidFilter")
+				return
+			}
 		}
 	}
 
@@ -115,12 +134,16 @@ func (s *Service) ListUsers(w http.ResponseWriter, r *http.Request) {
 		args = append(args, filterVal)
 		argIdx++
 	case "co":
-		query += ` AND u.email ILIKE $` + strconv.Itoa(argIdx)
-		args = append(args, "%"+filterVal+"%")
+		query += ` AND u.email ILIKE $` + strconv.Itoa(argIdx) + ` ESCAPE '\'`
+		args = append(args, "%"+escapeLike(filterVal)+"%")
 		argIdx++
 	case "sw":
-		query += ` AND u.email ILIKE $` + strconv.Itoa(argIdx)
-		args = append(args, filterVal+"%")
+		query += ` AND u.email ILIKE $` + strconv.Itoa(argIdx) + ` ESCAPE '\'`
+		args = append(args, escapeLike(filterVal)+"%")
+		argIdx++
+	case "ew":
+		query += ` AND u.email ILIKE $` + strconv.Itoa(argIdx) + ` ESCAPE '\'`
+		args = append(args, "%"+escapeLike(filterVal))
 		argIdx++
 	}
 	query += ` ORDER BY u.created_at`
@@ -139,11 +162,14 @@ func (s *Service) ListUsers(w http.ResponseWriter, r *http.Request) {
 		countQuery += ` AND u.email = $` + strconv.Itoa(countFilterArgIdx)
 		countArgs = append(countArgs, filterVal)
 	case "co":
-		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countFilterArgIdx)
-		countArgs = append(countArgs, "%"+filterVal+"%")
+		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countFilterArgIdx) + ` ESCAPE '\'`
+		countArgs = append(countArgs, "%"+escapeLike(filterVal)+"%")
 	case "sw":
-		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countFilterArgIdx)
-		countArgs = append(countArgs, filterVal+"%")
+		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countFilterArgIdx) + ` ESCAPE '\'`
+		countArgs = append(countArgs, escapeLike(filterVal)+"%")
+	case "ew":
+		countQuery += ` AND u.email ILIKE $` + strconv.Itoa(countFilterArgIdx) + ` ESCAPE '\'`
+		countArgs = append(countArgs, "%"+escapeLike(filterVal))
 	}
 	var totalResults int
 	if err := s.db.QueryRow(ctx, countQuery, countArgs...).Scan(&totalResults); err != nil {
@@ -465,7 +491,16 @@ func (s *Service) PatchUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Apply operations
+	// Apply operations. Every op/path combination is validated: an unknown
+	// op is 400 invalidSyntax, an unknown path is 400 invalidPath, and any
+	// attempt to set roles/entitlements/groups is 400 — silently answering
+	// 200 would tell the IdP the change landed when it did not.
+	//
+	// The paths real IdP clients (Entra ID, Okta) routinely send all keep
+	// working: active, name.givenName, name.familyName, displayName,
+	// externalId, userName and emails[type eq "work"].value (plus
+	// schema-qualified spellings of the same). displayName/externalId are
+	// accepted no-ops: this service does not store them.
 	newEmail := email
 	// The pre-PATCH attribute values, kept for the compensating write to
 	// the identity provider when the local DB write fails.
@@ -474,10 +509,14 @@ func (s *Service) PatchUser(w http.ResponseWriter, r *http.Request) {
 		opLow := strings.ToLower(op.Op)
 		pathLow := strings.ToLower(op.Path)
 
+		// Strip a schema-qualified prefix
+		// (urn:ietf:params:scim:schemas:core:2.0:User:...) — some IdPs
+		// send fully-qualified PATCH paths.
+		plainPath := strings.TrimPrefix(pathLow, strings.ToLower(SchemaUser)+":")
+
 		// Detect filter-qualified paths like "emails[type eq \"work\"].value"
 		// We strip the bracket segment and treat the remainder as a plain path.
-		plainPath := pathLow
-		if strings.Contains(pathLow, "[") {
+		if strings.Contains(plainPath, "[") {
 			base, _ := ParseFilterPath(op.Path)
 			if base != "" {
 				// Resolve the leaf attribute after the bracket:
@@ -541,33 +580,121 @@ func (s *Service) PatchUser(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
+			case plainPath == "displayname" || plainPath == "externalid":
+				// Accepted no-ops: routinely sent by IdPs, not stored here.
+			case plainPath == "roles" || plainPath == "entitlements" || plainPath == "groups":
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("setting %q via SCIM PATCH is not supported", plainPath), "invalidValue")
+				return
 			case plainPath == "":
-				// Value is an object — merge fields
-				if m, ok := op.Value.(map[string]interface{}); ok {
-					if v, ok := m["active"].(bool); ok {
-						disabled = !v
-					}
-					if n, ok := m["name"].(map[string]interface{}); ok {
-						if v, ok := n["givenName"].(string); ok {
-							firstName = strings.TrimSpace(v)
+				// Value is an object — merge known fields; unknown merge
+				// keys fail like unknown paths (see above).
+				m, ok := op.Value.(map[string]interface{})
+				if !ok {
+					respondError(w, http.StatusBadRequest, "patch operation without a path requires an object value", "invalidValue")
+					return
+				}
+				for key, val := range m {
+					switch strings.ToLower(key) {
+					case "active":
+						if b, ok := val.(bool); ok {
+							disabled = !b
 						}
-						if v, ok := n["familyName"].(string); ok {
-							lastName = strings.TrimSpace(v)
+					case "name":
+						if n, ok := val.(map[string]interface{}); ok {
+							for nk, nv := range n {
+								switch strings.ToLower(nk) {
+								case "givenname":
+									if s, ok := nv.(string); ok {
+										firstName = strings.TrimSpace(s)
+									}
+								case "familyname":
+									if s, ok := nv.(string); ok {
+										lastName = strings.TrimSpace(s)
+									}
+								default:
+									respondError(w, http.StatusBadRequest, fmt.Sprintf("unsupported name sub-attribute %q in patch value", nk), "invalidPath")
+									return
+								}
+							}
 						}
-					}
-					if v, ok := m["userName"].(string); ok {
-						if e := strings.ToLower(strings.TrimSpace(v)); e != "" {
-							newEmail = e
+					case "username":
+						if s, ok := val.(string); ok {
+							if e := strings.ToLower(strings.TrimSpace(s)); e != "" {
+								newEmail = e
+							}
 						}
+					case "displayname", "externalid":
+						// Accepted no-ops (see above).
+					case "roles", "entitlements", "groups":
+						respondError(w, http.StatusBadRequest, fmt.Sprintf("setting %q via SCIM PATCH is not supported", strings.ToLower(key)), "invalidValue")
+						return
+					default:
+						respondError(w, http.StatusBadRequest, fmt.Sprintf("unsupported attribute %q in patch value", key), "invalidPath")
+						return
 					}
 				}
+			default:
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("unsupported patch path %q", op.Path), "invalidPath")
+				return
 			}
 		case "remove":
-			// remove active → set disabled (treat as deactivation)
-			// remove emails/userName → no-op (can't remove required attrs)
-			if plainPath == "active" {
+			// remove active → set disabled (treat as deactivation).
+			// remove emails/userName/displayName/externalId → no-op
+			// (required or un-stored attributes cannot be removed).
+			switch plainPath {
+			case "active":
 				disabled = true
+			case "emails", "emails.value", "username", "displayname", "externalid":
+			case "roles", "entitlements", "groups":
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("setting %q via SCIM PATCH is not supported", plainPath), "invalidValue")
+				return
+			default:
+				respondError(w, http.StatusBadRequest, fmt.Sprintf("unsupported patch path %q", op.Path), "invalidPath")
+				return
 			}
+		default:
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("unsupported patch op %q (supported: add, remove, replace)", op.Op), "invalidSyntax")
+			return
+		}
+	}
+
+	// userName/emails changes are validated, then rejected: this service
+	// never propagates them to Keycloak, and writing them to the local DB
+	// alone would fork the two sides. An unchanged value (what IdPs send
+	// on every sync cycle) is not a change and flows through.
+	if newEmail != email {
+		if !s.host.IsValidEmail(newEmail) {
+			respondError(w, http.StatusBadRequest, "invalid email address in patch value", "invalidValue")
+			return
+		}
+		respondError(w, http.StatusBadRequest, "changing userName/email via SCIM PATCH is not supported", "invalidValue")
+		return
+	}
+
+	// A no-op patch (nothing changed) answers 200 with the current
+	// representation and skips the version bump, the Keycloak write and
+	// the DB write — routine IdP syncs must not churn the version.
+	if firstName == origFirstName && lastName == origLastName && disabled == origDisabled {
+		u := userFromRow(userID, email, firstName, lastName, disabled, createdAt, updatedAt, version)
+		w.Header().Set("ETag", u.Meta.Version)
+		Respond(w, http.StatusOK, u)
+		return
+	}
+
+	// Read the current Keycloak attributes so the department survives the
+	// update below: UpdateUser overwrites the attribute with whatever it
+	// is given, and passing "" would blank a value SCIM never manages.
+	// Fail closed — a department we cannot read must not be wiped.
+	department := ""
+	kcUser, kcErr := s.keycloak.GetUserByID(ctx, userID)
+	if kcErr != nil {
+		s.logger.Error("scim patch: failed to read user from identity provider", zap.String("user_id", userID), zap.Error(kcErr))
+		respondError(w, http.StatusInternalServerError, "failed to read user from identity provider", "")
+		return
+	}
+	if kcUser != nil && kcUser.Attributes != nil {
+		if vals, ok := (*kcUser.Attributes)["department"]; ok && len(vals) > 0 {
+			department = vals[0]
 		}
 	}
 
@@ -596,42 +723,29 @@ func (s *Service) PatchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Propagate to Keycloak
-	if err := s.keycloak.UpdateUser(ctx, userID, firstName, lastName, "", !disabled); err != nil {
+	// Propagate to Keycloak. The department read above is passed through
+	// untouched so a value SCIM never manages is not blanked.
+	if err := s.keycloak.UpdateUser(ctx, userID, firstName, lastName, department, !disabled); err != nil {
 		s.logger.Error("scim patch: keycloak update failed", zap.String("user_id", userID), zap.Error(err))
 		s.restoreVersion(ctx, userID, version, newVersion)
 		respondError(w, http.StatusInternalServerError, "failed to update user in identity provider", "")
 		return
 	}
 
-	// Persist changes. Include email if it changed. A failed DB write is a
-	// 5xx, not a 200: the client must not believe the local record was
-	// updated when it was not.
-	if newEmail != email {
-		_, dbErr := s.db.Exec(ctx,
-			`UPDATE users SET email=$1, first_name=$2, last_name=$3, disabled=$4, updated_at=NOW()
-			 WHERE keycloak_user_id=$5`,
-			newEmail, firstName, lastName, disabled, userID)
-		if dbErr != nil {
-			s.logger.Error("scim patch: db update (with email) failed", zap.String("user_id", userID), zap.Error(dbErr))
-			s.restoreVersion(ctx, userID, version, newVersion)
-			s.restoreKeycloakUser(ctx, userID, origFirstName, origLastName, origDisabled)
-			respondError(w, http.StatusInternalServerError, "failed to persist user changes", "")
-			return
-		}
-		email = newEmail
-	} else {
-		_, dbErr := s.db.Exec(ctx,
-			`UPDATE users SET first_name=$1, last_name=$2, disabled=$3, updated_at=NOW()
-			 WHERE keycloak_user_id=$4`,
-			firstName, lastName, disabled, userID)
-		if dbErr != nil {
-			s.logger.Error("scim patch: db update failed", zap.String("user_id", userID), zap.Error(dbErr))
-			s.restoreVersion(ctx, userID, version, newVersion)
-			s.restoreKeycloakUser(ctx, userID, origFirstName, origLastName, origDisabled)
-			respondError(w, http.StatusInternalServerError, "failed to persist user changes", "")
-			return
-		}
+	// Persist changes. The email never changes here (changes are rejected
+	// above), so there is a single UPDATE — org-scoped, like the SELECT
+	// that loaded the row. A failed DB write is a 5xx, not a 200: the
+	// client must not believe the local record was updated when it was not.
+	_, dbErr := s.db.Exec(ctx,
+		`UPDATE users SET first_name=$1, last_name=$2, disabled=$3, updated_at=NOW()
+		 WHERE keycloak_user_id=$4 AND org_id=$5`,
+		firstName, lastName, disabled, userID, oc.OrgID)
+	if dbErr != nil {
+		s.logger.Error("scim patch: db update failed", zap.String("user_id", userID), zap.Error(dbErr))
+		s.restoreVersion(ctx, userID, version, newVersion)
+		s.restoreKeycloakUser(ctx, userID, origFirstName, origLastName, origDisabled, department)
+		respondError(w, http.StatusInternalServerError, "failed to persist user changes", "")
+		return
 	}
 
 	if err := s.host.WriteAuditEntryBestEffort(r.Context(), "scim-provisioner", "scim_patch_user", "user", userID, map[string]interface{}{
@@ -661,11 +775,12 @@ func (s *Service) restoreVersion(ctx context.Context, userID string, prev, attem
 // scimRestoreKeycloakUser writes the pre-PATCH attribute values back to the
 // identity provider. It is the compensating write for the case where
 // Keycloak was updated but the local DB write failed — without it the two
-// sides stay split-brain forever.
-func (s *Service) restoreKeycloakUser(ctx context.Context, userID, firstName, lastName string, disabled bool) {
+// sides stay split-brain forever. The department is passed through, like
+// the forward write, so the rollback does not blank it either.
+func (s *Service) restoreKeycloakUser(ctx context.Context, userID, firstName, lastName string, disabled bool, department string) {
 	restoreCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := s.keycloak.UpdateUser(restoreCtx, userID, firstName, lastName, "", !disabled); err != nil {
+	if err := s.keycloak.UpdateUser(restoreCtx, userID, firstName, lastName, department, !disabled); err != nil {
 		s.logger.Error("scim patch: failed to restore keycloak user after a db failure",
 			zap.String("user_id", userID), zap.Error(err))
 	}
@@ -738,7 +853,7 @@ func (s *Service) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = s.db.Exec(ctx,
-		`UPDATE users SET disabled=true, updated_at=NOW() WHERE keycloak_user_id=$1`, userID)
+		`UPDATE users SET disabled=true, updated_at=NOW() WHERE keycloak_user_id=$1 AND org_id=$2`, userID, oc.OrgID)
 
 	if err := s.host.WriteAuditEntryBestEffort(r.Context(), "scim-provisioner", "scim_delete_user", "user", userID, map[string]interface{}{
 		"email": email,

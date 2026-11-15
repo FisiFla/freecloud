@@ -9,7 +9,7 @@
  * token without importing the full Auth.js configuration (which would drag
  * the AUTH_SECRET validation into the route's module graph).
  */
-import { requiredProdEnv } from "@/lib/env";
+import { requiredProdEnv, validateProdIssuer } from "@/lib/env";
 
 export const keycloakClientId = requiredProdEnv(
   "AUTH_KEYCLOAK_ID",
@@ -23,6 +23,10 @@ export const keycloakIssuer = requiredProdEnv(
   "AUTH_KEYCLOAK_ISSUER",
   "http://localhost:8081/realms/freecloud",
 );
+// Production contract: the issuer must be https (loopback issuers warn — the
+// prod-smoke stack runs the production build against https://auth.localhost).
+// Same NODE_ENV-gated mechanism as the other startup guards.
+validateProdIssuer(keycloakIssuer);
 
 /**
  * Split-horizon Keycloak access (AUTH_KEYCLOAK_INTERNAL_URL).
@@ -121,10 +125,30 @@ export function getRefreshTimeoutMs(): number {
 }
 
 /**
+ * In-flight refreshes, keyed by refresh token. Concurrent requests for a
+ * session whose access token just expired used to each fire their own token
+ * call with the SAME refresh token — with Keycloak refresh-token rotation
+ * the losers reuse a spent token and kill the session. Sharing one in-flight
+ * refresh per session means Keycloak sees a single exchange.
+ *
+ * A successful, rotated result is also kept for REFRESH_GRACE_MS: a request
+ * that left the browser before the rotated session cookie arrived still
+ * carries the spent refresh token, and with strict rotation presenting it
+ * to Keycloak again would revoke the session. Such a request receives the
+ * tokens the first exchange produced instead. The rotated token itself is
+ * written back to the session cookie by the caller (lib/session-cookie.ts
+ * for the BFF route, the jwt callback for Auth.js session reads).
+ */
+const REFRESH_GRACE_MS = 30_000;
+const inFlightRefreshes = new Map<string, Promise<RefreshableToken>>();
+
+/**
  * Exchange the stored refresh token for a fresh access token.
  *
  * The caller's token is NOT mutated: on failure the returned token carries
- * `error: "RefreshAccessTokenError"` and the original fields.
+ * `error: "RefreshAccessTokenError"` and the original fields. Concurrent
+ * callers presenting the same refresh token share one Keycloak call; each
+ * waiter receives its own copy of the result.
  */
 export async function refreshAccessToken(
   token: RefreshableToken,
@@ -134,6 +158,30 @@ export async function refreshAccessToken(
     t.error = "RefreshAccessTokenError";
     return t;
   }
+  const key = t.refreshToken;
+  const existing = inFlightRefreshes.get(key);
+  if (existing) {
+    return { ...(await existing) };
+  }
+  const pending = doRefresh(t, key);
+  inFlightRefreshes.set(key, pending);
+  const result = await pending;
+  if (inFlightRefreshes.get(key) === pending) {
+    const evict = () => {
+      if (inFlightRefreshes.get(key) === pending) inFlightRefreshes.delete(key);
+    };
+    if (!result.error && result.refreshToken && result.refreshToken !== key) {
+      // Rotated: keep answering the spent token for the grace period.
+      const timer = setTimeout(evict, REFRESH_GRACE_MS);
+      if (typeof timer === "object" && "unref" in timer) timer.unref();
+    } else {
+      evict();
+    }
+  }
+  return { ...result };
+}
+
+async function doRefresh(t: RefreshableToken, refreshToken: string): Promise<RefreshableToken> {
   try {
     const res = await keycloakServerFetch(`${keycloakIssuer}/protocol/openid-connect/token`, {
       method: "POST",
@@ -142,7 +190,7 @@ export async function refreshAccessToken(
         client_id: keycloakClientId,
         client_secret: keycloakClientSecret,
         grant_type: "refresh_token",
-        refresh_token: t.refreshToken,
+        refresh_token: refreshToken,
       }),
       signal: AbortSignal.timeout(getRefreshTimeoutMs()),
     });

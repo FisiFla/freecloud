@@ -29,6 +29,31 @@ import (
 
 var vaultHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
+// blankFileTolerantKeys are secret keys whose _FILE may legitimately contain
+// only whitespace without it being a misconfiguration. That is exactly the
+// generator's MIRRORED_KEYS contract (docker/init-secrets/generate.sh):
+// operator-managed keys mirrored one-per-file, writing just a newline when
+// unset, where a blank file means "not configured" — plus REDIS_PASSWORD,
+// whose load contract (see Load) defines blank/absent as "no password".
+//
+//   - FLEET_API_TOKEN still fails fast in Validate() with its own "must be
+//     set" message; the tolerance only avoids a misleading resolution error.
+//   - SLACK_WEBHOOK_URL, DEVICE_COOKIE_SECRET and LDAP_BIND_PASSWORD are
+//     optional integrations: blank keeps them disabled instead of failing
+//     the boot.
+//   - SLACK_ALERT_WEBHOOK_URL is the Alertmanager mirror (not backend-read;
+//     listed so the mirrored set stays total).
+//   - REDIS_PASSWORD is optional: a blank/absent value means "no Redis
+//     password" and leaves REDIS_URL unchanged.
+var blankFileTolerantKeys = map[string]bool{
+	"FLEET_API_TOKEN":         true,
+	"SLACK_ALERT_WEBHOOK_URL": true,
+	"SLACK_WEBHOOK_URL":       true,
+	"DEVICE_COOKIE_SECRET":    true,
+	"LDAP_BIND_PASSWORD":      true,
+	"REDIS_PASSWORD":          true,
+}
+
 // resolveSecret returns the secret value for the given environment variable key.
 // It follows the _FILE → _VAULT_PATH → plain-env precedence documented above.
 //
@@ -43,7 +68,14 @@ func resolveSecret(key, fallback string) (string, error) {
 			// back to the plain env var (which may hold a stale value).
 			return "", fmt.Errorf("reading %s_FILE (%s): %w", key, filePath, err)
 		}
-		return strings.TrimRight(string(data), "\n\r"), nil
+		value := strings.TrimRight(string(data), "\n\r")
+		if strings.TrimSpace(value) == "" && !blankFileTolerantKeys[key] {
+			// A blank secret file is a misconfiguration, not an empty
+			// secret: running with a whitespace-only credential would pass
+			// "must be set" checks while authenticating nothing.
+			return "", fmt.Errorf("%s_FILE (%s) is blank: secret files must contain a non-blank value", key, filePath)
+		}
+		return value, nil
 	}
 
 	// 2. _VAULT_PATH

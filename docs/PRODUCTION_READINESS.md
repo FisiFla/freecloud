@@ -74,7 +74,7 @@ Lane split (non-overlapping files, parallel PRs):
 | 10 | Bounded timeouts: gocloak client + bootstrap HTTP client; migration context ≥10m; `stop_grace_period: 35s` to match the 30s graceful shutdown | Compose currently kills at 10s mid-drain |
 | 11 | Compose/Caddy hardening: healthchecks + `service_healthy` edges, log rotation, mem/cpu limits, Grafana bound to 127.0.0.1, Keycloak `/admin/*` + `/realms/master/*` blocked at Caddy by default | KC admin console is internet-reachable via the KC vhost today; sequenced after `/api/health` (Wave 1 frontend) |
 | 12 | Browser-level sign-in e2e on the localhost stack | The #286 bug class (real browser redirect loop) still has no automated browser test |
-| 13 | Release hygiene: SBOM/provenance attestations, per-tag GitHub Release with notes, Dependabot docker subdirs, nightly backup-verify + prev-tag upgrade + KC rehearsal jobs | `release.yml` today: build+push only |
+| 13 | Release hygiene: SBOM/provenance attestations, per-tag GitHub Release with notes, Dependabot docker subdirs, nightly backup-verify + prev-tag upgrade + KC rehearsal jobs | Remainder landed in cycle 26: SBOM/provenance (#303), per-tag notes + Dependabot docker subdirs (#305), nightly backup-verify + KC rehearsal jobs (#315). Prev-tag upgrade/rollback drill still deferred: needs a second post-cycle-25 tag, since #303 changed the secret-delivery shape and flipping `FREECLOUD_VERSION` to 1.7.0 on current compose is not a valid rollback |
 | 14 | `_FILE` delivery for `FLEET_API_TOKEN` and the PG password inside `DATABASE_URL` | Last plaintext secrets visible in `docker inspect` on the prod backend |
 
 ## Operator-gated (cannot be closed from the dev box)
@@ -136,8 +136,17 @@ Status at cycle-25 close (`main @ff7df77`, 2026-11-10/11):
 - [x] Backup bundle drill on the dev box: bundle → `verify-restore.sh`
       exit 0 with both database sections restored and asserted into a
       scratch Postgres. Timer units ship in `docker/systemd/` but are
-      not installed on the dev box; the full wipe → restore → login
-      drill runs on the VPS.
+      not installed on the dev box. The full wipe → restore → login
+      drill now exists (`scripts/restore-drill.sh`, #316, also a
+      nightly CI job) and passes on the dev box post-fix (all 5
+      stages); running it on the VPS stays operator-gated.
+- [x] First-admin login under default posture ON: the restore drill
+      proved a fresh prod first admin could never log in (setup
+      created no `users` row; access-eval denied unmapped admins).
+      Fixed by #318 (setup creates the row, KC rollback on insert
+      failure) + #319 (owner-approved bootstrap window: admin
+      allowed while zero device mappings exist, closes at first
+      enrollment, audit-visible); the post-fix drill re-run passes.
 - [ ] Upgrade/rollback drill on the simulator between two pinned versions
       — needs a second release tag (only v1.7.0 exists); run it when the
       next tag is cut.

@@ -8,10 +8,15 @@ import EmptyState from "@/components/EmptyState";
 import { Button, Input, Field, Badge, Card } from "@/components/ui";
 import { listApps, createApp, listUsers, assignAppToUser, getAppPolicy, upsertAppPolicy, downloadSAMLMetadata } from "@/lib/api";
 import type { App, User, CreateAppResponse, AppAccessPolicy, SAMLAttributeMappingRequest } from "@/lib/api";
-import { useApiReady } from "../providers";
+import { useApiReady, useOrg } from "../providers";
 
 export default function AppsPage() {
   const apiReady = useApiReady();
+  const { me } = useOrg();
+  // PUT /api/v1/apps/{id}/policy is super-admin only — other roles (helpdesk,
+  // org-admins) see the policy read-only instead of a save button that would
+  // fail with 403. Same gate as the organizations settings page.
+  const canEditPolicy = !!me?.isSystemAdmin;
   const [apps, setApps] = useState<App[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -144,7 +149,7 @@ export default function AppsPage() {
   };
 
   const savePolicy = async () => {
-    if (!policy || !policyAppId) return;
+    if (!policy || !policyAppId || !canEditPolicy) return;
     setPolicySaving(true);
     setPolicyError(null);
     try {
@@ -499,6 +504,11 @@ export default function AppsPage() {
           <div className="relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
             <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100">Access Policy</h3>
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{policyAppName}</p>
+            {!canEditPolicy && (
+              <p className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                Only super-admins can modify access policies — this dialog is read-only.
+              </p>
+            )}
 
             {policyLoading ? (
               <div className="mt-4 space-y-3">
@@ -516,6 +526,7 @@ export default function AppsPage() {
                         id="app-policy-require-enrolled"
                         type="checkbox"
                         checked={policy.requireEnrolled}
+                        disabled={!canEditPolicy}
                         onChange={(e) => setPolicy({ ...policy, requireEnrolled: e.target.checked })}
                         className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                       />
@@ -526,6 +537,7 @@ export default function AppsPage() {
                         id="app-policy-require-disk-encrypted"
                         type="checkbox"
                         checked={policy.requireDiskEncrypted}
+                        disabled={!canEditPolicy}
                         onChange={(e) => setPolicy({ ...policy, requireDiskEncrypted: e.target.checked })}
                         className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                       />
@@ -536,6 +548,7 @@ export default function AppsPage() {
                         id="app-policy-require-no-critical-vulns"
                         type="checkbox"
                         checked={policy.requireNoCriticalVulns}
+                        disabled={!canEditPolicy}
                         onChange={(e) => setPolicy({ ...policy, requireNoCriticalVulns: e.target.checked })}
                         className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                       />
@@ -555,7 +568,8 @@ export default function AppsPage() {
               </button>
               <button
                 onClick={savePolicy}
-                disabled={policyLoading || policySaving}
+                disabled={policyLoading || policySaving || !canEditPolicy}
+                title={canEditPolicy ? undefined : "Only super-admins can modify access policies"}
                 className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-indigo-500 dark:hover:bg-indigo-400"
               >
                 {policySaving ? "Saving..." : "Save Policy"}

@@ -47,13 +47,31 @@ func LoadProvisioningConnectors(ctx context.Context, db DBPool, logger *zap.Logg
 
 		token := ""
 		if tokenEnc != nil && *tokenEnc != "" {
-			plaintext, err := decryptProvisioningToken(*tokenEnc)
+			plaintext, rotated, err := decryptSecret(SecretPurposeConnectorToken, *tokenEnc)
 			if err != nil {
 				logger.Warn("provisioning connectors: decrypt token failed",
 					zap.String("app_id", appID), zap.Error(err))
 				continue
 			}
 			token = plaintext
+			if rotated {
+				// Opportunistic re-encryption: the value was sealed under
+				// the previous master key, so rewrite it with the current
+				// one. Best-effort — the in-memory plaintext is used either
+				// way, and the next load retries.
+				if fresh, err := encryptSecret(SecretPurposeConnectorToken, plaintext); err == nil {
+					if _, err := db.Exec(ctx,
+						`UPDATE app_provisioning_config SET bearer_token_enc = $1, updated_at = NOW() WHERE app_id = $2`,
+						fresh, appID,
+					); err != nil {
+						logger.Warn("provisioning connectors: re-encrypt token failed",
+							zap.String("app_id", appID), zap.Error(err))
+					}
+				} else {
+					logger.Warn("provisioning connectors: re-encrypt token failed",
+						zap.String("app_id", appID), zap.Error(err))
+				}
+			}
 		}
 
 		connector, ok := buildProvisioningConnector(connectorType, endpoint, token)
@@ -91,7 +109,14 @@ func buildProvisioningConnector(connectorType, endpoint, token string) (provisio
 		if endpoint == "" || token == "" {
 			return nil, false
 		}
-		return provisioning.NewGitHubConnector(endpoint, token), true
+		// The stored value is an org name; rows saved before the per-type
+		// validation may hold a github.com URL instead — normalize so they
+		// keep working, and skip the connector when it is neither.
+		org, err := provisioning.NormalizeGitHubOrgRef(endpoint)
+		if err != nil {
+			return nil, false
+		}
+		return provisioning.NewGitHubConnector(org, token), true
 	default:
 		return nil, false
 	}

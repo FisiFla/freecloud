@@ -42,9 +42,12 @@
 # /readyz must not require Fleet reachability.
 
 set -euo pipefail
+umask 077
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
+# shellcheck source=scripts/backup-lib.sh
+. "${REPO_ROOT}/scripts/backup-lib.sh"
 
 COMPOSE_FILE="docker/docker-compose.prod.yml"
 KEEP="${PROD_SMOKE_KEEP:-0}"
@@ -157,12 +160,10 @@ if ! grep -q "^FLEET_API_TOKEN=" .secrets/secrets.env; then
   printf '%s\n' "FLEET_API_TOKEN=smoke-dummy-fleet-token" >>.secrets/secrets.env
 fi
 make prod-secrets-init
-# Source the secrets the same way make prod-up does, so every compose
+# Load the secrets the same way make prod-up does (literally exported, never
+# sourced — a tampered value must not execute as shell), so every compose
 # invocation below (including build) runs with the operator-path environment.
-set -a
-# shellcheck disable=SC1091
-. .secrets/secrets.env
-set +a
+fc_load_secrets_env .secrets/secrets.env
 
 make prod-build
 

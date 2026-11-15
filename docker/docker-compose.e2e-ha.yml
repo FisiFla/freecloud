@@ -29,7 +29,7 @@ services:
       context: ../backend
       dockerfile: Dockerfile
     ports:
-      - "8087:8080"
+      - "127.0.0.1:8087:8080"
     environment:
       DATABASE_URL: postgres://freecloud:freecloud@postgres-e2e:5432/freecloud_e2e?sslmode=disable
       APP_ENV: test
@@ -72,7 +72,7 @@ services:
   lb-e2e:
     image: caddy:2-alpine@sha256:d8542f48d34a9cf4e4c11a478865229840e87e4c96ea3f439101f31a5d35f75f  # caddy 2-alpine
     ports:
-      - "8086:8080"
+      - "127.0.0.1:8086:8080"
     volumes:
       - ./e2e-ha/Caddyfile:/etc/caddy/Caddyfile:ro
     depends_on:

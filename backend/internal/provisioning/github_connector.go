@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
-	"time"
 
 	"github.com/FisiFla/freecloud/backend/internal/httpx"
 )
@@ -45,7 +46,7 @@ func NewGitHubConnectorWithBaseURL(orgName, bearerToken, apiBase string) *GitHub
 	return &GitHubConnector{
 		orgName:     orgName,
 		bearerToken: bearerToken,
-		client:      &http.Client{Timeout: 15 * time.Second},
+		client:      httpx.NewOutboundClient(0),
 		apiBase:     strings.TrimRight(apiBase, "/"),
 	}
 }
@@ -56,35 +57,35 @@ func (g *GitHubConnector) Name() string { return "github" }
 // The username is derived from the email prefix (before "@").
 func (g *GitHubConnector) ProvisionUser(ctx context.Context, user ProvisionableUser) (string, error) {
 	username := githubUsername(user.Email)
-	url := fmt.Sprintf("%s/orgs/%s/memberships/%s", g.apiBase, g.orgName, username)
+	endpoint := fmt.Sprintf("%s/orgs/%s/memberships/%s", g.apiBase, url.PathEscape(g.orgName), url.PathEscape(username))
 
 	payload := map[string]string{"role": "member"}
 	body, _ := json.Marshal(payload)
 
-	resp, err := g.doRequest(ctx, http.MethodPut, url, body)
+	resp, err := g.doRequest(ctx, http.MethodPut, endpoint, body)
 	if err != nil {
 		return "", fmt.Errorf("github: provision user: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
-		return "", fmt.Errorf("github: add org member returned %d: %s", resp.StatusCode, string(raw))
+		return "", fmt.Errorf("github: add org member returned %d: %s", resp.StatusCode, httpx.TruncateErrorBody(raw))
 	}
 	return username, nil
 }
 
 // DeprovisionUser removes the user from the GitHub organization.
 func (g *GitHubConnector) DeprovisionUser(ctx context.Context, remoteID string) error {
-	url := fmt.Sprintf("%s/orgs/%s/members/%s", g.apiBase, g.orgName, remoteID)
+	endpoint := fmt.Sprintf("%s/orgs/%s/members/%s", g.apiBase, url.PathEscape(g.orgName), url.PathEscape(remoteID))
 
-	resp, err := g.doRequest(ctx, http.MethodDelete, url, nil)
+	resp, err := g.doRequest(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return fmt.Errorf("github: deprovision user: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
 		raw, _ := httpx.ReadAllBounded(resp.Body, 0)
-		return fmt.Errorf("github: remove org member returned %d: %s", resp.StatusCode, string(raw))
+		return fmt.Errorf("github: remove org member returned %d: %s", resp.StatusCode, httpx.TruncateErrorBody(raw))
 	}
 	return nil
 }
@@ -107,6 +108,52 @@ func githubUsername(email string) string {
 		return email
 	}
 	return email[:at]
+}
+
+// githubOrgNamePattern is GitHub's organization-name charset: alphanumerics
+// and hyphens, starting with an alphanumeric, at most 39 characters.
+var githubOrgNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}$`)
+
+// NormalizeGitHubOrgRef validates the admin-supplied GitHub "endpoint" value
+// and returns the organization name to use. A plain org name is the expected
+// form. Because the field was previously validated as an https URL, rows may
+// hold github.com or api.github.com URLs instead — those are accepted and the
+// org is extracted from the path so existing configurations keep working.
+// Anything else is rejected.
+func NormalizeGitHubOrgRef(ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if githubOrgNamePattern.MatchString(ref) {
+		return ref, nil
+	}
+	u, err := url.Parse(ref)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("endpointUrl must be a GitHub organization name")
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return "", fmt.Errorf("endpointUrl must be a GitHub organization name")
+	}
+	host := strings.ToLower(u.Hostname())
+	segments := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	var candidate string
+	switch host {
+	case "github.com", "www.github.com":
+		// https://github.com/<org>[/...]
+		if len(segments) >= 1 {
+			candidate = segments[0]
+		}
+	case "api.github.com":
+		// https://api.github.com/orgs/<org>
+		if len(segments) >= 2 && segments[0] == "orgs" {
+			candidate = segments[1]
+		}
+	default:
+		return "", fmt.Errorf("endpointUrl must be a GitHub organization name")
+	}
+	candidate, _ = url.PathUnescape(candidate)
+	if !githubOrgNamePattern.MatchString(candidate) {
+		return "", fmt.Errorf("endpointUrl must be a GitHub organization name")
+	}
+	return candidate, nil
 }
 
 func (g *GitHubConnector) doRequest(ctx context.Context, method, url string, body []byte) (*http.Response, error) {

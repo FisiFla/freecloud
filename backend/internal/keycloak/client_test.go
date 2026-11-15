@@ -23,7 +23,10 @@ func TestSAMLAttributesBuilt(t *testing.T) {
 			{UserAttribute: "department", SAMLAttributeName: "dept"},
 		},
 	}
-	attrs := buildSAMLAttributes("my-app", "https://sp.example.com/acs", "https://sp.example.com", opts)
+	attrs, err := buildSAMLAttributes("my-app", "https://sp.example.com/acs", "https://sp.example.com", opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA512" {
 		t.Errorf("signing algorithm: got %q, want RSA_SHA512", got)
@@ -47,7 +50,10 @@ func TestSAMLAttributesBuilt(t *testing.T) {
 
 // TestSAMLAttributesDefaults verifies that nil opts produces safe interoperable defaults.
 func TestSAMLAttributesDefaults(t *testing.T) {
-	attrs := buildSAMLAttributes("app", "https://sp.example.com/acs", "https://sp.example.com", nil)
+	attrs, err := buildSAMLAttributes("app", "https://sp.example.com/acs", "https://sp.example.com", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA256" {
 		t.Errorf("default signing algorithm: got %q, want RSA_SHA256", got)
@@ -60,20 +66,16 @@ func TestSAMLAttributesDefaults(t *testing.T) {
 	}
 }
 
-// TestSAMLAttributesUnknownValuesReset verifies that invalid option values
-// fall back to safe defaults rather than passing invalid strings to Keycloak.
-func TestSAMLAttributesUnknownValuesReset(t *testing.T) {
-	opts := &SAMLOptions{
-		SigningAlgorithm: "BOGUS_ALGO",
-		NameIDFormat:     "invalid-format",
-	}
-	attrs := buildSAMLAttributes("app", "", "", opts)
-
-	if got := attrs["saml.signature.algorithm"]; got != "RSA_SHA256" {
-		t.Errorf("unknown algo should fall back to RSA_SHA256, got %q", got)
-	}
-	if got := attrs["saml_name_id_format"]; got != "persistent" {
-		t.Errorf("unknown nameIDFormat should fall back to persistent, got %q", got)
+// TestSAMLAttributesUnknownValuesRejected verifies that option values outside
+// the supported sets are a validation error, never silently remapped.
+func TestSAMLAttributesUnknownValuesRejected(t *testing.T) {
+	for _, opts := range []*SAMLOptions{
+		{SigningAlgorithm: "BOGUS_ALGO"},
+		{NameIDFormat: "invalid-format"},
+	} {
+		if _, err := buildSAMLAttributes("app", "", "", opts); err == nil {
+			t.Errorf("expected an error for %+v", *opts)
+		}
 	}
 }
 

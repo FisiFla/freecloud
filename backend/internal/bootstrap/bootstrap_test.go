@@ -58,6 +58,7 @@ type fakeKC struct {
 	dashboardAbsent              bool
 	dashboardRedirectURIs        []string
 	dashboardWebOrigins          []string
+	dashboardAttributes          map[string]interface{}
 	dashboardCreateCalls         int32
 	dashboardRedirectUpdateCalls int32
 
@@ -255,6 +256,7 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 						"directAccessGrantsEnabled": f.dashboardDirectGrants,
 						"redirectUris":              f.dashboardRedirectURIs,
 						"webOrigins":                f.dashboardWebOrigins,
+						"attributes":                f.dashboardAttributes,
 					}})
 				}
 			case "realm-management":
@@ -373,6 +375,7 @@ func (f *fakeKC) handle(w http.ResponseWriter, r *http.Request) {
 		if _, ok := body["redirectUris"]; ok {
 			f.dashboardRedirectURIs = stringSliceBody(body, "redirectUris")
 			f.dashboardWebOrigins = stringSliceBody(body, "webOrigins")
+			f.dashboardAttributes, _ = body["attributes"].(map[string]interface{})
 			atomic.AddInt32(&f.dashboardRedirectUpdateCalls, 1)
 		}
 		atomic.AddInt32(&f.dashboardUpdateCalls, 1)
@@ -1045,6 +1048,10 @@ func TestBootstrap_DashboardRedirectURIsBackfilledOnExistingClient(t *testing.T)
 	}
 	if got := atomic.LoadInt32(&f.dashboardRedirectUpdateCalls); got != 1 {
 		t.Fatalf("expected exactly 1 redirect-URI update, got %d", got)
+	}
+	// Federated logout redirects to /signin; Keycloak rejects it unless listed.
+	if got := f.dashboardAttributes["post.logout.redirect.uris"]; got != "https://app.example.com/signin" {
+		t.Errorf("expected post-logout redirect registered, got %v", got)
 	}
 	if _, err := Run(context.Background(), cfg); err != nil {
 		t.Fatalf("second Run failed: %v", err)

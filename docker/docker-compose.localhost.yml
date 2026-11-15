@@ -26,7 +26,8 @@
 # to localhost-only values that compose can safely interpolate in URL strings.
 # They are unreachable outside the Docker bridge network.
 #
-# URL layout:
+# URL layout (every published port is bound to 127.0.0.1 only — this stack
+# uses trivial credentials, so nothing here may listen on the LAN):
 #   http://localhost:3000   — dashboard (frontend)
 #   http://localhost:8080   — backend API
 #   http://localhost:8081   — Keycloak admin / OIDC
@@ -73,11 +74,15 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres/init-keycloak-db.sql:/docker-entrypoint-initdb.d/init-keycloak-db.sql:ro
+    # Grace period for first-boot initdb (slow-disk fsync ~29s observed in
+    # #315/#316): without it the retry budget can expire before postgres
+    # accepts connections, stranding the service_healthy dependents.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U freecloud"]
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 60s
     depends_on:
       secrets-init:
         condition: service_completed_successfully
@@ -111,7 +116,7 @@ services:
       # ACCESS_EVAL_TOKEN: injected from .secrets/secrets.env
       POSTURE_CHECK_ENABLED: "false"
     ports:
-      - "8081:8080"
+      - "127.0.0.1:8081:8080"
     depends_on:
       secrets-init:
         condition: service_completed_successfully
@@ -145,7 +150,7 @@ services:
       BACKEND_URL: http://backend:8080
       # FLEET_WEBHOOK_SECRET: injected from .secrets/secrets.env
     ports:
-      - "8082:8080"
+      - "127.0.0.1:8082:8080"
     depends_on:
       secrets-init:
         condition: service_completed_successfully
@@ -200,7 +205,7 @@ services:
       # FLEET_WEBHOOK_SECRET, SCIM_BEARER_TOKEN, ACCESS_EVAL_TOKEN: from secrets.env
       CORS_ORIGIN: http://localhost:3000
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       secrets-init:
         condition: service_completed_successfully
@@ -220,8 +225,6 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
-      args:
-        NEXT_PUBLIC_API_URL: http://localhost:8080
     restart: unless-stopped
     env_file:
       - path: ../.secrets/secrets.env
@@ -242,11 +245,12 @@ services:
       # origin; the browser keeps using the public issuer.
       AUTH_KEYCLOAK_INTERNAL_URL: http://keycloak:8080
       # Middleware's server-side setup-status fetch must reach the backend at its
-      # in-container address; NEXT_PUBLIC_API_URL (localhost:8080) only works from
-      # the browser. Without this the check fails-open and /setup redirects away.
+      # in-container address; the public browser URL (http://localhost:8080)
+      # only works from the browser. Without this the check fails-open and
+      # /setup redirects away.
       INTERNAL_API_URL: http://backend:8080
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       secrets-init:
         condition: service_completed_successfully

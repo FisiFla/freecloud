@@ -41,6 +41,7 @@ const slackUserFixture = `{
 }`
 
 func TestSlackConnector_ProvisionUser_MatchesRealAPIContract(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var gotMethod, gotPath, gotAuth, gotContentType string
 	var gotBody map[string]interface{}
 
@@ -95,6 +96,7 @@ func TestSlackConnector_ProvisionUser_MatchesRealAPIContract(t *testing.T) {
 // — "Deactivate activated users by setting the active attribute equal to
 // false"); the shared SCIMConnector always uses PATCH, which this test pins.
 func TestSlackConnector_DeprovisionUser_UsesPatchActiveFalse(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var gotMethod, gotPath string
 	var gotBody map[string]interface{}
 
@@ -141,6 +143,7 @@ func TestSlackConnector_DeprovisionUser_UsesPatchActiveFalse(t *testing.T) {
 // (department, name changes) reach Slack via PATCH, not a full PUT — Slack's
 // SCIM API supports partial updates via PATCH per RFC 7644 §3.5.2.
 func TestSlackConnector_UpdateUser_SendsProfileFields(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	var gotMethod string
 	var gotBody map[string]interface{}
 
@@ -172,6 +175,7 @@ func TestSlackConnector_UpdateUser_SendsProfileFields(t *testing.T) {
 // — important because provisioning retries a transient error but a
 // permanent "already exists" should be visible in provisioning_state.
 func TestSlackConnector_ProvisionUser_DuplicateUserErrorSurfaces(t *testing.T) {
+	t.Setenv("APP_ENV", "test")
 	const slackConflictBody = `{
 		"schemas": ["urn:ietf:params:scim:api:messages:2.0:Error"],
 		"status": "409",
