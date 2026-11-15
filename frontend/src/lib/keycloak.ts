@@ -131,15 +131,15 @@ export function getRefreshTimeoutMs(): number {
  * the losers reuse a spent token and kill the session. Sharing one in-flight
  * refresh per session means Keycloak sees a single exchange.
  *
- * LIMITATION: a rotated refresh token is used for the current request but is
- * NOT persisted back to the Auth.js session cookie — a Route Handler has no
- * clean API for that (re-encoding the cookie by hand would depend on Auth.js
- * cookie naming/salt/chunking internals). With rotation enabled, the next
- * refresh after a BFF-side refresh still presents the spent token, Keycloak
- * answers invalid_grant, and the user must sign in again. Persisting the
- * rotated token (encode + Set-Cookie matching Auth.js conventions, verified
- * by a round-trip test) is tracked as a follow-up.
+ * A successful, rotated result is also kept for REFRESH_GRACE_MS: a request
+ * that left the browser before the rotated session cookie arrived still
+ * carries the spent refresh token, and with strict rotation presenting it
+ * to Keycloak again would revoke the session. Such a request receives the
+ * tokens the first exchange produced instead. The rotated token itself is
+ * written back to the session cookie by the caller (lib/session-cookie.ts
+ * for the BFF route, the jwt callback for Auth.js session reads).
  */
+const REFRESH_GRACE_MS = 30_000;
 const inFlightRefreshes = new Map<string, Promise<RefreshableToken>>();
 
 /**
@@ -163,11 +163,22 @@ export async function refreshAccessToken(
   if (existing) {
     return { ...(await existing) };
   }
-  const pending = doRefresh(t, key).finally(() => {
-    if (inFlightRefreshes.get(key) === pending) inFlightRefreshes.delete(key);
-  });
+  const pending = doRefresh(t, key);
   inFlightRefreshes.set(key, pending);
-  return { ...(await pending) };
+  const result = await pending;
+  if (inFlightRefreshes.get(key) === pending) {
+    const evict = () => {
+      if (inFlightRefreshes.get(key) === pending) inFlightRefreshes.delete(key);
+    };
+    if (!result.error && result.refreshToken && result.refreshToken !== key) {
+      // Rotated: keep answering the spent token for the grace period.
+      const timer = setTimeout(evict, REFRESH_GRACE_MS);
+      if (typeof timer === "object" && "unref" in timer) timer.unref();
+    } else {
+      evict();
+    }
+  }
+  return { ...result };
 }
 
 async function doRefresh(t: RefreshableToken, refreshToken: string): Promise<RefreshableToken> {

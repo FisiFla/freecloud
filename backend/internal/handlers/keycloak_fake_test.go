@@ -311,7 +311,9 @@ func (f *fakeKeycloak) GetGroupByID(ctx context.Context, groupID string) (*goclo
 		return f.getGroupByIDFn(ctx, groupID)
 	}
 	name := "fake-group"
-	return &gocloak.Group{ID: &groupID, Name: &name}, nil
+	// Tagged with middleware.DefaultOrgID, the org withOrgContext resolves.
+	attrs := map[string][]string{"org_id": {"00000000-0000-0000-0000-000000000001"}}
+	return &gocloak.Group{ID: &groupID, Name: &name, Attributes: &attrs}, nil
 }
 
 func (f *fakeKeycloak) ListGroupMembers(ctx context.Context, groupID string) ([]*gocloak.User, error) {

@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { getToken, type JWT } from "next-auth/jwt";
 import { isProduction, requiredProdEnv } from "@/lib/env";
 import { isCrossSiteRequest } from "@/lib/csrf";
 import { refreshAccessToken } from "@/lib/keycloak";
+import { persistSessionToken } from "@/lib/session-cookie";
 
 /**
  * M6 backend-for-frontend proxy.
@@ -263,7 +264,30 @@ export function sanitizeErrorBody(
   };
 }
 
+/** Set by forward() when it refreshed the session's tokens. */
+type RefreshedSession = { token?: JWT };
+
 async function proxy(req: NextRequest, pathParts: string[]): Promise<NextResponse> {
+  const refreshed: RefreshedSession = {};
+  const res = await forward(req, pathParts, refreshed);
+  const secret = process.env.AUTH_SECRET;
+  if (refreshed.token && secret) {
+    // Keycloak rotated the refresh token: write it back to the session
+    // cookie, or the next refresh would present the spent one.
+    try {
+      await persistSessionToken(req, res, refreshed.token, secret, isProduction());
+    } catch (err) {
+      console.error("[bff] could not persist the refreshed session", err);
+    }
+  }
+  return res;
+}
+
+async function forward(
+  req: NextRequest,
+  pathParts: string[],
+  session: RefreshedSession,
+): Promise<NextResponse> {
   const backendPath = sanitizePathParts(pathParts);
   if (backendPath === null) {
     return NextResponse.json({ success: false, error: "invalid path" }, { status: 400 });
@@ -324,6 +348,11 @@ async function proxy(req: NextRequest, pathParts: string[]): Promise<NextRespons
       accessToken = refreshed.accessToken;
       // The refresh worked — the stored failure flag is stale.
       refreshFailed = false;
+      if (token) {
+        const next: JWT = { ...token, ...refreshed };
+        delete next.error;
+        session.token = next;
+      }
     } else if (nowSec >= expiresAt) {
       // The token is expired and cannot be refreshed — the session is dead.
       refreshFailed = true;

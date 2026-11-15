@@ -91,6 +91,13 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	// The org check above is repeated as a predicate on the read and the
+	// write below, so the row cannot change org between check and use.
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return
+	}
 
 	// C2: block name/enabled mutations on federated users (managed by the directory).
 	if req.FirstName != nil || req.LastName != nil {
@@ -111,7 +118,7 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 	err := h.db.QueryRow(ctx,
 		`SELECT first_name, last_name, COALESCE(department,''), COALESCE(role,''),
 		        COALESCE(disabled,false), created_at, updated_at
-		 FROM users WHERE keycloak_user_id = $1`, userID,
+		 FROM users WHERE keycloak_user_id = $1 AND org_id = $2`, userID, oc.OrgID,
 	).Scan(&curFirstName, &curLastName, &curDepartment, &curRole, &curDisabled, &curCreatedAt, &curUpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -156,8 +163,8 @@ func (h *Handler) PatchUser(w http.ResponseWriter, r *http.Request) {
 	// Persist to local DB
 	_, dbErr := h.db.Exec(ctx,
 		`UPDATE users SET first_name=$1, last_name=$2, department=$3, role=$4, disabled=$5, updated_at=NOW()
-		 WHERE keycloak_user_id=$6`,
-		newFirst, newLast, newDept, newRole, !newEnabled, userID)
+		 WHERE keycloak_user_id=$6 AND org_id=$7`,
+		newFirst, newLast, newDept, newRole, !newEnabled, userID, oc.OrgID)
 	if dbErr != nil {
 		h.logger.Error("failed to update user in db", zap.String("user_id", userID), zap.Error(dbErr))
 		// Compensating write: Keycloak was already updated, so a failed DB

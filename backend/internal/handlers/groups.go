@@ -131,6 +131,29 @@ type AssignUserToGroupRequest struct {
 	GroupID string `json:"groupId"`
 }
 
+// requireGroupInCallerOrg verifies a Keycloak group is tagged with the
+// caller's active org before a membership change. Human system admins act
+// cross-org by design; every other caller — notably a super-admin-role API
+// token, which is always org-confined — may only touch its own org's groups.
+// An untagged or foreign group gets the same 404 as a missing one.
+func (h *Handler) requireGroupInCallerOrg(w http.ResponseWriter, r *http.Request, groupID string) bool {
+	ctx := r.Context()
+	if isSystemAdminCaller(ctx) {
+		return true
+	}
+	oc := middleware.GetOrgContext(ctx)
+	if oc == nil || oc.OrgID == "" {
+		respondError(w, http.StatusForbidden, "forbidden: no organization context")
+		return false
+	}
+	g, err := h.keycloak.GetGroupByID(ctx, groupID)
+	if err != nil || g == nil || keycloak.GroupOrgID(g) != oc.OrgID {
+		respondError(w, http.StatusNotFound, "group not found")
+		return false
+	}
+	return true
+}
+
 // AssignUserToGroup adds a user to a group.
 func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "id")
@@ -150,6 +173,9 @@ func (h *Handler) AssignUserToGroup(w http.ResponseWriter, r *http.Request) {
 	req.GroupID = strings.TrimSpace(req.GroupID)
 	if err := ValidateOpaqueID(req.GroupID, "groupId"); err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !h.requireGroupInCallerOrg(w, r, req.GroupID) {
 		return
 	}
 
@@ -191,6 +217,9 @@ func (h *Handler) UnassignUserFromGroup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if !h.requireUserInCallerOrg(w, r, userID) {
+		return
+	}
+	if !h.requireGroupInCallerOrg(w, r, groupID) {
 		return
 	}
 

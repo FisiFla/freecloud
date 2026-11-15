@@ -440,3 +440,64 @@ func TestResetPasswordKeycloakError(t *testing.T) {
 		t.Errorf("kc error: expected 500, got %d", rec.Code)
 	}
 }
+
+// An org-confined caller (e.g. a super-admin-role API token) must not change
+// membership of a group owned by another org or carrying no org tag; a human
+// system admin still can.
+func TestGroupMembershipRequiresGroupInCallerOrg(t *testing.T) {
+	const userID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	const groupID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	const otherOrg = "00000000-0000-0000-0000-0000000000ff"
+
+	group := func(orgID string) func(context.Context, string) (*gocloak.Group, error) {
+		return func(_ context.Context, id string) (*gocloak.Group, error) {
+			g := &gocloak.Group{ID: &id}
+			if orgID != "" {
+				attrs := map[string][]string{"org_id": {orgID}}
+				g.Attributes = &attrs
+			}
+			return g, nil
+		}
+	}
+	tests := []struct {
+		name       string
+		groupOrg   string
+		claims     *middleware.JWTClaims
+		wantStatus int
+	}{
+		{"own org", middleware.DefaultOrgID, &middleware.JWTClaims{Role: middleware.RoleSuperAdmin, IsAPIToken: true}, http.StatusOK},
+		{"foreign org", otherOrg, &middleware.JWTClaims{Role: middleware.RoleSuperAdmin, IsAPIToken: true}, http.StatusNotFound},
+		{"untagged group", "", &middleware.JWTClaims{Role: middleware.RoleSuperAdmin, IsAPIToken: true}, http.StatusNotFound},
+		{"human system admin", otherOrg, &middleware.JWTClaims{Role: middleware.RoleSuperAdmin}, http.StatusOK},
+	}
+	for _, tt := range tests {
+		for _, op := range []string{"assign", "unassign"} {
+			t.Run(tt.name+"/"+op, func(t *testing.T) {
+				called := false
+				kc := &fakeKeycloak{getGroupByIDFn: group(tt.groupOrg)}
+				kc.addUserToGroupFn = func(context.Context, string, string) error { called = true; return nil }
+				kc.removeUserFromGroupFn = func(context.Context, string, string) error { called = true; return nil }
+				h := NewHandler(&fakeDB{queryRowFn: ownershipFoundQueryRowFn(nil)}, kc, &fakeFleet{}, zap.NewNop())
+
+				b, _ := json.Marshal(map[string]string{"groupId": groupID})
+				req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(b))
+				ctx := context.WithValue(req.Context(), chi.RouteCtxKey, &chi.Context{
+					URLParams: chi.RouteParams{Keys: []string{"id", "groupId"}, Values: []string{userID, groupID}},
+				})
+				req = withOrgContext(req.WithContext(middleware.SetClaims(ctx, tt.claims)))
+				rec := httptest.NewRecorder()
+				if op == "assign" {
+					h.AssignUserToGroup(rec, req)
+				} else {
+					h.UnassignUserFromGroup(rec, req)
+				}
+				if rec.Code != tt.wantStatus {
+					t.Fatalf("expected %d, got %d: %s", tt.wantStatus, rec.Code, rec.Body.String())
+				}
+				if called != (tt.wantStatus == http.StatusOK) {
+					t.Fatalf("keycloak membership call = %v, want %v", called, tt.wantStatus == http.StatusOK)
+				}
+			})
+		}
+	}
+}

@@ -13,6 +13,15 @@ import {
 } from "@/lib/api";
 import { useApiReady } from "../../providers";
 
+/** Scheme, host and port of a URL, or the trimmed input when it does not parse. */
+function urlHost(value: string): string {
+  try {
+    return new URL(value.trim()).origin.toLowerCase();
+  } catch {
+    return value.trim().toLowerCase();
+  }
+}
+
 export default function FleetConfigPage() {
   const apiReady = useApiReady();
 
@@ -73,6 +82,11 @@ export default function FleetConfigPage() {
       setSaving(false);
     }
   };
+
+  // The server refuses to let a stored token follow the URL to another
+  // host, so ask for it up front instead of failing the save.
+  const tokenRequired =
+    Boolean(config?.apiTokenConfigured) && urlHost(serverUrl) !== urlHost(config?.serverUrl ?? "");
 
   const handleTest = async () => {
     try {
@@ -139,18 +153,24 @@ export default function FleetConfigPage() {
                 <label htmlFor="fleet-api-token" className="block text-sm font-medium text-slate-700 dark:text-slate-300">
                   API Token
                 </label>
-                {config?.apiTokenConfigured && apiToken === "" && (
+                {config?.apiTokenConfigured && apiToken === "" && !tokenRequired && (
                   <p className="mt-0.5 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
                     <CheckCircle className="h-3.5 w-3.5" />
                     API Token: configured
                   </p>
                 )}
+                {tokenRequired && (
+                  <p className="mt-0.5 text-xs text-amber-600 dark:text-amber-400">
+                    The server changed. Enter the API token for the new server; the stored one is not sent to a different host.
+                  </p>
+                )}
                 <input
                   id="fleet-api-token"
                   type="password"
+                  required={tokenRequired}
                   value={apiToken}
                   onChange={(e) => { setApiToken(e.target.value); setSaveSuccess(false); }}
-                  placeholder="Leave blank to keep current token"
+                  placeholder={tokenRequired ? "API token for the new server" : "Leave blank to keep current token"}
                   className="mt-1 block w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100"
                 />
               </div>

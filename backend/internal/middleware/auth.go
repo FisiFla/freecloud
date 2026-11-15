@@ -766,6 +766,15 @@ func (a *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 					if email, ok := claims["email"].(string); ok {
 						jc.Email = email
 					}
+					// Only access tokens are credentials for this API. Keycloak
+					// marks them typ=Bearer; an ID token (typ=ID) is signed by
+					// the same key and names this client in `aud`, and it
+					// travels in the logout redirect URL (id_token_hint), so
+					// it must never be accepted here.
+					if typ, _ := claims["typ"].(string); typ != "Bearer" {
+						writeAuthError(w, http.StatusUnauthorized, "unauthorized: not an access token")
+						return
+					}
 					// Validate audience.
 					//
 					// The authoritative check is that `aud` contains the
