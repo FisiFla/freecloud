@@ -147,7 +147,7 @@ check_line() {
   _key=${1%%=*}
   _value=${1#*=}
   case "${_key}" in
-    ''|*[!A-Z0-9_]*|[^A-Z_]*)
+    ''|*[!A-Z0-9_]*|[!A-Z_]*)
       echo "[secrets-init] ERROR: refusing line with invalid key '${_key}': keys must match ^[A-Z_][A-Z0-9_]*\$" >&2
       exit 1
       ;;
