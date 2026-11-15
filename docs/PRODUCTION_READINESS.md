@@ -74,17 +74,19 @@ Lane split (non-overlapping files, parallel PRs):
 | 10 | Bounded timeouts: gocloak client + bootstrap HTTP client; migration context ≥10m; `stop_grace_period: 35s` to match the 30s graceful shutdown | Compose currently kills at 10s mid-drain |
 | 11 | Compose/Caddy hardening: healthchecks + `service_healthy` edges, log rotation, mem/cpu limits, Grafana bound to 127.0.0.1, Keycloak `/admin/*` + `/realms/master/*` blocked at Caddy by default | KC admin console is internet-reachable via the KC vhost today; sequenced after `/api/health` (Wave 1 frontend) |
 | 12 | Browser-level sign-in e2e on the localhost stack | The #286 bug class (real browser redirect loop) still has no automated browser test |
-| 13 | Release hygiene: SBOM/provenance attestations, per-tag GitHub Release with notes, Dependabot docker subdirs, nightly backup-verify + prev-tag upgrade + KC rehearsal jobs | Remainder landed in cycle 26: SBOM/provenance (#303), per-tag notes + Dependabot docker subdirs (#305), nightly backup-verify + KC rehearsal jobs (#315). Prev-tag upgrade/rollback drill still deferred: needs a second post-cycle-25 tag, since #303 changed the secret-delivery shape and flipping `FREECLOUD_VERSION` to 1.7.0 on current compose is not a valid rollback |
+| 13 | Release hygiene: SBOM/provenance attestations, per-tag GitHub Release with notes, Dependabot docker subdirs, nightly backup-verify + prev-tag upgrade + KC rehearsal jobs | Remainder landed in cycle 26: SBOM/provenance (#303), per-tag notes + Dependabot docker subdirs (#305), nightly backup-verify + KC rehearsal jobs (#315). Prev-tag upgrade/rollback drill run by hand for v1.7.0 ↔ v1.8.0 on 2026-11-15 (acceptance list below); a nightly version of it becomes worthwhile once two pinned-image tags exist |
 | 14 | `_FILE` delivery for `FLEET_API_TOKEN` and the PG password inside `DATABASE_URL` | Done: prod compose passes both through Docker secrets (`FLEET_API_TOKEN_FILE`, `DATABASE_PASSWORD_FILE`), nothing secret left in `docker inspect` on the prod backend |
 
 ## Operator-gated (cannot be closed from the dev box)
 
-- **Real VPS deploy + burn-in** (backlog's one remaining P3): purchase
-  deferred to the Black Friday window; then: first real deploy by
-  `docs/DEPLOYMENT.md`, restore drill on the host, rollback drill
-  (`FREECLOUD_VERSION` down + up), 2-replica soak, Caddy `/admin` allowlist
-  to operator IP/VPN, backup timer installed with an offsite destination
-  and `BACKUP_PASSPHRASE` set, load baseline recorded.
+- **Real deploy + burn-in** (backlog's one remaining P3). Hosting decision
+  (2026-11-15): no VPS is being bought; the deployment host is the
+  operator's Linux machine, the same box the drills run on. Done there:
+  restore drill and the upgrade/rollback drill (below). Still open on the
+  host: first real deploy by `docs/DEPLOYMENT.md` with real hostnames and
+  DNS, 2-replica soak, Caddy `/admin` allowlist to operator IP/VPN, backup
+  timer installed with an offsite destination and `BACKUP_PASSPHRASE` set,
+  load baseline recorded.
 - **Live integrations**: real FleetDM instance (prod stack has no mock),
   GitHub/Slack SCIM sandbox credentials, live Slack alert webhook test.
 - **GitHub settings**: confirm branch-protection required checks and GHCR
@@ -140,7 +142,7 @@ Status at cycle-25 close (`main @ff7df77`, 2026-11-10/11):
       not installed on the dev box. The full wipe → restore → login
       drill now exists (`scripts/restore-drill.sh`, #316, also a
       nightly CI job) and passes on the dev box post-fix (all 5
-      stages); running it on the VPS stays operator-gated.
+      stages) — that box is now the deployment host.
 - [x] First-admin login under default posture ON: the restore drill
       proved a fresh prod first admin could never log in (setup
       created no `users` row; access-eval denied unmapped admins).
@@ -148,9 +150,28 @@ Status at cycle-25 close (`main @ff7df77`, 2026-11-10/11):
       failure) + #319 (owner-approved bootstrap window: admin
       allowed while zero device mappings exist, closes at first
       enrollment, audit-visible); the post-fix drill re-run passes.
-- [ ] Upgrade/rollback drill on the simulator between two pinned versions
-      — needs a second release tag (only v1.7.0 exists); run it when the
-      next tag is cut.
-- [x] Operator-gated list handed over with the VPS purchase decision; the
-      only remaining items are those requiring a real host, real DNS, or
-      live third-party credentials.
+- [x] Upgrade/rollback drill between two released versions, v1.7.0 and
+      v1.8.0, on 2026-11-15 in an isolated compose project on the Linux
+      host. Upgrade: v1.7.0 production stack (source build, Keycloak
+      25.0.6, schema 43) provisioned and backed up, then moved to the
+      v1.8.0 tree and pinned images by the documented steps. Result:
+      schema 43 → 51 (8 migrations), Keycloak database migrated to
+      26.8.2, `/readyz` 200 with database, keycloak and redis ok,
+      `/api/version` v1.8.0, same Keycloak admin id, browser sign-in
+      issues a code redirect after the one-time profile page. Rollback:
+      pre-upgrade backup restored onto the v1.7.0 tree; `/readyz` 200,
+      schema 43, Keycloak 25.0.6, same admin id, still provisioned.
+      Findings, all fixed or documented in the same change: a
+      `FLEET_API_TOKEN` left in `.env.prod` stopped the upgraded backend
+      (now caught by `make prod-up` and listed in the upgrade table); the
+      frontend container healthcheck never went healthy (server bound to
+      the container hostname); v1.7.0 itself could not complete a
+      browser sign-in (its bootstrap registered no redirect URI, fixed by
+      the v1.8.0 bootstrap) and its secrets generator wrote a root-owned
+      `secrets.env`. The drill ran with posture checks off, as v1.7.0
+      shipped them. A later same-shape drill is a plain
+      `FREECLOUD_VERSION` flip; this one was a tree change because
+      v1.7.0 predates pinned images.
+- [x] Operator-gated list handed over. No VPS will be bought (decision
+      2026-11-15): the remaining items need real DNS and hostnames on the
+      Linux host, or live third-party credentials.

@@ -21,6 +21,10 @@ ARG FREECLOUD_VERSION=dev
 ARG GIT_SHA=unknown
 ENV FREECLOUD_VERSION=$FREECLOUD_VERSION GIT_SHA=$GIT_SHA
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000
+# The standalone server binds to $HOSTNAME, which Docker sets to the container
+# id: it then listens on the container's network address only and the
+# HEALTHCHECK below (127.0.0.1) is refused forever. Bind every interface.
+ENV HOSTNAME=0.0.0.0
 # The standalone output bundles a minimal node_modules + server.js.
 COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static

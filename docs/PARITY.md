@@ -4,7 +4,7 @@ FreeCloud is an open-source alternative to JumpCloud for teams that want full
 control over their identity and device management stack. It covers the core
 JumpCloud surface area — SSO, SCIM, MDM, audit, access governance, multi-org
 tenancy, and multi-instance HA — self-hostable via Docker Compose. The
-remaining deferrals (real VPS production deploy, live outbound-connector
+remaining deferrals (first real production deploy, live outbound-connector
 tenant verification, hard realm-per-org isolation) are in the gaps section
 below.
 
@@ -139,7 +139,7 @@ below.
 
 | Gap | Notes |
 |---|---|
-| **Real VPS production deploy** | The stack is code-complete and turnkey (single `docker compose up`, auto-secrets, self-bootstrap wizard) — and, as of v1.7, HA-capable — but has **never been deployed to a real VPS** (deferred for the seventh consecutive release). All validation, including the two-replica HA suite, runs in local/CI Docker Compose. This is the largest unquantified risk in the project. |
+| **Real production deploy** | The stack is code-complete and turnkey, HA-capable, and the v1.7.0 ↔ v1.8.0 upgrade and backup-based rollback were drilled on the deployment host (the operator's Linux machine; no VPS will be bought). It has still **never served real users on real hostnames**: all validation, including the two-replica HA suite, runs in local/CI Docker Compose on `*.localhost`. |
 | **Realm-per-org isolation** | v1.7 ships multi-org tenancy in a **shared Keycloak realm**: org isolation is enforced in FreeCloud's data model, RBAC, API, SCIM, and UI, proven by a cross-org isolation test suite. Hard isolation (separate realm per org: separate user namespaces, login flows, token issuers) is designed-for but deferred — see [ADR 0005](adr/0005-multi-tenant-shared-realm.md). Known limitation: user emails are unique across the whole deployment, not per org. |
 | **Slack/GitHub live-tenant verification** | Connectors are contract-verified against recorded API fixtures (create/update/deactivate/offboard) and an optional live-verification tool exists (`make verify-provisioning-live`, gated on sandbox credentials). A live run still hasn't happened: GitHub needs a sandbox org token; Slack SCIM additionally requires a paid (Business+) plan. |
 
