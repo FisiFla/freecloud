@@ -3,7 +3,7 @@ package scim
 // B2: SCIM 2.0 filter grammar — RFC 7644 §3.4.2.2
 //
 // Implements a recursive-descent parser for the SCIM filter language.
-// Supported operators: eq, ne, co, sw, pr, and, or, not.
+// Supported operators: eq, ne, co, sw, ew, pr, and, or, not.
 // Supports grouped expressions with ( ) and attribute paths with dots
 // (e.g. "emails.value", "name.givenName", "members.value").
 //
@@ -23,6 +23,7 @@ const (
 	OpNe                  // ne  — not equal
 	OpCo                  // co  — contains
 	OpSw                  // sw  — starts with
+	OpEw                  // ew  — ends with
 	OpPr                  // pr  — present (unary, no value)
 	OpAnd                 // and — logical and
 	OpOr                  // or  — logical or
@@ -31,7 +32,7 @@ const (
 
 // FilterNode is a node in the parsed AST.
 type FilterNode struct {
-	// Leaf fields (op is eq/ne/co/sw/pr)
+	// Leaf fields (op is eq/ne/co/sw/ew/pr)
 	Attr  string   // normalised (lowercased) attribute path
 	Op    FilterOp // comparison operator
 	Value string   // comparison value (empty for pr)
@@ -70,6 +71,8 @@ func (n *FilterNode) Eval(attrs EvalAttrs) bool {
 			return strings.Contains(got, want)
 		case OpSw:
 			return strings.HasPrefix(got, want)
+		case OpEw:
+			return strings.HasSuffix(got, want)
 		case OpPr:
 			return attrs[n.Attr] != ""
 		}
@@ -265,6 +268,8 @@ func (p *filterParser) parsePrimary() *FilterNode {
 		filterOp = OpCo
 	case "sw":
 		filterOp = OpSw
+	case "ew":
+		filterOp = OpEw
 	default:
 		// Unknown operator — unrecognised filter, return nil.
 		return nil
@@ -308,7 +313,7 @@ func ParseFlatFilter(raw string) *FlatFilter {
 	// Only leaf comparisons map to the flat struct; logical nodes are not
 	// representable — return nil so callers fall back to no-filter behaviour.
 	switch node.Op {
-	case OpEq, OpNe, OpCo, OpSw, OpPr:
+	case OpEq, OpNe, OpCo, OpSw, OpEw, OpPr:
 		return &FlatFilter{
 			Attr:  node.Attr,
 			Op:    node.Op.String(),
@@ -336,7 +341,7 @@ func ParseFlatFilterStrict(raw string) (*FlatFilter, error) {
 		return nil, nil
 	}
 	switch node.Op {
-	case OpEq, OpNe, OpCo, OpSw, OpPr:
+	case OpEq, OpNe, OpCo, OpSw, OpEw, OpPr:
 		return &FlatFilter{
 			Attr:  node.Attr,
 			Op:    node.Op.String(),
@@ -358,6 +363,8 @@ func (op FilterOp) String() string {
 		return "co"
 	case OpSw:
 		return "sw"
+	case OpEw:
+		return "ew"
 	case OpPr:
 		return "pr"
 	}

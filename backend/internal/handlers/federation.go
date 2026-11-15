@@ -5,13 +5,19 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
+	"net/url"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
 
+	"github.com/FisiFla/freecloud/backend/internal/httpx"
 	"github.com/FisiFla/freecloud/backend/internal/middleware"
 )
 
@@ -61,6 +67,26 @@ func (h *Handler) CreateFederationSource(w http.ResponseWriter, r *http.Request)
 	}
 	if req.Vendor == "" {
 		req.Vendor = "other"
+	}
+
+	// The global env-only LDAP_BIND_PASSWORD is handed to Keycloak together
+	// with this URL, so the destination is validated and bound to the
+	// operator's allow-list before anything is created: otherwise an admin
+	// could exfiltrate the bind password to any host.
+	connHost, err := validateFederationConnectionURL(req.ConnectionURL)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	vendor, err := validateFederationVendor(req.Vendor)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Vendor = vendor
+	if err := checkLDAPAllowedHost(connHost); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	bindPassword := h.ldapBindPassword
@@ -119,7 +145,7 @@ func (h *Handler) CreateFederationSource(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.created", "federation_source", fs.ID, map[string]interface{}{
-		"name": req.Name, "vendor": req.Vendor,
+		"name": req.Name, "vendor": req.Vendor, "host": connHost,
 	}); err != nil {
 		h.logger.Warn("failed to write federation source creation audit log", zap.Error(err))
 	}
@@ -266,6 +292,35 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 		newUsersDN = *req.UsersDN
 	}
 
+	// Newly supplied destinations are validated; an unchanged stored URL
+	// passes through so legacy rows still accept unrelated updates (rename,
+	// DN changes). Repointing to a NEW host additionally requires the
+	// operator's LDAP_ALLOWED_HOSTS entry — the stored bind password would
+	// otherwise follow the URL to an unapproved destination.
+	newConnHost := ""
+	if req.ConnectionURL != nil {
+		host, err := validateFederationConnectionURL(newConnURL)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		newConnHost = host
+		if ldapURLHostChanged(cur.Config["connectionUrl"], newConnURL) {
+			if err := checkLDAPAllowedHost(newConnHost); err != nil {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+	}
+	if req.Vendor != nil {
+		vendor, err := validateFederationVendor(newVendor)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		newVendor = vendor
+	}
+
 	bindPassword := h.ldapBindPassword
 	if cur.KeycloakComponentID != "" && bindPassword != "" {
 		// Fail closed: if Keycloak still holds the old bind DN / URL while
@@ -288,7 +343,14 @@ func (h *Handler) UpdateFederationSource(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.updated", "federation_source", id, map[string]interface{}{"name": newName}); err != nil {
+	updateAudit := map[string]interface{}{"name": newName}
+	if req.ConnectionURL != nil {
+		// Repoint audit: old and new host, never the bind password.
+		oldHost, _ := ldapURLHostString(cur.Config["connectionUrl"])
+		updateAudit["old_host"] = oldHost
+		updateAudit["new_host"] = newConnHost
+	}
+	if err := h.writeAuditEntryBestEffort(r.Context(), actorID, "federation_source.updated", "federation_source", id, updateAudit); err != nil {
 		h.logger.Warn("failed to write federation source update audit log", zap.Error(err))
 	}
 	respondJSON(w, http.StatusOK, FederationSource{
@@ -376,6 +438,14 @@ func (h *Handler) TestFederationConnection(w http.ResponseWriter, r *http.Reques
 	connURL, _ := fs.Config["connectionUrl"].(string)
 	bindDN, _ := fs.Config["bindDn"].(string)
 	bindPassword := h.ldapBindPassword
+
+	// The test sends the global bind password to the stored destination, so
+	// the stored URL is validated first: a non-LDAP or blocked URL must
+	// never receive the secret.
+	if _, err := validateFederationConnectionURL(connURL); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	if testErr := h.keycloak.TestLDAPConnection(ctx, fs.KeycloakComponentID, connURL, bindDN, bindPassword); testErr != nil {
 		// The LDAP error can contain the bind DN and the connection URL —
@@ -482,4 +552,144 @@ func (h *Handler) respondFederationDBError(w http.ResponseWriter, err error, not
 	}
 	h.logger.Error("federation: database query failed", zap.Error(err))
 	respondError(w, http.StatusInternalServerError, "internal error")
+}
+
+// federationVendors is the allow-list of Keycloak LDAP provider vendor
+// values. Anything else is rejected before it reaches Keycloak.
+var federationVendors = map[string]bool{
+	"ad":         true,
+	"rhds":       true,
+	"tivoli":     true,
+	"edirectory": true,
+	"other":      true,
+}
+
+// validateFederationVendor accepts the Keycloak LDAP vendor values,
+// case-insensitively, and returns the normalized lowercase form.
+func validateFederationVendor(vendor string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(vendor))
+	if !federationVendors[normalized] {
+		return "", errors.New("vendor must be one of ad, rhds, tivoli, edirectory, other")
+	}
+	return normalized, nil
+}
+
+// validateFederationConnectionURL validates an LDAP connection URL and
+// returns its normalized host for the LDAP_ALLOWED_HOSTS check. Only ldap
+// and ldaps schemes are accepted, and only ldaps outside
+// development/test: the component this URL is handed to binds with the
+// global LDAP_BIND_PASSWORD in cleartext over plain ldap (no StartTLS is
+// negotiated), so cleartext has no place in production. Userinfo and
+// fragments are rejected; an explicit port must be a TCP port. Loopback,
+// link-local/metadata and unspecified addresses are blocked outside
+// development/test, while private (RFC1918/ULA) directory servers stay
+// allowed everywhere — that is where corporate LDAP normally lives.
+func validateFederationConnectionURL(raw string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return "", errors.New("connectionUrl must be a valid absolute LDAP URL")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	switch scheme {
+	case "ldaps":
+		// always ok
+	case "ldap":
+		// Plain LDAP only in development/test (E2E binds against a local
+		// OpenLDAP without TLS); production must use ldaps.
+		if !httpx.IsDevOrTestEnv() {
+			return "", errors.New("connectionUrl must use ldaps outside development/test")
+		}
+	default:
+		return "", errors.New("connectionUrl scheme must be ldap or ldaps")
+	}
+	if u.User != nil {
+		return "", errors.New("connectionUrl must not contain userinfo")
+	}
+	if u.Fragment != "" {
+		return "", errors.New("connectionUrl must not contain a fragment")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", errors.New("connectionUrl must include a host")
+	}
+	if port := u.Port(); port != "" {
+		if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+			return "", errors.New("connectionUrl port must be between 1 and 65535")
+		}
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if !httpx.IsDevOrTestEnv() && httpx.IsBlockedLoopbackOrLinkLocal(ip) {
+			return "", errors.New("connectionUrl must not target a loopback or link-local address")
+		}
+		return normalizeLDAPHost(host), nil
+	}
+	if len(host) > 253 {
+		return "", errors.New("connectionUrl must contain a valid hostname or IP address")
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(host, "."), ".") {
+		if !smtpHostLabelPattern.MatchString(label) {
+			return "", errors.New("connectionUrl must contain a valid hostname or IP address")
+		}
+	}
+	if err := httpx.ValidateHostAddresses("connectionUrl", host, httpx.IsBlockedLoopbackOrLinkLocal); err != nil {
+		return "", err
+	}
+	return normalizeLDAPHost(host), nil
+}
+
+// normalizeLDAPHost lowercases a validated LDAP host and strips a trailing
+// dot so allow-list comparison is canonical.
+func normalizeLDAPHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(host, "."))
+}
+
+// ldapURLHostString extracts the normalized host from a stored connectionUrl
+// value of unknown shape, reporting whether it parsed.
+func ldapURLHostString(v interface{}) (string, bool) {
+	raw, ok := v.(string)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return "", false
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Hostname() == "" {
+		return "", false
+	}
+	return normalizeLDAPHost(u.Hostname()), true
+}
+
+// ldapURLHostChanged reports whether newRaw points at a different host than
+// the stored value. An unparseable stored URL counts as changed (fail
+// closed): the destination cannot be proven to be the same one.
+func ldapURLHostChanged(stored interface{}, newRaw string) bool {
+	oldHost, ok := ldapURLHostString(stored)
+	if !ok {
+		return true
+	}
+	u, err := url.Parse(strings.TrimSpace(newRaw))
+	if err != nil || u.Hostname() == "" {
+		return true
+	}
+	return normalizeLDAPHost(u.Hostname()) != oldHost
+}
+
+// checkLDAPAllowedHost binds LDAP_BIND_PASSWORD to its destination: outside
+// development/test, the connection host must appear in the operator's
+// LDAP_ALLOWED_HOSTS allow-list (comma-separated hostnames). An unset or
+// empty list refuses every new host (fail closed); development/test is
+// unrestricted. The allow-list is read with os.Getenv because config/ wiring
+// belongs to another lane (see the follow-ups in the final report).
+func checkLDAPAllowedHost(host string) error {
+	if httpx.IsDevOrTestEnv() {
+		return nil
+	}
+	raw := os.Getenv("LDAP_ALLOWED_HOSTS")
+	if strings.TrimSpace(raw) == "" {
+		return errors.New("LDAP_ALLOWED_HOSTS is not configured; set it to the allowed LDAP hostnames before creating or repointing a federation source")
+	}
+	for _, entry := range strings.Split(raw, ",") {
+		if normalizeLDAPHost(strings.TrimSpace(entry)) == host && host != "" {
+			return nil
+		}
+	}
+	return errors.New("connectionUrl host is not in LDAP_ALLOWED_HOSTS")
 }

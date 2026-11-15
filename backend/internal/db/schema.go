@@ -187,6 +187,11 @@ var migrations = []migration{
 		name:      "analytics_snapshots_units_and_org_index",
 		statement: Migration048,
 	},
+	{
+		id:        49,
+		name:      "clear_unsalted_secret_hashes",
+		statement: Migration049,
+	},
 }
 
 // Migration001 is the SQL for the initial schema migration, kept as a constant
@@ -1041,6 +1046,20 @@ UPDATE analytics_snapshots
 
 CREATE INDEX IF NOT EXISTS idx_analytics_snapshots_org_captured_at
     ON analytics_snapshots(org_id, captured_at DESC);
+`
+
+// Migration049 clears the unsalted SHA-256 digests of low-entropy secrets
+// (provisioning bearer tokens, Fleet API tokens, SMTP passwords) that were
+// stored next to the AES-GCM ciphertexts just to render "configured"
+// booleans. The digests are crackable offline without the master key, so
+// they are wiped; the application now derives "configured" from the presence
+// of the encrypted value and only ever writes NULL to these columns. The
+// columns themselves are kept (a later migration may drop them) so that
+// rollback of the application binary stays possible.
+const Migration049 = `
+UPDATE app_provisioning_config SET bearer_token_hash = NULL WHERE bearer_token_hash IS NOT NULL;
+UPDATE fleet_config SET api_token_hash = NULL WHERE api_token_hash IS NOT NULL;
+UPDATE smtp_config SET password_hash = NULL WHERE password_hash IS NOT NULL;
 `
 
 // migrationLockID is the pg_advisory_lock key guarding RunMigrations. It is a

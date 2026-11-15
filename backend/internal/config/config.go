@@ -61,6 +61,14 @@ func isPlaceholderSecret(v string) bool {
 	return len(t) < 2 || placeholderSecrets[t]
 }
 
+// isBlank reports whether v is empty or whitespace-only. Every required
+// value Validate() gates is checked with this instead of `== ""`, so a
+// whitespace-only secret (" ", "\n", "\t") counts as unset rather than as
+// a configured credential.
+func isBlank(v string) bool {
+	return strings.TrimSpace(v) == ""
+}
+
 // deviceCookieKeyLabel is the domain-separation label used when deriving the
 // device-identity cookie HMAC key from a master secret.
 //
@@ -288,8 +296,8 @@ func Load() *Config {
 	// secret (prod compose) so DATABASE_URL itself carries no password
 	// (Wave 2 #14). Only the _FILE form is honored — there is no
 	// DATABASE_PASSWORD plain-var injection. A failure (unreadable or
-	// empty file, unusable DSN) mirrors secrets.go semantics exactly: the
-	// value degrades to EMPTY (never a password from a different source)
+	// empty/blank file, unusable DSN) mirrors secrets.go semantics exactly:
+	// the value degrades to EMPTY (never a password from a different source)
 	// and the error is recorded, so Validate() refuses to start and the
 	// migrate one-shot exits with "DATABASE_URL could not be resolved"
 	// instead of a confusing auth failure at connect time.
@@ -300,8 +308,8 @@ func Load() *Config {
 		case readErr != nil:
 			c.secretErrors = append(c.secretErrors, fmt.Sprintf("reading DATABASE_PASSWORD_FILE (%s): %v", pwFile, readErr))
 			c.DatabaseURL = ""
-		case pw == "":
-			c.secretErrors = append(c.secretErrors, fmt.Sprintf("DATABASE_PASSWORD_FILE (%s) is empty", pwFile))
+		case isBlank(pw):
+			c.secretErrors = append(c.secretErrors, fmt.Sprintf("DATABASE_PASSWORD_FILE (%s) is empty or blank", pwFile))
 			c.DatabaseURL = ""
 		default:
 			injected, injErr := injectDatabasePassword(c.DatabaseURL, pw)
@@ -311,6 +319,32 @@ func Load() *Config {
 			} else {
 				c.DatabaseURL = injected
 			}
+		}
+	}
+
+	// REDIS_PASSWORD / REDIS_PASSWORD_FILE delivers the Redis password as an
+	// optional operator-provided secret (same _FILE → _VAULT_PATH → plain-env
+	// convention as every other secret). Contract, exactly:
+	//   - a non-blank value is injected (URL-escaped) into REDIS_URL when the
+	//     URL carries no password;
+	//   - a password already embedded in REDIS_URL is kept (the URL wins);
+	//   - a blank or absent value changes nothing and records no error.
+	// The resolved URL is the only one any backend consumer sees (main.go
+	// passes cfg.RedisURL to the rate-limiter factory); it is never logged.
+	// NOTE: this resolves after c.secretErrors was snapshotted from
+	// secrets.errs, so any new resolution failure is carried over by hand.
+	redisErrsBefore := len(secrets.errs)
+	redisPW := secrets.get("REDIS_PASSWORD", "")
+	c.secretErrors = append(c.secretErrors, secrets.errs[redisErrsBefore:]...)
+	if !isBlank(redisPW) {
+		if isBlank(c.RedisURL) {
+			// Nothing to inject into; production Validate() still rejects
+			// the empty URL below.
+		} else if injected, injErr := injectRedisPassword(c.RedisURL, redisPW); injErr != nil {
+			c.secretErrors = append(c.secretErrors, injErr.Error())
+			c.RedisURL = ""
+		} else {
+			c.RedisURL = injected
 		}
 	}
 
@@ -397,6 +431,118 @@ func injectDatabasePassword(dsn, password string) (string, error) {
 	return u.String(), nil
 }
 
+// injectRedisPassword returns redisURL with its password component set to
+// password (URL-escaped), preserving any username already present
+// (redis://user@host → redis://user:password@host, for Redis 6 ACL users).
+//
+// Documented rule, the mirror image of injectDatabasePassword: a password
+// already embedded in the URL ALWAYS WINS and the URL is returned unchanged.
+// REDIS_PASSWORD is only a fallback source for a password-less URL.
+func injectRedisPassword(redisURL, password string) (string, error) {
+	u, err := url.Parse(redisURL)
+	if err != nil {
+		return "", fmt.Errorf("REDIS_PASSWORD is set but REDIS_URL is not a valid URL: %v", err)
+	}
+	if u.User != nil {
+		if _, hasPw := u.User.Password(); hasPw {
+			return redisURL, nil
+		}
+	}
+	username := ""
+	if u.User != nil {
+		username = u.User.Username()
+	}
+	u.User = url.UserPassword(username, password)
+	return u.String(), nil
+}
+
+// strongDatabaseSSLModes are the sslmode values accepted in production:
+// every one of them encrypts the Postgres connection. Anything else —
+// disable, allow, prefer, an unknown value, or no sslmode parameter at
+// all — is rejected, because libpq silently negotiates down to plaintext
+// (or fails open) without an explicit strong mode.
+var strongDatabaseSSLModes = map[string]bool{
+	"require":     true,
+	"verify-ca":   true,
+	"verify-full": true,
+}
+
+// databaseSSLMode extracts the effective sslmode from a Postgres DSN,
+// understanding both the URI form (postgres://user@host/db?sslmode=require)
+// and the keyword/value form (host=... sslmode=require). Matching is
+// case-insensitive and the last occurrence wins, mirroring libpq. It returns
+// ok=false when the DSN carries no sslmode parameter or cannot be parsed.
+func databaseSSLMode(dsn string) (mode string, ok bool) {
+	if strings.Contains(dsn, "://") {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			return "", false
+		}
+		found := ""
+		seen := false
+		// u.Query() would decode for us but its keys are case-sensitive;
+		// walk the raw pairs so SSLMODE= counts too.
+		for _, pair := range strings.Split(u.RawQuery, "&") {
+			k, v, _ := strings.Cut(pair, "=")
+			if strings.EqualFold(k, "sslmode") {
+				if decoded, derr := url.QueryUnescape(v); derr == nil {
+					v = decoded
+				}
+				found, seen = v, true
+			}
+		}
+		return strings.ToLower(found), seen
+	}
+	tokens := splitDSNKeywords(dsn)
+	found := ""
+	seen := false
+	for i := 0; i < len(tokens); i++ {
+		key, val, hasEq := strings.Cut(tokens[i], "=")
+		if !hasEq {
+			// libpq allows whitespace around '=': sslmode = require.
+			if i+2 < len(tokens) && tokens[i+1] == "=" {
+				key, val = tokens[i], tokens[i+2]
+				i += 2
+			} else {
+				continue
+			}
+		}
+		if strings.EqualFold(strings.TrimSpace(key), "sslmode") {
+			found, seen = strings.ToLower(strings.Trim(strings.TrimSpace(val), "'")), true
+		}
+	}
+	return found, seen
+}
+
+// splitDSNKeywords splits a keyword/value DSN on whitespace, keeping
+// single-quoted segments (which may contain spaces) intact.
+func splitDSNKeywords(s string) []string {
+	var tokens []string
+	var current strings.Builder
+	inQuotes := false
+	flush := func() {
+		if current.Len() > 0 {
+			tokens = append(tokens, current.String())
+			current.Reset()
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\'' {
+			inQuotes = !inQuotes
+			current.WriteByte(c)
+			continue
+		}
+		if !inQuotes && (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+			flush()
+			continue
+		}
+		current.WriteByte(c)
+	}
+	flush()
+	return tokens
+}
+
 // splitCSV splits a comma-separated environment value into its non-empty,
 // trimmed parts. It returns nil for an empty value.
 func splitCSV(raw string) []string {
@@ -474,12 +620,12 @@ func (c *Config) Validate() error {
 	// it at runtime from Keycloak. An explicit env override is still accepted.
 
 	// Reject the public admin-cli client (not the confidential service default).
-	if c.KeycloakClientID == "" || c.KeycloakClientID == "admin-cli" {
+	if isBlank(c.KeycloakClientID) || c.KeycloakClientID == "admin-cli" {
 		add("KEYCLOAK_CLIENT_ID must be a confidential client, not empty or the public \"admin-cli\"")
 	}
 	// An empty URL or audience silently disables the issuer/audience checks in
 	// the auth middleware, so both must be present.
-	if c.KeycloakURL == "" || c.KeycloakURL == defaultKeycloakURL {
+	if isBlank(c.KeycloakURL) || c.KeycloakURL == defaultKeycloakURL {
 		add("KEYCLOAK_URL must point at your real Keycloak, not empty or the localhost default")
 	} else if u, err := url.Parse(c.KeycloakURL); err != nil || u.Scheme == "" || u.Host == "" {
 		// A malformed URL (or one without a scheme/host) breaks the issuer
@@ -489,44 +635,46 @@ func (c *Config) Validate() error {
 	} else if u.Scheme != "http" && u.Scheme != "https" {
 		add("KEYCLOAK_URL must use the http or https scheme")
 	}
-	if c.KeycloakAudience == "" {
+	if isBlank(c.KeycloakAudience) {
 		add("KEYCLOAK_AUDIENCE must be set (an empty value disables JWT audience validation)")
 	}
-	if c.FleetAPIToken == "" {
+	if isBlank(c.FleetAPIToken) {
 		add("FLEET_API_TOKEN must be set")
 	} else if isPlaceholderSecret(c.FleetAPIToken) {
 		add("FLEET_API_TOKEN must not be a placeholder or trivial value")
 	}
-	if c.FleetWebhookSecret == "" {
+	if isBlank(c.FleetWebhookSecret) {
 		add("FLEET_WEBHOOK_SECRET must be set (used to authenticate Fleet enrollment callbacks)")
 	} else if isPlaceholderSecret(c.FleetWebhookSecret) {
 		add("FLEET_WEBHOOK_SECRET must not be a placeholder or trivial value")
 	}
-	if c.ProvisioningMasterKey == "" {
+	if isBlank(c.ProvisioningMasterKey) {
 		add("PROVISIONING_MASTER_KEY must be set (used to encrypt stored integration secrets)")
 	} else if isPlaceholderSecret(c.ProvisioningMasterKey) {
 		add("PROVISIONING_MASTER_KEY must not be a placeholder or trivial value")
 	} else if raw, err := base64.StdEncoding.DecodeString(c.ProvisioningMasterKey); err != nil || len(raw) != 32 {
 		add("PROVISIONING_MASTER_KEY must be a base64-encoded 32-byte key")
 	}
-	if c.SCIMBearerToken == "" {
+	if isBlank(c.SCIMBearerToken) {
 		add("SCIM_BEARER_TOKEN must be set (used to authenticate inbound SCIM provisioning requests)")
 	} else if isPlaceholderSecret(c.SCIMBearerToken) {
 		add("SCIM_BEARER_TOKEN must not be a placeholder or trivial value")
 	}
-	if c.AccessEvalToken == "" {
+	if isBlank(c.AccessEvalToken) {
 		add("ACCESS_EVAL_TOKEN must be set (used to authenticate access evaluation requests)")
 	} else if isPlaceholderSecret(c.AccessEvalToken) {
 		add("ACCESS_EVAL_TOKEN must not be a placeholder or trivial value")
 	}
-	if c.DatabaseURL == "" || c.DatabaseURL == defaultDatabaseURL {
+	if isBlank(c.DatabaseURL) || c.DatabaseURL == defaultDatabaseURL {
 		add("DATABASE_URL must be set to a real database, not the insecure default")
-	} else if strings.Contains(c.DatabaseURL, "sslmode=disable") {
-		add("DATABASE_URL must not use sslmode=disable; require TLS to the database")
+	} else if mode, ok := databaseSSLMode(c.DatabaseURL); !ok {
+		add("DATABASE_URL must set an explicit sslmode=require, verify-ca or verify-full (no sslmode parameter found)")
+	} else if !strongDatabaseSSLModes[mode] {
+		add(fmt.Sprintf("DATABASE_URL must not use sslmode=%s; require TLS to the database (sslmode=require, verify-ca or verify-full)", mode))
 	}
 	// CORS_ORIGIN must be set explicitly outside dev so credentials are never
 	// silently allowed from the localhost default.
-	if c.CORSOrigin == "" {
+	if isBlank(c.CORSOrigin) {
 		add("CORS_ORIGIN must be set")
 	} else if c.CORSOrigin != "*" {
 		// Outside dev/test the dashboard is served over TLS; an http:// or
@@ -546,7 +694,7 @@ func (c *Config) Validate() error {
 	// REDIS_URL must be set in production: without it, the rate limiter falls
 	// back to per-replica in-memory counters, which is silently unsafe on any
 	// deployment running more than one backend instance (ADR 0004).
-	if c.RedisURL == "" {
+	if isBlank(c.RedisURL) {
 		add("REDIS_URL must be set (the rate limiter requires shared state across replicas in production)")
 	}
 	// Bootstrap admin password used to provision Keycloak on first start.
@@ -554,7 +702,7 @@ func (c *Config) Validate() error {
 	// leave master-realm admin/admin reachable. Shares the common
 	// placeholder set ("admin" and "admin123" included) so there is exactly
 	// one trivial-value list.
-	if c.BootstrapAdminPassword == "" || isPlaceholderSecret(c.BootstrapAdminPassword) {
+	if isBlank(c.BootstrapAdminPassword) || isPlaceholderSecret(c.BootstrapAdminPassword) {
 		add("KC_BOOTSTRAP_PASSWORD must be set to a strong non-default value")
 	}
 
@@ -579,9 +727,14 @@ func IsDevOrE2E() bool {
 // stack loads a generated SETUP_TOKEN from .secrets/secrets.env via
 // env_file, and honoring it there would break the zero-config first setup
 // (docs/QUICKSTART.md). Outside dev/e2e the configured token passes
-// through — fail-closed, like IsDevOrE2E.
+// through — fail-closed, like IsDevOrE2E. A blank token counts as unset:
+// production then refuses first-admin provisioning until a real token is
+// configured, instead of gating on whitespace.
 func (c *Config) EffectiveSetupToken() string {
 	if IsDevOrE2E() {
+		return ""
+	}
+	if isBlank(c.SetupToken) {
 		return ""
 	}
 	return c.SetupToken
@@ -615,7 +768,7 @@ func (c *Config) DeviceCookieSigningSecret() string {
 		return ""
 	}
 	master := c.DeviceCookieSecret
-	if master == "" {
+	if isBlank(master) {
 		master = c.FleetWebhookSecret
 	}
 	return DeriveDeviceCookieSecret(master)
@@ -642,7 +795,7 @@ func DeriveDeviceCookieSecret(master string) string {
 // domains never share key material — but the operator should know the cookie
 // key is not independently rotatable (issue #125).
 func (c *Config) DeviceCookieSecretConfigured() bool {
-	return c != nil && c.DeviceCookieSecret != ""
+	return c != nil && !isBlank(c.DeviceCookieSecret)
 }
 
 // deriveSubkey derives a purpose-specific subkey from a master secret using

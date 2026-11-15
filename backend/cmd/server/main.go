@@ -51,6 +51,14 @@ func main() {
 // the schema.RunMigrations advisory lock, and exits. Intended to be run as a
 // one-shot job (e.g. docker compose `migrate` service with
 // `depends_on: service_completed_successfully`) before the server starts.
+// shouldCreateDemoUser reports whether bootstrap should create the demo
+// user. FAIL-CLOSED like SeedE2EAdmin: only honoured when APP_ENV is
+// development/test — a stray CREATE_DEMO_USER=true can never create a
+// well-known-credential user in production.
+func shouldCreateDemoUser() bool {
+	return config.IsDevOrE2E() && os.Getenv("CREATE_DEMO_USER") == "true"
+}
+
 func runMigrate() {
 	logger, err := zap.NewProduction()
 	if err != nil {
@@ -208,6 +216,10 @@ func runServer() {
 		// is ignored in any other environment, so a stray env var can never
 		// enable this in production.
 		seedE2EAdmin := config.IsDevOrE2E() && os.Getenv("E2E_SEED_ADMIN") == "true"
+		createDemoUser := shouldCreateDemoUser()
+		if os.Getenv("CREATE_DEMO_USER") == "true" && !createDemoUser {
+			logger.Warn("CREATE_DEMO_USER is ignored outside development/test environments")
+		}
 		result, err := bootstrap.Run(bootstrapCtx, bootstrap.Config{
 			KeycloakURL:                  cfg.KeycloakURL,
 			AdminUsername:                cfg.BootstrapAdminUser,
@@ -215,7 +227,7 @@ func runServer() {
 			TargetRealm:                  cfg.KeycloakRealm,
 			DashboardPublicURL:           cfg.CORSOrigin,
 			ServiceAccountSecretOverride: cfg.KeycloakClientSecret,
-			CreateDemoUser:               os.Getenv("CREATE_DEMO_USER") == "true",
+			CreateDemoUser:               createDemoUser,
 			SeedE2EAdmin:                 seedE2EAdmin,
 			E2EAdminUsername:             os.Getenv("E2E_ADMIN_USERNAME"),
 			E2EAdminPassword:             os.Getenv("E2E_ADMIN_PASSWORD"),

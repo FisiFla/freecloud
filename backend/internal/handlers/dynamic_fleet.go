@@ -59,6 +59,7 @@ func (d *dynamicFleetClient) client(ctx context.Context) fleet.FleetClientInterf
 
 	baseURL := d.fallbackURL
 	token := d.fallbackToken
+	fromDB := false
 
 	if d.db != nil {
 		var serverURL string
@@ -69,13 +70,20 @@ func (d *dynamicFleetClient) client(ctx context.Context) fleet.FleetClientInterf
 		if err == nil {
 			if trimmed := strings.TrimSpace(serverURL); trimmed != "" {
 				baseURL = trimmed
-			}
-			if tokenEnc != nil && *tokenEnc != "" {
-				plaintext, decErr := decryptProvisioningToken(*tokenEnc)
-				if decErr != nil {
-					d.logger.Warn("fleet config: decrypt token failed; using fallback token", zap.Error(decErr))
-				} else {
-					token = plaintext
+				fromDB = true
+				// The fallback token belongs to the fallback URL only: a
+				// DB-configured URL authenticates with the DB token alone.
+				// Without one the requests go out unauthenticated rather
+				// than leaking the environment secret to a repointed host.
+				token = ""
+				if tokenEnc != nil && *tokenEnc != "" {
+					plaintext, rotated, decErr := decryptSecret(SecretPurposeFleetToken, *tokenEnc)
+					if decErr != nil {
+						d.logger.Warn("fleet config: decrypt token failed", zap.Error(decErr))
+					} else {
+						token = plaintext
+						d.reencryptFleetTokenBestEffort(ctx, plaintext, rotated)
+					}
 				}
 			}
 		} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -83,10 +91,35 @@ func (d *dynamicFleetClient) client(ctx context.Context) fleet.FleetClientInterf
 		}
 	}
 
-	built := fleet.NewClient(baseURL, token)
+	var built fleet.FleetClientInterface
+	if fromDB {
+		// Admin-configured destination: hardened outbound client.
+		built = fleet.NewOutboundClient(baseURL, token)
+	} else {
+		built = fleet.NewClient(baseURL, token)
+	}
 	d.cached = built
 	d.cachedAt = time.Now()
 	return built
+}
+
+// reencryptFleetTokenBestEffort rewrites a Fleet token sealed under the
+// previous master key, completing a rotation opportunistically.
+func (d *dynamicFleetClient) reencryptFleetTokenBestEffort(ctx context.Context, plaintext string, rotated bool) {
+	if !rotated || d.db == nil {
+		return
+	}
+	fresh, err := encryptSecret(SecretPurposeFleetToken, plaintext)
+	if err != nil {
+		d.logger.Warn("fleet config: re-encrypt token failed", zap.Error(err))
+		return
+	}
+	if _, err := d.db.Exec(ctx,
+		`UPDATE fleet_config SET api_token_enc = $1, updated_at = NOW() WHERE id = 1`,
+		fresh,
+	); err != nil {
+		d.logger.Warn("fleet config: re-encrypt token failed", zap.Error(err))
+	}
 }
 
 func (d *dynamicFleetClient) CreateEnrollmentToken(ctx context.Context) (string, error) {

@@ -91,12 +91,9 @@ func (h *Handler) ListPolicies(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	teams, err := h.fleet.ListTeams(ctx)
-	if err != nil {
-		h.logger.Error("failed to list fleet teams", zap.Error(err))
-		respondError(w, http.StatusBadGateway, "failed to retrieve teams from Fleet")
-		return
-	}
+	// Resolve the caller's org BEFORE calling Fleet (same gate order as
+	// ListPolicies): a caller with no org gets 403 without touching Fleet,
+	// so the Fleet call cannot act as an availability oracle.
 	if !isSystemAdminCaller(ctx) {
 		oc := middleware.GetOrgContext(ctx)
 		if oc == nil {
@@ -114,6 +111,13 @@ func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
+
+		teams, err := h.fleet.ListTeams(ctx)
+		if err != nil {
+			h.logger.Error("failed to list fleet teams", zap.Error(err))
+			respondError(w, http.StatusBadGateway, "failed to retrieve teams from Fleet")
+			return
+		}
 		filtered := make([]fleet.Team, 0, len(teams))
 		for _, tm := range teams {
 			if allowed[tm.ID] {
@@ -121,6 +125,16 @@ func (h *Handler) ListTeams(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		teams = filtered
+		sort.Slice(teams, func(i, j int) bool { return teams[i].ID < teams[j].ID })
+		respondJSON(w, http.StatusOK, ListTeamsResponse{Teams: teams})
+		return
+	}
+
+	teams, err := h.fleet.ListTeams(ctx)
+	if err != nil {
+		h.logger.Error("failed to list fleet teams", zap.Error(err))
+		respondError(w, http.StatusBadGateway, "failed to retrieve teams from Fleet")
+		return
 	}
 	// Stable order for clients/tests regardless of Fleet API ordering.
 	sort.Slice(teams, func(i, j int) bool { return teams[i].ID < teams[j].ID })

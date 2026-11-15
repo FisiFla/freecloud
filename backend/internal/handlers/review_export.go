@@ -111,13 +111,13 @@ func (h *Handler) ExportCampaign(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="campaign-%s.csv"`, campaignID))
 		cw := csv.NewWriter(w)
-		_ = cw.Write([]string{"itemId", "campaignId", "userEmail", "userId", "resourceType", "resourceId", "resourceName", "decision", "decidedBy", "decidedAt", "createdAt"})
+		_ = cw.Write(sanitizeCSVRecord([]string{"itemId", "campaignId", "userEmail", "userId", "resourceType", "resourceId", "resourceName", "decision", "decidedBy", "decidedAt", "createdAt"}))
 		for _, item := range items {
-			_ = cw.Write([]string{
+			_ = cw.Write(sanitizeCSVRecord([]string{
 				item.ItemID, item.CampaignID, item.UserEmail, item.UserID,
 				item.ResourceType, item.ResourceID, item.ResourceName,
 				item.Decision, item.DecidedBy, item.DecidedAt, item.CreatedAt,
-			})
+			}))
 		}
 		cw.Flush()
 	default:

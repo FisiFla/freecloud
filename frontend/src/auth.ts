@@ -21,9 +21,11 @@ import { SESSION_MAX_AGE_SECONDS, jwtCallback } from "@/lib/session";
  *   AUTH_KEYCLOAK_INTERNAL_URL — optional split-horizon internal origin
  *                                for server-side OIDC calls (lib/keycloak.ts)
  *   AUTH_SECRET               — used to sign the session cookie (was NEXTAUTH_SECRET)
- *   AUTH_URL                  — app base URL (was NEXTAUTH_URL); optional in prod
+ *   AUTH_URL                  — app base URL (was NEXTAUTH_URL); required in prod
  *
  * The Keycloak vars fall back to dev defaults but throw in production if unset.
+ * AUTH_URL is required in production (enforced in lib/session.ts) so redirect
+ * URIs never derive from request Host headers.
  * AUTH_SECRET is validated at runtime (skipped during `next build`) because
  * Auth.js uses it to sign the session cookie.
  */

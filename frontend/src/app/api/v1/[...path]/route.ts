@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { getToken } from "next-auth/jwt";
 import { isProduction, requiredProdEnv } from "@/lib/env";
+import { isCrossSiteRequest } from "@/lib/csrf";
 import { refreshAccessToken } from "@/lib/keycloak";
 
 /**
@@ -76,9 +77,6 @@ const MAX_BFF_REQUEST_BYTES = 10 * 1024 * 1024;
  * BFF_TIMEOUT_MS (milliseconds).
  */
 const DEFAULT_BFF_TIMEOUT_MS = 30_000;
-
-/** Methods that change state and therefore need a CSRF check. */
-const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /** Returns the effective BFF response cap, honoring the env override. */
 export function getBffMaxResponseBytes(): number {
@@ -210,73 +208,6 @@ function sanitizePathParts(pathParts: string[]): string | null {
     decoded.push(seg);
   }
   return "/" + decoded.map(encodeURIComponent).join("/");
-}
-
-/**
- * True when `origin` is this app's own origin.
- *
- * The comparison is on the HOST rather than on the full origin: behind a
- * reverse proxy the request URL Next.js hands to a route handler can carry
- * the internal host, and the forwarded scheme is not always visible here.
- * The host is what separates this app from an attacker's sibling subdomain.
- * The allowed hosts are the request's own host, the forwarded host and the
- * configured AUTH_URL.
- */
-function isAllowedOrigin(req: NextRequest, origin: string): boolean {
-  let originUrl: URL;
-  try {
-    originUrl = new URL(origin);
-  } catch {
-    // "null" (sandboxed iframe) or a malformed Origin — never our own origin.
-    return false;
-  }
-  const allowed = new Set<string>();
-  const addHost = (value: string | null | undefined) => {
-    if (!value) return;
-    try {
-      allowed.add(new URL(value).host);
-    } catch {
-      // Not a URL — ignore it.
-    }
-  };
-  addHost(`http://${req.nextUrl.host}`);
-  addHost(process.env.AUTH_URL);
-  addHost(process.env.NEXTAUTH_URL);
-  const forwardedHost = req.headers.get("x-forwarded-host");
-  if (forwardedHost) {
-    const proto =
-      req.headers.get("x-forwarded-proto") || (isProduction() ? "https" : "http");
-    addHost(`${proto}://${forwardedHost}`);
-  }
-  return allowed.has(originUrl.host);
-}
-
-/**
- * CSRF guard for state-changing BFF requests.
- *
- * The session cookie is SameSite=Lax, which blocks classic cross-site form
- * POSTs but still lets a sibling subdomain issue credentialed fetch calls
- * against this app's origin — SameSite is about "site", not "origin". A
- * Content-Type of text/plain keeps such a request CORS-simple (no preflight)
- * and Go's JSON decoder ignores the declared content type, so the privileged
- * action used to execute.
- *
- * Two independent browser signals are checked:
- *  - `Sec-Fetch-Site: cross-site` — sent by every modern browser.
- *  - `Origin` — sent by every browser on POST/PUT/PATCH/DELETE; it must be
- *    this app's own origin.
- *
- * A request with neither header cannot have been issued by a browser
- * cross-site, so it is allowed through and server-to-server clients keep
- * working.
- */
-export function isCrossSiteRequest(req: NextRequest): boolean {
-  if (!STATE_CHANGING_METHODS.has(req.method.toUpperCase())) return false;
-  const secFetchSite = req.headers.get("sec-fetch-site");
-  if (secFetchSite === "cross-site") return true;
-  const origin = req.headers.get("origin");
-  if (!origin) return false;
-  return !isAllowedOrigin(req, origin);
 }
 
 /** True when the failure was the upstream timeout. */
@@ -419,6 +350,15 @@ async function proxy(req: NextRequest, pathParts: string[]): Promise<NextRespons
   if (orgId) outHeaders.set("X-Org-Id", orgId);
   const contentType = req.headers.get("content-type");
   if (contentType) outHeaders.set("Content-Type", contentType);
+  // Forward the client IP chain EXACTLY as received from the reverse proxy
+  // (Caddy appends the real client IP). Without this the backend sees every
+  // dashboard user as the frontend container's IP and all dashboard users
+  // share one rate-limit bucket. The backend walks the chain right-to-left
+  // trusting only configured proxy CIDRs, so passing it through is safe; no
+  // other client-controlled forwarding header is forwarded, and no value is
+  // synthesised when the proxy sent none.
+  const forwardedFor = req.headers.get("x-forwarded-for");
+  if (forwardedFor) outHeaders.set("X-Forwarded-For", forwardedFor);
 
   const hasBody = !["GET", "HEAD"].includes(req.method);
 
@@ -496,25 +436,49 @@ async function proxy(req: NextRequest, pathParts: string[]): Promise<NextRespons
   return new NextResponse(buf, { status: backendRes.status, headers: resHeaders });
 }
 
+/**
+ * Lockdown response headers for every BFF answer.
+ *
+ * The page CSP middleware (proxy.ts) excludes /api/*, so without this a
+ * backend content-type forwarded verbatim (e.g. text/html on an export or an
+ * error page) would render as an active same-origin document when navigated
+ * to — exports ARE navigations (lib/api.ts downloads assign
+ * window.location.href). `default-src 'none'` blocks all subresources and
+ * scripts, `frame-ancestors 'none'` blocks framing, and the bare `sandbox`
+ * token neuters whatever renders. `nosniff` stops MIME sniffing from
+ * reinterpreting CSV/JSON downloads as HTML.
+ *
+ * `sandbox` is safe for the navigation downloads: the backend answers them
+ * with Content-Disposition: attachment, which the browser saves without
+ * rendering, so the sandbox never engages.
+ */
+const BFF_CONTENT_SECURITY_POLICY = "default-src 'none'; frame-ancestors 'none'; sandbox";
+
+function withBffSecurityHeaders(res: NextResponse): NextResponse {
+  res.headers.set("content-security-policy", BFF_CONTENT_SECURITY_POLICY);
+  res.headers.set("x-content-type-options", "nosniff");
+  return res;
+}
+
 type RouteContext = { params: Promise<{ path: string[] }> };
 
 export async function GET(req: NextRequest, ctx: RouteContext) {
   const { path } = await ctx.params;
-  return proxy(req, path);
+  return withBffSecurityHeaders(await proxy(req, path));
 }
 export async function POST(req: NextRequest, ctx: RouteContext) {
   const { path } = await ctx.params;
-  return proxy(req, path);
+  return withBffSecurityHeaders(await proxy(req, path));
 }
 export async function PUT(req: NextRequest, ctx: RouteContext) {
   const { path } = await ctx.params;
-  return proxy(req, path);
+  return withBffSecurityHeaders(await proxy(req, path));
 }
 export async function PATCH(req: NextRequest, ctx: RouteContext) {
   const { path } = await ctx.params;
-  return proxy(req, path);
+  return withBffSecurityHeaders(await proxy(req, path));
 }
 export async function DELETE(req: NextRequest, ctx: RouteContext) {
   const { path } = await ctx.params;
-  return proxy(req, path);
+  return withBffSecurityHeaders(await proxy(req, path));
 }

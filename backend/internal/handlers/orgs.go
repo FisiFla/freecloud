@@ -171,7 +171,7 @@ func (h *Handler) Me(w http.ResponseWriter, r *http.Request) {
 		Sub:           claims.Sub,
 		Email:         claims.Email,
 		GlobalRole:    string(claims.Role),
-		IsSystemAdmin: claims.Role == middleware.RoleSuperAdmin,
+		IsSystemAdmin: middleware.IsHumanSystemAdmin(claims),
 		Orgs:          []MeOrgMembership{},
 	}
 	if oc != nil {
@@ -221,7 +221,7 @@ type OrgMemberResponse struct {
 // Returns false (and has already written the response) when denied.
 func (h *Handler) requireOwnOrgOrSystemAdmin(w http.ResponseWriter, r *http.Request, orgID string) bool {
 	claims := middleware.GetClaims(r.Context())
-	if claims != nil && claims.Role == middleware.RoleSuperAdmin {
+	if middleware.IsHumanSystemAdmin(claims) {
 		return true
 	}
 	oc := middleware.GetOrgContext(r.Context())

@@ -16,12 +16,15 @@ package notify
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"net/smtp"
 	"strings"
 	"time"
+
+	"github.com/FisiFla/freecloud/backend/internal/httpx"
 )
 
 const (
@@ -30,7 +33,33 @@ const (
 	// smtpConversationTimeout bounds the SMTP conversation when the caller
 	// supplies a context without a deadline.
 	smtpConversationTimeout = 30 * time.Second
+	// smtpImplicitTLSPort is the well-known port for implicit TLS (SMTPS).
+	smtpImplicitTLSPort = "465"
 )
+
+// smtpTLSConfigForTest overrides the TLS configuration in tests (to trust a
+// test certificate). It is nil in production, where the system roots and
+// mandatory verification apply. Certificate verification is never disabled.
+var smtpTLSConfigForTest func(host string) *tls.Config
+
+// smtpExtraImplicitTLSPortForTest makes one additional port use implicit TLS
+// in tests, so the SMTPS path is exercisable without binding port 465. Empty
+// in production.
+var smtpExtraImplicitTLSPortForTest string
+
+// smtpTLSConfig returns the TLS configuration for host: verified certificates
+// against the system roots, TLS 1.2 minimum, no InsecureSkipVerify anywhere.
+func smtpTLSConfig(host string) *tls.Config {
+	if smtpTLSConfigForTest != nil {
+		return smtpTLSConfigForTest(host)
+	}
+	return &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+}
+
+func isImplicitTLSPort(port string) bool {
+	return port == smtpImplicitTLSPort ||
+		(port != "" && port == smtpExtraImplicitTLSPortForTest)
+}
 
 // ErrInvalidMailAddress is returned when an address contains characters that
 // would break out of the message headers.
@@ -72,17 +101,30 @@ func SendMail(ctx context.Context, addr string, auth smtp.Auth, from string, to 
 		}
 	}
 
-	host, _, err := net.SplitHostPort(addr)
+	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		host = addr
 	}
 
 	dialer := net.Dialer{Timeout: smtpDialTimeout}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	rawConn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return fmt.Errorf("smtp: dial %s: %w", addr, err)
 	}
-	defer conn.Close()
+	defer rawConn.Close()
+
+	conn := rawConn
+	// Port 465 uses implicit TLS: the TLS handshake happens immediately,
+	// before any SMTP bytes are exchanged.
+	if isImplicitTLSPort(port) {
+		tlsConn := tls.Client(rawConn, smtpTLSConfig(host))
+		if err := tlsConn.HandshakeContext(ctx); err != nil {
+			return fmt.Errorf("smtp: TLS handshake with %s: %w", addr, err)
+		}
+		conn = tlsConn
+		// client.Close below closes the TLS session (and with it the raw
+		// connection); the deferred rawConn.Close is then a harmless no-op.
+	}
 
 	// Bound the whole conversation. A deadline (not a per-operation timeout)
 	// is what makes a half-open relay release the goroutine.
@@ -99,6 +141,21 @@ func SendMail(ctx context.Context, addr string, auth smtp.Auth, from string, to 
 		return fmt.Errorf("smtp: greet %s: %w", addr, err)
 	}
 	defer client.Close()
+
+	if !isImplicitTLSPort(port) {
+		// Opportunistic STARTTLS on every other port. Outside
+		// development/test a relay that cannot be upgraded is refused:
+		// credentials and mail must never travel in cleartext.
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			// StartTLS upgrades the session and re-issues EHLO itself, so
+			// the extension state afterwards reflects the encrypted session.
+			if err := client.StartTLS(smtpTLSConfig(host)); err != nil {
+				return fmt.Errorf("smtp: STARTTLS with %s: %w", addr, err)
+			}
+		} else if !httpx.IsDevOrTestEnv() {
+			return fmt.Errorf("smtp: server %s does not support STARTTLS: refusing to send credentials or mail in cleartext", addr)
+		}
+	}
 
 	if auth != nil {
 		if ok, _ := client.Extension("AUTH"); !ok {

@@ -195,8 +195,12 @@ func SetupRoutes(r chi.Router, h *Handler, authMW func(http.Handler) http.Handle
 			r.With(middleware.RequirePermission(middleware.PermManageDevices)).Post("/api/v1/devices/{id}/lock-message", h.RemoteLockWithMessage)
 			r.With(middleware.RequirePermission(middleware.PermManageDevices)).Post("/api/v1/devices/{id}/clear-passcode", h.RemoteClearPasscode)
 
-			// A3: per-app access policy write
-			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Put("/api/v1/apps/{appId}/policy", h.UpsertAppAccessPolicy)
+			// A3: per-app access policy write — super-admin only. Writing a
+			// policy can disable an app's device-posture gates, so it is a
+			// security-policy change, not Fleet team management (which is what
+			// PermManagePolicies is for). Helpdesk keeps the read-only preview
+			// below via PermManagePolicies.
+			r.With(middleware.RequirePermission(middleware.PermManageAccountPolicy)).Put("/api/v1/apps/{appId}/policy", h.UpsertAppAccessPolicy)
 			// D2: per-app policy preview (dry-run eval)
 			r.With(middleware.RequirePermission(middleware.PermManagePolicies)).Post("/api/v1/apps/{appId}/policy/preview", h.PreviewAppPolicy)
 

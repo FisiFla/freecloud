@@ -280,6 +280,24 @@ func (h *Handler) DecideCampaignItem(w http.ResponseWriter, r *http.Request) {
 	if !h.requireCampaignInCallerOrg(w, r, campaignID) {
 		return
 	}
+	// A reviewer must not confirm their own access (mirrors DecideApproval's
+	// self-approval ban): load the item's user and reject when it is the
+	// caller. review_items.user_id is the Keycloak subject, so the immutable
+	// claims.Sub is the correct comparator — never the mutable
+	// preferred_username. Fail closed when the caller has no subject.
+	var itemUserID string
+	if err := h.db.QueryRow(r.Context(),
+		`SELECT user_id FROM review_items WHERE id = $1 AND campaign_id = $2`,
+		itemID, campaignID,
+	).Scan(&itemUserID); err != nil {
+		respondError(w, http.StatusNotFound, "item not found or wrong campaign")
+		return
+	}
+	claims := middleware.GetClaims(r.Context())
+	if claims == nil || claims.Sub == "" || claims.Sub == itemUserID {
+		respondError(w, http.StatusForbidden, "forbidden: you cannot decide your own access")
+		return
+	}
 	actorID := middleware.GetActorID(r.Context())
 	tag, err := h.db.Exec(r.Context(),
 		`UPDATE review_items SET decision = $1, decided_by = $2, decided_at = NOW()

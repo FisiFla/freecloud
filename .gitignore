@@ -24,3 +24,10 @@ backend/.e2e-fixtures/
 
 # Maven build output (keycloak-authenticator)
 keycloak-authenticator/target/
+
+# Backup bundles and dumps — contain the full production database plus every
+# production secret. Never commit.
+backups/
+freecloud-bundle-*
+backups/*.sql
+.backup-passphrase

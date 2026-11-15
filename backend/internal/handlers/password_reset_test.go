@@ -7,7 +7,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"go.uber.org/zap"
@@ -42,12 +44,13 @@ func TestForgotPasswordAlwaysReturns200(t *testing.T) {
 }
 
 // TestForgotPasswordCallsKCWhenUserExists: when the DB has the user, the KC
-// send-reset should be invoked.
+// send-reset should be invoked. The send happens in a background goroutine
+// after the response (anti-enumeration timing fix), so the test polls.
 func TestForgotPasswordCallsKCWhenUserExists(t *testing.T) {
-	kcCalled := false
+	var kcCalled atomic.Bool
 	kc := &fakeKeycloak{
 		sendPasswordResetEmailFn: func(ctx context.Context, userID string) error {
-			kcCalled = true
+			kcCalled.Store(true)
 			return nil
 		},
 	}
@@ -73,7 +76,11 @@ func TestForgotPasswordCallsKCWhenUserExists(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
-	if !kcCalled {
+	deadline := time.Now().Add(5 * time.Second)
+	for !kcCalled.Load() && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !kcCalled.Load() {
 		t.Error("expected KC SendPasswordResetEmail to be called")
 	}
 }

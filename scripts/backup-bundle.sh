@@ -9,12 +9,13 @@
 #
 # Usage:
 #   DATABASE_URL=postgres://user:pass@host:5432/freecloud \
-#     scripts/backup-bundle.sh [OUTPUT_DIR]
-#   scripts/backup-bundle.sh --compose [OUTPUT_DIR]
+#     BACKUP_PASSPHRASE=... scripts/backup-bundle.sh [OUTPUT_DIR]
+#   BACKUP_PASSPHRASE=... scripts/backup-bundle.sh --compose [OUTPUT_DIR]
 #
-# OUTPUT_DIR defaults to ./backups. The bundle is published as
-# OUTPUT_DIR/freecloud-bundle-<UTC timestamp>/ (mode 0700, files 0600), or as
-# a single encrypted .tar.gz.enc when BACKUP_PASSPHRASE is set.
+# OUTPUT_DIR defaults to ./backups. The bundle is published as a single
+# encrypted .tar.gz.enc (+ .manifest.txt + .hmac sidecars), or — only with
+# the explicit --allow-plaintext opt-out — as
+# OUTPUT_DIR/freecloud-bundle-<UTC timestamp>/ (mode 0700, files 0600).
 #
 # Modes:
 #   (default)  Requires DATABASE_URL; reuses scripts/backup.sh (pg_dumpall).
@@ -22,8 +23,16 @@
 #              exec postgres pg_dumpall` (production stack must be up).
 #
 # Environment:
-#   BACKUP_PASSPHRASE     If non-empty, encrypt the bundle with
-#                         `openssl enc -aes-256-cbc -salt -pbkdf2`.
+#   BACKUP_PASSPHRASE     REQUIRED unless --allow-plaintext is passed. The
+#                         bundle is encrypted with
+#                         `openssl enc -aes-256-cbc -salt -pbkdf2 -iter 600000`
+#                         and authenticated with HMAC-SHA256 over the
+#                         ciphertext (encrypt-then-MAC, key derived from the
+#                         passphrase under a distinct label), verified by
+#                         scripts/verify-bundle.sh BEFORE decryption.
+#                         Read it from a root-only file (the shipped systemd
+#                         unit uses EnvironmentFile); never put it on a
+#                         command line.
 #   BACKUP_RETENTION_DAYS Prune bundles older than this many days after a
 #                         successful run (default 14; 0 disables).
 #   FREECLOUD_VERSION     Recorded in the manifest when set.
@@ -37,19 +46,23 @@ umask 077
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+# shellcheck source=scripts/backup-lib.sh
+. "${SCRIPT_DIR}/backup-lib.sh"
 
 MODE="direct"
 OUTPUT_DIR=""
+ALLOW_PLAINTEXT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --compose) MODE="compose" ;;
+    --allow-plaintext) ALLOW_PLAINTEXT=1 ;;
     -h|--help)
-      echo "Usage: scripts/backup-bundle.sh [--compose] [OUTPUT_DIR]"
+      echo "Usage: scripts/backup-bundle.sh [--compose] [--allow-plaintext] [OUTPUT_DIR]"
       exit 0
       ;;
     --*)
       echo "ERROR: unknown option: $1" >&2
-      echo "Usage: scripts/backup-bundle.sh [--compose] [OUTPUT_DIR]" >&2
+      echo "Usage: scripts/backup-bundle.sh [--compose] [--allow-plaintext] [OUTPUT_DIR]" >&2
       exit 1
       ;;
     *)
@@ -79,6 +92,9 @@ if [ "${MODE}" = "direct" ] && [ -z "${DATABASE_URL:-}" ]; then
   exit 1
 fi
 
+# Fail closed: the bundle contains the full cluster dump plus every
+# production secret, so an unencrypted bundle is only written with the
+# explicit --allow-plaintext opt-out (drills/tests), never by accident.
 ENCRYPT=0
 if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
   ENCRYPT=1
@@ -86,6 +102,17 @@ if [ -n "${BACKUP_PASSPHRASE:-}" ]; then
     echo "ERROR: BACKUP_PASSPHRASE is set but openssl is not on PATH." >&2
     exit 1
   fi
+elif [ "${ALLOW_PLAINTEXT}" -eq 1 ]; then
+  echo "WARNING: writing an UNENCRYPTED bundle (--allow-plaintext)." >&2
+  echo "WARNING: it contains the full database dump and every production secret —" >&2
+  echo "WARNING: protect it accordingly and prefer the encrypted path." >&2
+else
+  echo "ERROR: refusing to write an unencrypted bundle." >&2
+  echo "       The bundle contains the full pg_dumpall plus every production" >&2
+  echo "       secret; set BACKUP_PASSPHRASE (preferred — see docs/BACKUP_RESTORE.md" >&2
+  echo "       for the root-only passphrase file) or pass --allow-plaintext to" >&2
+  echo "       confirm you really want plaintext." >&2
+  exit 1
 fi
 
 TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
@@ -93,7 +120,9 @@ BUNDLE_NAME="freecloud-bundle-${TIMESTAMP}"
 FINAL_DIR="${OUTPUT_DIR}/${BUNDLE_NAME}"
 FINAL_ENC="${FINAL_DIR}.tar.gz.enc"
 FINAL_MANIFEST="${OUTPUT_DIR}/${BUNDLE_NAME}.manifest.txt"
+FINAL_HMAC="${FINAL_ENC}.hmac"
 ENC_TMP="${FINAL_ENC}.tmp"
+HMAC_TMP="${FINAL_HMAC}.tmp"
 
 if [ -e "${FINAL_DIR}" ] || [ -e "${FINAL_ENC}" ]; then
   echo "ERROR: a bundle for ${TIMESTAMP} already exists in ${OUTPUT_DIR}." >&2
@@ -113,11 +142,11 @@ cleanup() {
     return
   fi
   rm -rf "${STAGING}"
-  rm -f "${ENC_TMP}"
+  rm -f "${ENC_TMP}" "${HMAC_TMP}"
   # An interrupted encryption must not leave the plaintext bundle behind.
   if [ "${MOVED}" -eq 1 ] && [ "${ENCRYPT}" -eq 1 ]; then
     rm -rf "${FINAL_DIR}"
-    rm -f "${FINAL_MANIFEST}"
+    rm -f "${FINAL_MANIFEST}" "${FINAL_HMAC}"
   fi
 }
 trap cleanup EXIT
@@ -181,6 +210,11 @@ fi
 GIT_HEAD=$(git -C "${REPO_ROOT}" rev-parse HEAD 2> /dev/null || echo "unknown")
 file_size() { wc -c < "$1" | tr -d '[:space:]'; }
 
+ENCRYPTION_LABEL="none"
+if [ "${ENCRYPT}" -eq 1 ]; then
+  ENCRYPTION_LABEL="${FC_ENCRYPTION_ID}"
+fi
+
 {
   echo "FreeCloud backup bundle"
   echo "timestamp_utc: ${TIMESTAMP}"
@@ -188,6 +222,7 @@ file_size() { wc -c < "$1" | tr -d '[:space:]'; }
   echo "hostname: $(hostname)"
   echo "git_head: ${GIT_HEAD}"
   echo "freecloud_version: ${FREECLOUD_VERSION:-unset}"
+  echo "encryption: ${ENCRYPTION_LABEL}"
   echo "env_prod: ${ENV_NOTE}"
   echo "files:"
   echo "  cluster.sql $(file_size "${STAGING}/cluster.sql") bytes"
@@ -196,7 +231,17 @@ file_size() { wc -c < "$1" | tr -d '[:space:]'; }
     echo "  .env.prod $(file_size "${STAGING}/.env.prod") bytes"
   fi
   echo "sha256:"
-  (cd "${STAGING}" && sha256sum cluster.sql secrets.tar)
+  if [ "${ENV_NOTE}" = "present" ]; then
+    (cd "${STAGING}" && sha256sum cluster.sql secrets.tar .env.prod)
+  else
+    (cd "${STAGING}" && sha256sum cluster.sql secrets.tar)
+  fi
+  echo "inventory:"
+  # Per-database CREATE TABLE counts parsed from the dump itself (cheap
+  # object inventory). restore.sh compares these against the live databases
+  # after a restore; any mismatch fails the restore. Aborts here when the
+  # dump carries a database name outside the allow-list.
+  fc_db_table_counts "${STAGING}/cluster.sql"
 } > "${STAGING}/manifest.txt"
 
 chmod 0600 "${STAGING}"/*
@@ -211,19 +256,29 @@ mv "${STAGING}" "${FINAL_DIR}"
 MOVED=1
 
 if [ "${ENCRYPT}" -eq 1 ]; then
-  echo "Encrypting bundle ..."
+  echo "Encrypting bundle (aes-256-cbc, pbkdf2 ${FC_PBKDF2_ITER} iterations) ..."
   tar -czf - -C "${OUTPUT_DIR}" "${BUNDLE_NAME}" \
-    | openssl enc -aes-256-cbc -salt -pbkdf2 -pass env:BACKUP_PASSPHRASE \
-        -out "${ENC_TMP}"
+    | openssl enc -aes-256-cbc -salt -pbkdf2 -iter "${FC_PBKDF2_ITER}" \
+        -pass env:BACKUP_PASSPHRASE -out "${ENC_TMP}"
   chmod 0600 "${ENC_TMP}"
   mv "${ENC_TMP}" "${FINAL_ENC}"
   cp "${FINAL_DIR}/manifest.txt" "${FINAL_MANIFEST}"
   chmod 0600 "${FINAL_MANIFEST}"
+  # Encrypt-then-MAC: HMAC-SHA256 over the ciphertext AND over the outer
+  # manifest, under the passphrase-derived key. verify-bundle.sh checks both
+  # BEFORE decrypting anything.
+  {
+    printf 'ciphertext %s\n' "$(fc_hmac_file "${FINAL_ENC}")"
+    printf 'manifest %s\n' "$(fc_hmac_file "${FINAL_MANIFEST}")"
+  } > "${HMAC_TMP}"
+  chmod 0600 "${HMAC_TMP}"
+  mv "${HMAC_TMP}" "${FINAL_HMAC}"
   rm -rf "${FINAL_DIR}"
   SUCCESS=1
   trap - EXIT
   echo "Encrypted bundle complete: ${FINAL_ENC}"
   echo "Manifest: ${FINAL_MANIFEST}"
+  echo "MAC sidecar: ${FINAL_HMAC}"
 else
   SUCCESS=1
   trap - EXIT
@@ -249,5 +304,7 @@ case "${RETENTION_DAYS}" in
 esac
 
 if [ "${ENCRYPT}" -eq 1 ]; then
-  echo "Decrypt: openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BACKUP_PASSPHRASE -in '${FINAL_ENC}' | tar -xzf -"
+  echo "Verify/decrypt (MACs are checked BEFORE decryption):"
+  echo "  BACKUP_PASSPHRASE=<passphrase> scripts/verify-bundle.sh '${FINAL_ENC}' [output-dir]"
+  echo "Bundles encrypted by older scripts (no .hmac sidecar) need: scripts/verify-bundle.sh --legacy ..."
 fi

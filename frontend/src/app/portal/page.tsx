@@ -10,7 +10,29 @@ import {
   portalRequestAccess,
 } from "@/lib/api";
 import type { PortalDevice, PortalApp, ComplianceResponse } from "@/lib/api";
+import { safeExternalUrl } from "@/lib/safe-url";
 import { useApiReady } from "../providers";
+
+/**
+ * Renders a stored app base URL as a link only when it passes the scheme
+ * allow-list; anything else (javascript:, data:, …) renders as inert text so
+ * a poisoned stored URL can never execute in the dashboard origin on click.
+ */
+function AppUrlCell({ baseUrl }: { baseUrl: string }) {
+  if (!baseUrl) return <>—</>;
+  const href = safeExternalUrl(baseUrl);
+  if (!href) return <span>{baseUrl}</span>;
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-indigo-600 hover:underline dark:text-indigo-400"
+    >
+      {baseUrl}
+    </a>
+  );
+}
 
 export default function PortalPage() {
   const apiReady = useApiReady();
@@ -214,18 +236,7 @@ export default function PortalPage() {
                     <td className="px-6 py-3 font-medium text-slate-800 dark:text-slate-100">{a.name}</td>
                     <td className="px-6 py-3 text-slate-600 dark:text-slate-400">{a.protocol}</td>
                     <td className="px-6 py-3 text-slate-600 dark:text-slate-400">
-                      {a.baseUrl ? (
-                        <a
-                          href={a.baseUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-indigo-600 hover:underline dark:text-indigo-400"
-                        >
-                          {a.baseUrl}
-                        </a>
-                      ) : (
-                        "—"
-                      )}
+                      <AppUrlCell baseUrl={a.baseUrl} />
                     </td>
                   </tr>
                 ))

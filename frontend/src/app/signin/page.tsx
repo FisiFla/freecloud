@@ -2,13 +2,29 @@
 
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { AlertCircle, Cloud } from "lucide-react";
-import { signInErrorMessage } from "@/lib/signin-error";
+import { PENDING_SIGNIN_ERROR_KEY, signInErrorMessage } from "@/lib/signin-error";
 
 function SignInContent() {
   const searchParams = useSearchParams();
-  const errorMessage = signInErrorMessage(searchParams.get("error"));
+  // Federated sign-out cannot carry ?error= through Keycloak's exact-match
+  // post_logout_redirect_uri, so it stashes the hint in this tab's
+  // sessionStorage instead. Consume it once here; the query param wins.
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const pending = window.sessionStorage.getItem(PENDING_SIGNIN_ERROR_KEY);
+      if (pending !== null) {
+        window.sessionStorage.removeItem(PENDING_SIGNIN_ERROR_KEY);
+        setPendingError(pending);
+      }
+    } catch {
+      // Storage unavailable (private mode) — sign-in still works, just
+      // without the expired hint.
+    }
+  }, []);
+  const errorMessage = signInErrorMessage(searchParams.get("error") ?? pendingError);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-950">

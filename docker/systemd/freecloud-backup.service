@@ -9,13 +9,33 @@
 #   sudo systemctl enable --now freecloud-backup.timer
 #
 # Edit WorkingDirectory below (and the EnvironmentFile path) to the real
-# checkout location if it is not /opt/freecloud.
+# checkout location if it is not /opt/freecloud. If you override BACKUP_DIR
+# (default ./backups), add that directory to ReadWritePaths too.
 #
-# Optional encryption: create /opt/freecloud/.backup-passphrase (mode 0600,
-# owned by root) containing one line:
+# Encryption is REQUIRED: create /opt/freecloud/.backup-passphrase (mode 0600,
+# owned by root, or by the dedicated user below) containing one line:
 #   BACKUP_PASSPHRASE=<passphrase>
-# The leading "-" on EnvironmentFile makes the file optional — without it,
-# bundles are written unencrypted.
+# The unit fails without this file (no leading "-" on EnvironmentFile), and
+# backup-bundle.sh itself refuses to write an unencrypted bundle without the
+# explicit --allow-plaintext opt-out. Keep a copy of the passphrase somewhere
+# that survives the host (password manager) — without it the encrypted
+# bundles are unrecoverable.
+#
+# Dedicated user (recommended instead of root): the backup only needs to read
+# the checkout + .secrets and write the backups directory, plus docker access
+# for `compose exec postgres pg_dumpall`:
+#   sudo useradd -r -d /opt/freecloud -s /usr/sbin/nologin freecloud-backup
+#   sudo usermod -aG docker freecloud-backup
+#   sudo chown freecloud-backup /opt/freecloud/backups /opt/freecloud/.backup-passphrase
+#   sudo chmod 0600 /opt/freecloud/.backup-passphrase
+#   # The checkout, .secrets/ and .env.prod must be READABLE by the user
+#   # (.secrets files are 0600 — use ACLs so the operator keeps ownership):
+#   sudo setfacl -R -m u:freecloud-backup:rX /opt/freecloud/.secrets /opt/freecloud/.env.prod
+#   sudo setfacl -R -m u:freecloud-backup:rX /opt/freecloud/scripts /opt/freecloud/docker /opt/freecloud/Makefile
+# then uncomment the User=/SupplementaryGroups= lines below and
+# `sudo systemctl daemon-reload`.
+#User=freecloud-backup
+#SupplementaryGroups=docker
 
 [Unit]
 Description=FreeCloud backup bundle (PostgreSQL cluster + .secrets)
@@ -25,5 +45,14 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/freecloud
-EnvironmentFile=-/opt/freecloud/.backup-passphrase
+EnvironmentFile=/opt/freecloud/.backup-passphrase
+# Keep the docker CLI from touching $HOME (read-only under ProtectSystem=strict).
+Environment=DOCKER_CONFIG=/tmp/docker-config
 ExecStart=/usr/bin/make prod-backup
+# Sandboxing: the backup must not gain privileges, must not write outside
+# the backups directory, and gets a private /tmp. It still reaches the
+# docker socket (/run is an API filesystem, writable) for pg_dumpall.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/freecloud/backups
+PrivateTmp=true

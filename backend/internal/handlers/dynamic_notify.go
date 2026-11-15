@@ -63,12 +63,31 @@ func (d *dynamicEmailNotifier) config(ctx context.Context) notify.EmailConfig {
 	cfg.From = strings.TrimSpace(fromAddress)
 	cfg.Password = ""
 	if passwordEnc != nil && *passwordEnc != "" {
-		password, decErr := decryptProvisioningToken(*passwordEnc)
+		password, rotated, decErr := decryptSecret(SecretPurposeSMTPPassword, *passwordEnc)
 		if decErr != nil {
 			d.logger.Warn("smtp config: decrypt password failed", zap.Error(decErr))
 		} else {
 			cfg.Password = password
+			if rotated {
+				d.reencryptPasswordBestEffort(ctx, password)
+			}
 		}
 	}
 	return cfg
+}
+
+// reencryptPasswordBestEffort rewrites an SMTP password sealed under the
+// previous master key, completing a rotation opportunistically.
+func (d *dynamicEmailNotifier) reencryptPasswordBestEffort(ctx context.Context, plaintext string) {
+	fresh, err := encryptSecret(SecretPurposeSMTPPassword, plaintext)
+	if err != nil {
+		d.logger.Warn("smtp config: re-encrypt password failed", zap.Error(err))
+		return
+	}
+	if _, err := d.db.Exec(ctx,
+		`UPDATE smtp_config SET password_enc = $1, updated_at = NOW() WHERE id = 1`,
+		fresh,
+	); err != nil {
+		d.logger.Warn("smtp config: re-encrypt password failed", zap.Error(err))
+	}
 }

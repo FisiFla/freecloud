@@ -417,7 +417,6 @@ Authentication: `Authorization: Bearer <SCIM_BEARER_TOKEN>`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8080` | Backend API base URL (baked at build time; must be `https://` in production) |
 | `AUTH_SECRET` | — | Auth.js session-signing secret (required in production) |
 | `AUTH_KEYCLOAK_ID` | — | OIDC client ID for the frontend (`freecloud-dashboard`) |
 | `AUTH_KEYCLOAK_SECRET` | — | OIDC client secret for the frontend |

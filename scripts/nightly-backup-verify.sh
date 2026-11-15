@@ -5,8 +5,10 @@
 # This is the cycle-25 manual drill, automated for the nightly CI job:
 #   1. boot  — PROD_SMOKE_KEEP=1 scripts/prod-smoke.sh (the REAL production
 #      stack on *.localhost, all smoke assertions incl. the setup-token path)
-#   2. bundle — scripts/backup-bundle.sh --compose against that live stack,
-#      then assert the bundle artifacts exist and the manifest carries no
+#   2. bundle — scripts/backup-bundle.sh --compose (ENCRYPTED, with a
+#      throwaway passphrase) against that live stack, then authenticate +
+#      decrypt it via scripts/verify-bundle.sh — the same mandatory first
+#      step the runbook prescribes — and assert the manifest carries no
 #      secret values
 #   3. verify-restore — restore the bundle's cluster.sql into a scratch
 #      Postgres and assert row counts (scripts/verify-restore.sh), with a
@@ -159,16 +161,31 @@ stage_boot() {
 }
 
 stage_bundle() {
-  # BACKUP_PASSPHRASE is forced empty: the drill needs a plaintext bundle
-  # (verify-restore reads cluster.sql straight from it).
-  log "stage bundle: scripts/backup-bundle.sh --compose ${BUNDLES_OUT}"
-  BACKUP_PASSPHRASE= bash scripts/backup-bundle.sh --compose "${BUNDLES_OUT}" 2>&1 | tee "${NIGHTLY_TMP}/backup-bundle.log" || return 1
+  # This job exercises the ENCRYPTED path end to end with a throwaway
+  # passphrase (the restore drill covers the plaintext shape instead).
+  log "stage bundle: scripts/backup-bundle.sh --compose (encrypted) ${BUNDLES_OUT}"
+  local nightly_pw
+  nightly_pw="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" || return 1
+  [ -n "${nightly_pw}" ] || { log "could not generate a throwaway bundle passphrase"; return 1; }
+  BACKUP_PASSPHRASE="${nightly_pw}" bash scripts/backup-bundle.sh --compose "${BUNDLES_OUT}" 2>&1 | tee "${NIGHTLY_TMP}/backup-bundle.log" || return 1
+  local enc_file
+  # Bundle names carry UTC timestamps, so lexicographic order is chronological.
+  enc_file="$(find "${BUNDLES_OUT}" -maxdepth 1 -name 'freecloud-bundle-*.tar.gz.enc' 2>/dev/null | sort | tail -n 1 || true)"
+  [ -n "${enc_file}" ] || { log "bundle missing: no freecloud-bundle-*.tar.gz.enc under ${BUNDLES_OUT}"; return 1; }
+  [ -f "${enc_file}.hmac" ] || { log "bundle incomplete: .hmac sidecar missing for ${enc_file}"; return 1; }
+  log "encrypted bundle OK: ${enc_file} (+ manifest + .hmac sidecar)"
+  # Mandatory first step, exactly as the runbook prescribes: authenticate
+  # (MACs verified BEFORE decryption) and decrypt for the verify stage.
   local bundle_dir
-  bundle_dir="$(ls -dt "${BUNDLES_OUT}"/freecloud-bundle-*/ 2>/dev/null | head -n 1 || true)"
-  [ -n "${bundle_dir}" ] || { log "bundle missing: no freecloud-bundle-* dir under ${BUNDLES_OUT}"; return 1; }
-  [ -s "${bundle_dir}/cluster.sql" ] || { log "bundle incomplete: cluster.sql missing or empty"; return 1; }
-  [ -s "${bundle_dir}/secrets.tar" ] || { log "bundle incomplete: secrets.tar missing or empty"; return 1; }
-  [ -f "${bundle_dir}/manifest.txt" ] || { log "bundle incomplete: manifest.txt missing"; return 1; }
+  if ! bundle_dir="$(BACKUP_PASSPHRASE="${nightly_pw}" bash scripts/verify-bundle.sh "${enc_file}" "${NIGHTLY_TMP}/verified-bundle" 2>"${NIGHTLY_TMP}/verify-bundle.log")"; then
+    log "verify-bundle.sh rejected the fresh encrypted bundle:"
+    cat "${NIGHTLY_TMP}/verify-bundle.log" || true
+    return 1
+  fi
+  nightly_pw=""
+  [ -s "${bundle_dir}/cluster.sql" ] || { log "decrypted bundle incomplete: cluster.sql missing or empty"; return 1; }
+  [ -s "${bundle_dir}/secrets.tar" ] || { log "decrypted bundle incomplete: secrets.tar missing or empty"; return 1; }
+  [ -f "${bundle_dir}/manifest.txt" ] || { log "decrypted bundle incomplete: manifest.txt missing"; return 1; }
   log "bundle artifacts OK in ${bundle_dir}"
   # The manifest must never carry secret VALUES (names/sizes/hashes only).
   # Grep every per-key secret file's value out of the manifest with fixed-
@@ -242,13 +259,13 @@ EOF
     ''|*[!A-Za-z0-9._~-]*) log "postgres password is not URL-safe; refusing to build DATABASE_URL"; return 1 ;;
   esac
   log "source Postgres at ${pg_ip}:5432 (password from .secrets/files/postgres_password, not shown)"
-  log "running verify-restore.sh on ${BUNDLE_DIR}cluster.sql (baselines may be 0 — expected, see header)"
+  log "running verify-restore.sh on ${BUNDLE_DIR%/}/cluster.sql (baselines may be 0 — expected, see header)"
   local verify_rc
   verify_rc=0
   DATABASE_URL="postgres://freecloud:${pg_pw}@${pg_ip}:5432/freecloud" \
     SCRATCH_DATABASE_URL="postgres://postgres:${scratch_pw}@127.0.0.1:${SCRATCH_PORT}/postgres" \
     PATH="${SHIM_DIR}:${PATH}" \
-    bash scripts/verify-restore.sh "${BUNDLE_DIR}cluster.sql" 2>&1 | tee "${NIGHTLY_TMP}/verify-restore.log" || verify_rc=$?
+    bash scripts/verify-restore.sh "${BUNDLE_DIR%/}/cluster.sql" 2>&1 | tee "${NIGHTLY_TMP}/verify-restore.log" || verify_rc=$?
   log "verify-restore.sh exit: ${verify_rc}"
   [ "${verify_rc}" -eq 0 ] || return 1
   return 0

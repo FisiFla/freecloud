@@ -299,9 +299,9 @@ func streamReport[T any](
 		w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 		w.WriteHeader(http.StatusOK)
 		cw := csv.NewWriter(w)
-		_ = cw.Write(headers)
+		_ = cw.Write(sanitizeCSVRecord(headers))
 		for _, row := range rows {
-			_ = cw.Write(rowFn(row))
+			_ = cw.Write(sanitizeCSVRecord(rowFn(row)))
 		}
 		cw.Flush()
 	}
@@ -326,7 +326,23 @@ type AuditIntegrityResponse struct {
 //
 // Route: GET /api/v1/audit-logs/integrity
 // Permission-gated via PermReadAuditLogs in routes.go.
+//
+// The chain is GLOBAL (see VerifyAuditChain), so the handler enforces the
+// stricter SYSTEM-ADMIN requirement itself, exactly like VerifyAuditChain:
+// the route's permission gate is held by the auditor role too, which is too
+// broad for a global-chain view (issue #133).
+//
+// The chain is unkeyed SHA-256: a clean result detects corruption and
+// tampering by anyone without database write access, but cannot rule out
+// rewriting by someone with direct DB write access (see package audit).
 func (h *Handler) GetAuditIntegrity(w http.ResponseWriter, r *http.Request) {
+	// Fail closed: no identity, or an identity that is not a system
+	// administrator, gets no information about the global chain.
+	if !isSystemAdminCaller(r.Context()) {
+		respondError(w, http.StatusForbidden, "forbidden: audit chain verification requires system-admin")
+		return
+	}
+
 	if h.db == nil {
 		respondError(w, http.StatusInternalServerError, "database not available")
 		return
